@@ -9,6 +9,14 @@ Guia passo-a-passo para configurar o Arkhe como assistente pessoal no Windows.
 - **Python 3.11+** instalado
 - **Chave de API** de pelo menos um provedor LLM (OpenAI, Anthropic, ou Google)
 
+Se o alvo for Linux, macOS ou WSL, o caminho mais rápido é o instalador one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/O-guardiao/Arkhe/main/install.sh | bash
+```
+
+Ele prepara o checkout em `~/.arkhe/repo`, gera o `.env` com tokens de segurança e deixa só a chave do provedor para ajuste final.
+
 ---
 
 ## 1. Instalação

@@ -62,6 +62,23 @@ In practical terms, Arkhe provides:
 
 ### Install
 
+Quickstart estilo one-liner para Linux, macOS e WSL:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/O-guardiao/Arkhe/main/install.sh | bash
+```
+
+Esse fluxo:
+
+- instala `uv` se necessário
+- clona ou atualiza o Arkhe em `~/.arkhe/repo`
+- roda `uv sync`
+- cria wrappers `arkhe` e `rlm` em `~/.local/bin`
+- gera um `.env` com defaults locais seguros e os cinco tokens do runtime
+- deixa apenas a chave do provedor LLM pendente, caso você não a informe durante a instalação
+
+Instalação manual:
+
 ```bash
 # With uv (recommended)
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -77,6 +94,8 @@ pip install -e .
 ```bash
 arkhe setup
 ```
+
+Se você usou o one-liner, o `.env` já será criado automaticamente. Nesse caso, o `arkhe setup` fica como etapa opcional para revisão interativa e instalação de daemon.
 
 Compatibilidade legada: `rlm setup` continua funcionando.
 
