@@ -1,6 +1,8 @@
 # GitHub Actions Workflows
 
-This directory contains automated workflows for the RLM (Recursive Language Models) project.
+This directory contains automated workflows for the Arkhe project.
+
+Arkhe still uses the legacy Python package namespace `rlm` internally, so some CI commands and paths continue to reference `rlm` for compatibility.
 
 ## Workflows
 

@@ -44,6 +44,7 @@ from fastapi.responses import JSONResponse
 from starlette.background import BackgroundTask
 
 from rlm.logging import get_runtime_logger
+from rlm.server.auth_helpers import build_internal_auth_headers
 
 log = get_runtime_logger("discord_gateway")
 
@@ -262,10 +263,7 @@ async def _run_rlm_and_followup(
 
     # Chama o proxy interno (/webhook/) via HTTP local
     rlm_host = os.environ.get("RLM_INTERNAL_HOST", "http://127.0.0.1:5000")
-    ws_token = os.environ.get("RLM_WS_TOKEN", "")
     rlm_url = f"{rlm_host}/webhook/{client_id}"
-    if ws_token:
-        rlm_url += f"?token={ws_token}"
 
     rlm_response_text = "(sem resposta)"
     try:
@@ -273,7 +271,7 @@ async def _run_rlm_and_followup(
         req = urequest.Request(
             rlm_url,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers=build_internal_auth_headers(),
             method="POST",
         )
         with urequest.urlopen(req, timeout=110) as resp:

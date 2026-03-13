@@ -1,6 +1,6 @@
-# RLM — Guia de Uso Pessoal (Windows)
+# Arkhe — Guia de Uso Pessoal (Windows)
 
-Guia passo-a-passo para configurar o RLM como assistente pessoal no Windows.
+Guia passo-a-passo para configurar o Arkhe como assistente pessoal no Windows.
 
 ---
 
@@ -15,13 +15,13 @@ Guia passo-a-passo para configurar o RLM como assistente pessoal no Windows.
 
 ```powershell
 # Clone ou navegue até o diretório do projeto
-cd C:\caminho\para\rlm-main
+cd C:\caminho\para\arkhe
 
 # Instale em modo editável
 pip install -e .
 
 # Verifique a instalação
-rlm version
+arkhe version
 # ou
 python -m rlm version
 ```
@@ -33,8 +33,10 @@ python -m rlm version
 ### Opção A: Wizard interativo (recomendado)
 
 ```powershell
-rlm setup
+arkhe setup
 ```
+
+Alias legado: `rlm setup` continua válido.
 
 O wizard pergunta:
 1. Sua chave de API (OpenAI, Anthropic, etc.)
@@ -63,7 +65,7 @@ RLM_MODEL=gpt-4o-mini
 ### Diagnóstico
 
 ```powershell
-rlm doctor
+arkhe doctor
 ```
 
 Verifica tudo de uma vez: .env, API key, tokens, servidor, canais.
@@ -75,7 +77,7 @@ Verifica tudo de uma vez: .env, API key, tokens, servidor, canais.
 ### Modo foreground (logs ao vivo)
 
 ```powershell
-rlm start --foreground
+arkhe start --foreground
 ```
 
 Você verá os logs no terminal. Interrompa com `Ctrl+C`.
@@ -83,7 +85,7 @@ Você verá os logs no terminal. Interrompa com `Ctrl+C`.
 ### Modo background
 
 ```powershell
-rlm start
+arkhe start
 ```
 
 O servidor roda em background. PIDs salvos em `~/.rlm/run/`.
@@ -91,7 +93,7 @@ O servidor roda em background. PIDs salvos em `~/.rlm/run/`.
 ### Verificar status
 
 ```powershell
-rlm status
+arkhe status
 ```
 
 Mostra:
@@ -102,14 +104,14 @@ Mostra:
 ### Parar
 
 ```powershell
-rlm stop
+arkhe stop
 ```
 
 ---
 
 ## 4. Usar o WebChat
 
-Após `rlm start`, abra no navegador:
+Após `arkhe start`, abra no navegador:
 
 ```
 http://localhost:5000/webchat
@@ -170,11 +172,11 @@ TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
 4. Reinicie o servidor:
 
 ```powershell
-rlm stop
-rlm start
+arkhe stop
+arkhe start
 ```
 
-5. Converse com seu bot no Telegram — o RLM responde.
+5. Converse com seu bot no Telegram — o Arkhe responde.
 
 Para restringir acesso apenas ao seu chat:
 ```env
@@ -203,13 +205,15 @@ https://seu-dominio.com/discord/interactions
 
 ## 8. API OpenAI-Compatible
 
-O RLM expõe um endpoint compatível com a API da OpenAI:
+O Arkhe expõe um endpoint compatível com a API da OpenAI:
 
 ```env
+RLM_INTERNAL_TOKEN=token-interno-longo
+RLM_ADMIN_TOKEN=token-admin-longo
 RLM_API_TOKEN=meu-token-secreto
 ```
 
-Qualquer app que use a OpenAI SDK pode ser apontada para o RLM:
+Qualquer app que use a OpenAI SDK pode ser apontada para o Arkhe:
 
 ```python
 import openai
@@ -230,7 +234,7 @@ print(response.choices[0].message.content)
 
 ## 9. Scheduler (Tarefas Agendadas)
 
-O scheduler permite agendar tarefas que o RLM executa automaticamente.
+O scheduler permite agendar tarefas que o Arkhe executa automaticamente.
 
 ### Via API
 
@@ -258,7 +262,7 @@ curl -X POST http://localhost:5000/scheduler/tasks \
 
 ## 10. Skills Disponíveis
 
-O RLM descobre automaticamente qual skill usar baseado na sua mensagem:
+O Arkhe descobre automaticamente qual skill usar baseado na sua mensagem:
 
 | Você diz... | Skill ativada |
 |---|---|
@@ -274,13 +278,13 @@ O RLM descobre automaticamente qual skill usar baseado na sua mensagem:
 ### Listar skills instaladas
 
 ```powershell
-rlm skill list
+arkhe skill list
 ```
 
 ### Instalar skill externa
 
 ```powershell
-rlm skill install github:usuario/repositorio
+arkhe skill install github:usuario/repositorio
 ```
 
 ---
@@ -290,17 +294,23 @@ rlm skill install github:usuario/repositorio
 ### Rotacionar tokens de segurança
 
 ```powershell
-rlm token rotate
-rlm stop && rlm start
+arkhe token rotate
+arkhe stop && arkhe start
 ```
+
+Em produção, mantenha tokens separados:
+- `RLM_INTERNAL_TOKEN` para gateways/WebChat chamarem `/webhook/{client_id}`
+- `RLM_ADMIN_TOKEN` para `/health`, sessões, cron e telemetria
+- `RLM_HOOK_TOKEN` para integrações externas em `/api/hooks/...`
+- `RLM_API_TOKEN` para clientes OpenAI-compatible em `/v1`
 
 ### Updates
 
 ```powershell
-cd C:\caminho\para\rlm-main
+cd C:\caminho\para\arkhe
 git pull
 pip install -e .
-rlm stop && rlm start
+arkhe stop && arkhe start
 ```
 
 ### Logs
@@ -332,8 +342,8 @@ copy $HOME\.rlm\scheduler.db scheduler.backup.db
 ## 12. Estrutura de Arquivos
 
 ```
-rlm-main/
-├── .env                    ← Configuração (gerado por rlm setup)
+arkhe/
+├── .env                    ← Configuração (gerado por arkhe setup)
 ├── .env.example            ← Template de referência
 ├── rlm_sessions.db         ← Sessões (gerado em runtime)
 ├── rlm_memory_v2.db        ← Memória persistente (gerado em runtime)
@@ -343,7 +353,7 @@ rlm-main/
 │   ├── __init__.py         ← Exporta classe RLM
 │   ├── session.py          ← RLMSession (wrapper conversacional + memória)
 │   ├── cli/
-│   │   ├── main.py         ← CLI (rlm setup/start/stop/doctor/...)
+│   │   ├── main.py         ← CLI (arkhe setup/start/stop/doctor/...)
 │   │   ├── wizard.py       ← Wizard interativo de configuração
 │   │   └── service.py      ← Gerenciamento de processos e daemons
 │   ├── core/
@@ -387,11 +397,11 @@ rlm-main/
 
 | Problema | Solução |
 |---|---|
-| `rlm: command not found` | Execute `pip install -e .` no diretório do projeto |
+| `arkhe: command not found` | Execute `pip install -e .` no diretório do projeto |
 | `python -m rlm` não funciona | Verifique se `rlm/__main__.py` existe |
 | Servidor não carrega `.env` | Certifique-se que o `.env` está na raiz do projeto |
-| API key inválida | Execute `rlm doctor` para testar a conexão |
-| WebChat offline | Verifique `rlm status` e se a porta 5000 está livre |
+| API key inválida | Execute `arkhe doctor` para testar a conexão |
+| WebChat offline | Verifique `arkhe status` e se a porta 5000 está livre |
 | Telegram não responde | Verifique `TELEGRAM_BOT_TOKEN` no `.env` e reinicie |
 | Memória não funciona | O `rlm_memory_v2.db` é criado automaticamente no primeiro uso |
 | Testes travando | Exclua `test_live_llm.py` (faz chamadas reais à API) |

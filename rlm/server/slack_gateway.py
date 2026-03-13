@@ -48,6 +48,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.background import BackgroundTask
 
 from rlm.logging import get_runtime_logger
+from rlm.server.auth_helpers import build_internal_auth_headers
 
 log = get_runtime_logger("slack_gateway")
 
@@ -238,16 +239,13 @@ async def _dispatch_to_rlm(client_id: str, payload: dict) -> None:
     import urllib.request as urequest
 
     rlm_host = os.environ.get("RLM_INTERNAL_HOST", "http://127.0.0.1:5000")
-    ws_token = os.environ.get("RLM_WS_TOKEN", "")
     url = f"{rlm_host}/webhook/{client_id}"
-    if ws_token:
-        url += f"?token={ws_token}"
 
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urequest.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=build_internal_auth_headers(),
         method="POST",
     )
     try:

@@ -1,13 +1,16 @@
-"""RLM CLI — ponto de entrada principal.
+"""Arkhe CLI — ponto de entrada principal.
 
 Uso:
-    rlm setup          Wizard interativo de instalação
-    rlm start          Inicia o servidor RLM
-    rlm stop           Para o daemon/servidor RLM
-    rlm status         Mostra status dos processos e configuração
-    rlm token rotate   Regenera todos os tokens de segurança
-    rlm peer add       Adiciona peer WireGuard
-    rlm version        Exibe versão do RLM
+    arkhe setup        Wizard interativo de instalação
+    arkhe start        Inicia o servidor Arkhe
+    arkhe stop         Para o daemon/servidor Arkhe
+    arkhe status       Mostra status dos processos e configuração
+    arkhe token rotate Regenera todos os tokens de segurança
+    arkhe peer add     Adiciona peer WireGuard
+    arkhe version      Exibe versão do Arkhe
+
+Compatibilidade:
+    rlm ...            Alias legado ainda suportado
 """
 
 from __future__ import annotations
@@ -18,6 +21,19 @@ import sys
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
+
+
+def _doctor_preferred_token(env: dict[str, str], *names: str) -> str:
+    for name in names:
+        token = env.get(name, "").strip()
+        if token:
+            return token
+    return ""
+
+
+def _doctor_auth_headers(env: dict[str, str], *names: str) -> dict[str, str]:
+    token = _doctor_preferred_token(env, *names)
+    return {"X-RLM-Token": token} if token else {}
 
 
 def _doctor_runtime_requirement() -> tuple[bool, str]:
@@ -276,15 +292,15 @@ def _print_success(msg: str) -> None:
 
 def cmd_setup(args: argparse.Namespace) -> int:  # noqa: ARG001
     """Executa o wizard interativo de configuração."""
-    if not _require_supported_runtime("rlm setup"):
+    if not _require_supported_runtime("arkhe setup"):
         return 1
     from rlm.cli.wizard import run_wizard
     return run_wizard()
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    """Inicia o servidor RLM (API + WebSocket)."""
-    if not _require_supported_runtime("rlm start"):
+    """Inicia o servidor Arkhe (API + WebSocket)."""
+    if not _require_supported_runtime("arkhe start"):
         return 1
     from rlm.cli.service import start_services
     return start_services(
@@ -295,7 +311,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 
 def cmd_stop(args: argparse.Namespace) -> int:  # noqa: ARG001
-    """Para o daemon RLM."""
+    """Para o daemon Arkhe."""
     from rlm.cli.service import stop_services
     return stop_services()
 
@@ -307,7 +323,7 @@ def cmd_status(args: argparse.Namespace) -> int:  # noqa: ARG001
 
 
 def cmd_update(args: argparse.Namespace) -> int:
-    """Atualiza o checkout git do RLM e sincroniza dependências."""
+    """Atualiza o checkout git do Arkhe e sincroniza dependências."""
     from rlm.cli.service import update_installation
     return update_installation(check_only=args.check, restart=not args.no_restart)
 
@@ -327,19 +343,26 @@ def cmd_token_rotate(args: argparse.Namespace) -> int:  # noqa: ARG001
     text = env_path.read_text(encoding="utf-8")
     lines: list[str] = []
     rotated: list[str] = []
+    managed_tokens = (
+        "RLM_WS_TOKEN",
+        "RLM_INTERNAL_TOKEN",
+        "RLM_ADMIN_TOKEN",
+        "RLM_HOOK_TOKEN",
+        "RLM_API_TOKEN",
+    )
 
     for line in text.splitlines():
         key = line.split("=", 1)[0].strip() if "=" in line else ""
-        if key in ("RLM_WS_TOKEN", "RLM_HOOK_TOKEN"):
+        if key in managed_tokens:
             new_token = secrets.token_hex(32)
             lines.append(f"{key}={new_token}")
             rotated.append(key)
         else:
             lines.append(line)
 
-    if not rotated:
-        # Adiciona tokens que não existiam
-        for name in ("RLM_WS_TOKEN", "RLM_HOOK_TOKEN"):
+    existing_rotated = set(rotated)
+    for name in managed_tokens:
+        if name not in existing_rotated:
             lines.append(f"{name}={secrets.token_hex(32)}")
             rotated.append(name)
 
@@ -367,12 +390,12 @@ def cmd_peer_add(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
     """
-    Valida toda a configuração do RLM e testa as conexões com serviços.
+    Valida toda a configuração do Arkhe e testa as conexões com serviços.
 
     Verifica:
     - Arquivo .env existente e variáveis obrigatórias
     - Conexão com a API do LLM (OpenAI/Anthropic/etc.)
-    - Status dos processos RLM
+    - Status dos processos Arkhe
     - Configurações de canais (Telegram, Discord, WhatsApp, Slack)
     """
     from pathlib import Path
@@ -400,9 +423,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
             print(f"  {status} {label}" + (f"  ({detail})" if detail else ""))
 
     if _rich and console is not None:
-        console.print("\n[bold cyan]RLM Doctor — Diagnóstico do sistema[/]\n")
+        console.print("\n[bold cyan]Arkhe Doctor — Diagnóstico do sistema[/]\n")
     else:
-        print("\n=== RLM Doctor ===\n")
+        print("\n=== Arkhe Doctor ===\n")
 
     errors = 0
 
@@ -436,7 +459,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
                     k, v = line.split("=", 1)
                     os.environ.setdefault(k.strip(), v.strip())
     else:
-        row(".env", "✗", "não encontrado — execute 'rlm setup'")
+        row(".env", "✗", "não encontrado — execute 'arkhe setup'")
         errors += 1
 
     # ── 2. LLM API Key ───────────────────────────────────────────────────────
@@ -480,38 +503,60 @@ def cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
         else:
             row(f"{llm_provider} API Key", "✓", "configurada (sem teste de conexão ativo no doctor)")
 
-    # ── 3. Tokens RLM ────────────────────────────────────────────────────────
+    # ── 3. Tokens do runtime ────────────────────────────────────────────────
     ws_token = os.environ.get("RLM_WS_TOKEN", "")
+    internal_token = os.environ.get("RLM_INTERNAL_TOKEN", "")
+    admin_token = os.environ.get("RLM_ADMIN_TOKEN", "")
     hook_token = os.environ.get("RLM_HOOK_TOKEN", "")
+    api_token = os.environ.get("RLM_API_TOKEN", "")
 
     if ws_token and len(ws_token) >= 32:
         row("RLM_WS_TOKEN", "✓", f"{len(ws_token)} chars")
     else:
-        row("RLM_WS_TOKEN", "⚠", "não configurado — execute 'rlm token rotate'")
+        row("RLM_WS_TOKEN", "✗", "não configurado — execute 'arkhe token rotate'")
+        errors += 1
+
+    if internal_token and len(internal_token) >= 32:
+        row("RLM_INTERNAL_TOKEN", "✓", f"{len(internal_token)} chars")
+    else:
+        row("RLM_INTERNAL_TOKEN", "✗", "não configurado — o webhook central vai rejeitar chamadas internas")
+        errors += 1
+
+    if admin_token and len(admin_token) >= 32:
+        row("RLM_ADMIN_TOKEN", "✓", f"{len(admin_token)} chars")
+    else:
+        row("RLM_ADMIN_TOKEN", "✗", "não configurado — health e rotas administrativas ficarão indisponíveis")
+        errors += 1
 
     if hook_token and len(hook_token) >= 32:
         row("RLM_HOOK_TOKEN", "✓", f"{len(hook_token)} chars")
     else:
-        row("RLM_HOOK_TOKEN", "⚠", "não configurado")
+        row("RLM_HOOK_TOKEN", "⚠", "não configurado — receptor externo /api/hooks ficará desabilitado")
 
-    api_token = os.environ.get("RLM_API_TOKEN", "")
     if api_token and len(api_token) >= 32:
         row("RLM_API_TOKEN", "✓", f"{len(api_token)} chars")
     else:
-        row("RLM_API_TOKEN", "⚠", "OpenAI-compat desabilitado ou sem autenticação forte")
+        row("RLM_API_TOKEN", "⚠", "OpenAI-compat /v1 ficará desabilitada")
 
     # ── 4. Servidor em execução ───────────────────────────────────────────────
     rlm_host = os.environ.get("RLM_INTERNAL_HOST", "http://127.0.0.1:5000")
     server_online = False
     try:
-        status, _body = _doctor_http_request(f"{rlm_host}/health", timeout=3)
+        status, _body = _doctor_http_request(
+            f"{rlm_host}/health",
+            headers=_doctor_auth_headers(os.environ, "RLM_ADMIN_TOKEN", "RLM_API_TOKEN", "RLM_WS_TOKEN"),
+            timeout=3,
+        )
         if status == 200:
-            row("Servidor RLM", "✓", f"online em {rlm_host}")
+            row("Servidor Arkhe", "✓", f"online em {rlm_host}")
             server_online = True
         else:
-            row("Servidor RLM", "⚠", f"status {status} em {rlm_host}")
+            row("Servidor Arkhe", "⚠", f"status {status} em {rlm_host}")
+    except urllib_error.HTTPError as exc:
+        row("Servidor Arkhe", "✗", f"health rejeitado (HTTP {exc.code}) — verifique RLM_ADMIN_TOKEN")
+        errors += 1
     except Exception:
-        row("Servidor RLM", "⚠", f"offline (use 'rlm start')")
+        row("Servidor Arkhe", "⚠", f"offline (use 'arkhe start')")
 
     # ── 5. Canais configurados ─────────────────────────────────────────────
     _CHANNELS = ["Telegram", "Discord", "WhatsApp", "Slack"]
@@ -544,10 +589,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
         "WHATSAPP_VERIFY_TOKEN",
         "SLACK_SIGNING_SECRET",
     )):
-        if not ws_token:
-            row("Integração canais → WS interno", "⚠", "RLM_WS_TOKEN ausente pode quebrar despacho interno de eventos")
+        if not internal_token:
+            row("Integração canais → webhook interno", "✗", "RLM_INTERNAL_TOKEN ausente pode quebrar despacho interno")
+            errors += 1
         else:
-            row("Integração canais → WS interno", "✓", "autenticação interna presente")
+            row("Integração canais → webhook interno", "✓", "autenticação interna presente")
 
     if _rich and console is not None:
         console.print()
@@ -639,9 +685,9 @@ def cmd_skill_install(args: argparse.Namespace) -> int:
     Instala uma skill remotamente.
 
     Formatos aceitos:
-        rlm skill install github:usuario/repositorio
-        rlm skill install github:usuario/repositorio@branch
-        rlm skill install https://raw.githubusercontent.com/.../SKILL.md
+        arkhe skill install github:usuario/repositorio
+        arkhe skill install github:usuario/repositorio@branch
+        arkhe skill install https://raw.githubusercontent.com/.../SKILL.md
     """
     import os
     import re
@@ -685,7 +731,7 @@ def cmd_skill_install(args: argparse.Namespace) -> int:
     # Baixa o SKILL.md
     print(f"Baixando skill de {raw_url} ...")
     try:
-        req = ur.Request(raw_url, headers={"User-Agent": "RLM-CLI/1.0"})
+        req = ur.Request(raw_url, headers={"User-Agent": "Arkhe-CLI/1.0"})
         with ur.urlopen(req, timeout=15) as resp:
             skill_content = resp.read().decode("utf-8")
     except ue.HTTPError as e:
@@ -725,7 +771,7 @@ def cmd_skill_install(args: argparse.Namespace) -> int:
 
     dest_file.write_text(skill_content, encoding="utf-8")
     _print_success(f"Skill '{skill_name}' instalada em {dest_file}")
-    print("  Reinicie o servidor para ativar: rlm stop && rlm start")
+    print("  Reinicie o servidor para ativar: arkhe stop && arkhe start")
     return 0
 
 
@@ -848,13 +894,16 @@ def cmd_channel_list(args: argparse.Namespace) -> int:  # noqa: ARG001
 
 
 def cmd_version(args: argparse.Namespace) -> int:  # noqa: ARG001
-    """Exibe versão do RLM."""
+    """Exibe versão do Arkhe."""
     try:
         from importlib.metadata import version
-        ver = version("rlm")
+        try:
+            ver = version("arkhe")
+        except Exception:
+            ver = version("rlm")
     except Exception:
         ver = "0.1.0-dev"
-    print(f"rlm {ver}")
+    print(f"arkhe {ver}")
     return 0
 
 
@@ -863,19 +912,23 @@ def cmd_version(args: argparse.Namespace) -> int:  # noqa: ARG001
 # --------------------------------------------------------------------------- #
 
 def _build_parser() -> argparse.ArgumentParser:
+    prog_name = "arkhe"
     parser = argparse.ArgumentParser(
-        prog="rlm",
-        description="Recursive Language Models — CLI de gerenciamento",
+    prog=prog_name,
+    description="Arkhe — CLI de gerenciamento",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Exemplos:
-  rlm setup              # Wizard de primeira instalação
-  rlm start              # Inicia API + WebSocket em background
-  rlm start --foreground # Inicia no terminal (logs ao vivo)
-  rlm stop               # Para o daemon
-  rlm status             # Mostra processos ativos e config
-  rlm token rotate       # Rotaciona tokens de segurança
-  rlm peer add --name laptop --pubkey <KEY> --ip 10.0.0.2
+    arkhe setup              # Wizard de primeira instalação
+    arkhe start              # Inicia API + WebSocket em background
+    arkhe start --foreground # Inicia no terminal (logs ao vivo)
+    arkhe stop               # Para o daemon
+    arkhe status             # Mostra processos ativos e config
+    arkhe token rotate       # Rotaciona tokens de segurança
+    arkhe peer add --name laptop --pubkey <KEY> --ip 10.0.0.2
+
+Compatibilidade:
+    rlm ...                  # Alias legado ainda suportado
 """,
     )
 
@@ -885,7 +938,7 @@ Exemplos:
     sub.add_parser("setup", help="Wizard interativo de instalação")
 
     # --- start ---
-    p_start = sub.add_parser("start", help="Inicia o servidor RLM")
+    p_start = sub.add_parser("start", help="Inicia o servidor Arkhe")
     p_start.add_argument(
         "--foreground", "-f",
         action="store_true",
@@ -903,7 +956,7 @@ Exemplos:
     )
 
     # --- stop ---
-    sub.add_parser("stop", help="Para o daemon RLM")
+    sub.add_parser("stop", help="Para o daemon Arkhe")
 
     # --- status ---
     sub.add_parser("status", help="Mostra status dos processos e configuração")
@@ -911,7 +964,7 @@ Exemplos:
     # --- token ---
     p_token = sub.add_parser("token", help="Gerencia tokens de segurança")
     token_sub = p_token.add_subparsers(dest="token_command", metavar="<ação>")
-    token_sub.add_parser("rotate", help="Regenera RLM_WS_TOKEN e RLM_HOOK_TOKEN")
+    token_sub.add_parser("rotate", help="Regenera todos os tokens de segurança do runtime")
 
     # --- peer ---
     p_peer = sub.add_parser("peer", help="Gerencia peers WireGuard")
@@ -926,7 +979,7 @@ Exemplos:
     )
 
     # --- version ---
-    sub.add_parser("version", help="Exibe versão do RLM")
+    sub.add_parser("version", help="Exibe versão do Arkhe")
 
     # --- update ---
     p_update = sub.add_parser("update", help="Atualiza checkout git e dependências")
@@ -945,7 +998,7 @@ Exemplos:
     sub.add_parser("doctor", help="Valida configuração e testa conexões")
 
     # --- skill ---
-    p_skill = sub.add_parser("skill", help="Gerencia skills do RLM")
+    p_skill = sub.add_parser("skill", help="Gerencia skills do Arkhe")
     skill_sub = p_skill.add_subparsers(dest="skill_command", metavar="<ação>")
     skill_sub.add_parser("list", help="Lista skills instaladas")
     p_skill_install = skill_sub.add_parser("install", help="Instala skill remota")

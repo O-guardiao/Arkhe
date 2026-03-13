@@ -59,6 +59,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from rlm.core.structured_log import get_logger
+from rlm.server.auth_helpers import token_matches
 
 compat_log = get_logger("openai_compat")
 
@@ -187,12 +188,12 @@ def create_openai_compat_router(expected_token: str) -> APIRouter:
 
     def _auth(request: Request) -> None:
         if not expected_token:
-            return  # sem auth configurada
+            raise HTTPException(503, "API token is not configured")
         auth = request.headers.get("Authorization", "")
         token = ""
         if auth.lower().startswith("bearer "):
             token = auth[7:].strip()
-        if not token or token != expected_token:
+        if not token_matches(token, (expected_token,)):
             raise HTTPException(
                 status_code=401,
                 detail="Invalid or missing API token",

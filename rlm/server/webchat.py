@@ -14,7 +14,7 @@ Design:
     - O HTML é um arquivo single-page em rlm/static/webchat.html
     - Comunicação: POST message → EventRouter "webchat:*" → resposta por SSE
     - Session IDs armazenados em localStorage do navegador
-    - Autenticação opcional via RLM_WS_TOKEN
+    - Chamada interna autenticada ao webhook central via header X-RLM-Token
 
 Nota: o webchat está sempre ativo (sem condicional de env).
 Para desabilitar em produção, defina RLM_WEBCHAT_DISABLED=true.
@@ -39,6 +39,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from rlm.logging import get_runtime_logger
+from rlm.server.auth_helpers import build_internal_auth_headers
 
 log = get_runtime_logger("webchat")
 
@@ -201,10 +202,7 @@ async def _dispatch_to_rlm(
 ) -> None:
     """Envia mensagem ao /webhook/{client_id} e armazena o resultado no buffer."""
     rlm_host = os.environ.get("RLM_INTERNAL_HOST", "http://127.0.0.1:5000")
-    ws_token = os.environ.get("RLM_WS_TOKEN", "")
     url = f"{rlm_host}/webhook/{client_id}"
-    if ws_token:
-        url += f"?token={ws_token}"
 
     payload = {
         "from_user": "webchat",
@@ -216,7 +214,7 @@ async def _dispatch_to_rlm(
     req = urequest.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=build_internal_auth_headers(),
         method="POST",
     )
 

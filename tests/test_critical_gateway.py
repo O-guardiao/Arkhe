@@ -480,15 +480,15 @@ class TestOpenAICompat:
         app.include_router(create_openai_compat_router(api_token))
         return app
 
-    def test_no_auth_required_when_token_empty(self):
+    def test_endpoint_disabled_when_token_empty(self):
         from fastapi.testclient import TestClient
         app = self._make_app(api_token="")
-        with TestClient(app) as client:
+        with TestClient(app, raise_server_exceptions=False) as client:
             resp = client.post("/v1/chat/completions", json={
                 "model": "rlm",
                 "messages": [{"role": "user", "content": "teste"}],
             })
-        assert resp.status_code == 200
+        assert resp.status_code == 503
 
     def test_auth_required_when_token_set(self):
         from fastapi.testclient import TestClient
@@ -509,15 +509,14 @@ class TestOpenAICompat:
                 headers={"Authorization": "Bearer secret123"},
             )
         assert resp.status_code == 200
-
     def test_response_has_openai_format(self):
         from fastapi.testclient import TestClient
-        app = self._make_app()
+        app = self._make_app(api_token="secret123")
         with TestClient(app) as client:
             resp = client.post("/v1/chat/completions", json={
                 "model": "rlm",
                 "messages": [{"role": "user", "content": "vendas"}],
-            })
+            }, headers={"Authorization": "Bearer secret123"})
         data = resp.json()
         assert "choices" in data
         assert data["choices"][0]["message"]["role"] == "assistant"
@@ -527,24 +526,24 @@ class TestOpenAICompat:
 
     def test_response_content_from_agent(self):
         from fastapi.testclient import TestClient
-        app = self._make_app()
+        app = self._make_app(api_token="secret123")
         with TestClient(app) as client:
             resp = client.post("/v1/chat/completions", json={
                 "model": "rlm",
                 "messages": [{"role": "user", "content": "relatório"}],
-            })
+            }, headers={"Authorization": "Bearer secret123"})
         content = resp.json()["choices"][0]["message"]["content"]
         assert "R$50.000" in content
 
     def test_stream_returns_sse(self):
         from fastapi.testclient import TestClient
-        app = self._make_app()
+        app = self._make_app(api_token="secret123")
         with TestClient(app) as client:
             resp = client.post("/v1/chat/completions", json={
                 "model": "rlm",
                 "messages": [{"role": "user", "content": "stream me"}],
                 "stream": True,
-            })
+            }, headers={"Authorization": "Bearer secret123"})
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
         body = resp.text
@@ -554,13 +553,13 @@ class TestOpenAICompat:
     def test_stream_contains_role_and_content_chunks(self):
         from fastapi.testclient import TestClient
         import json as _json
-        app = self._make_app()
+        app = self._make_app(api_token="secret123")
         with TestClient(app) as client:
             resp = client.post("/v1/chat/completions", json={
                 "model": "rlm",
                 "messages": [{"role": "user", "content": "stream"}],
                 "stream": True,
-            })
+            }, headers={"Authorization": "Bearer secret123"})
         chunks = []
         for line in resp.text.split("\n"):
             if line.startswith("data: ") and line != "data: [DONE]":
@@ -573,12 +572,12 @@ class TestOpenAICompat:
 
     def test_no_user_message_returns_422(self):
         from fastapi.testclient import TestClient
-        app = self._make_app()
+        app = self._make_app(api_token="secret123")
         with TestClient(app, raise_server_exceptions=False) as client:
             resp = client.post("/v1/chat/completions", json={
                 "model": "rlm",
                 "messages": [{"role": "system", "content": "only system"}],
-            })
+            }, headers={"Authorization": "Bearer secret123"})
         # system-only → extrai system como fallback, deve funcionar
         # Ou vazio → 422
         # Na implementação atual: extrai system como último recurso
@@ -587,25 +586,117 @@ class TestOpenAICompat:
 
     def test_user_field_maps_to_client_id(self):
         from fastapi.testclient import TestClient
-        app = self._make_app()
+        app = self._make_app(api_token="secret123")
         with TestClient(app) as client:
             resp = client.post("/v1/chat/completions", json={
                 "model": "rlm",
                 "messages": [{"role": "user", "content": "hello"}],
                 "user": "cliente_joao",
-            })
+            }, headers={"Authorization": "Bearer secret123"})
         assert resp.status_code == 200
         assert resp.headers.get("x-session-id") is not None
 
     def test_list_models_returns_rlm(self):
         from fastapi.testclient import TestClient
-        app = self._make_app()
+        app = self._make_app(api_token="secret123")
         with TestClient(app) as client:
-            resp = client.get("/v1/models")
+            resp = client.get("/v1/models", headers={"Authorization": "Bearer secret123"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["object"] == "list"
         assert any(m["id"] == "rlm" for m in data["data"])
+
+
+class TestApiAuthHelpers:
+
+    def test_build_internal_auth_headers_prefers_internal_token(self, monkeypatch):
+        from rlm.server.auth_helpers import build_internal_auth_headers
+
+        monkeypatch.setenv("RLM_INTERNAL_TOKEN", "internal-token")
+        monkeypatch.setenv("RLM_WS_TOKEN", "ws-token")
+
+        headers = build_internal_auth_headers()
+
+        assert headers["Content-Type"] == "application/json"
+        assert headers["X-RLM-Token"] == "internal-token"
+
+    def test_require_token_accepts_bearer_or_header(self, monkeypatch):
+        from starlette.requests import Request
+        from rlm.server.auth_helpers import require_token
+
+        monkeypatch.setenv("RLM_ADMIN_TOKEN", "admin-secret")
+
+        request_from_header = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/protected",
+            "headers": [(b"x-rlm-token", b"admin-secret")],
+            "query_string": b"",
+        })
+        request_from_bearer = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/protected",
+            "headers": [(b"authorization", b"Bearer admin-secret")],
+            "query_string": b"",
+        })
+
+        assert require_token(
+            request_from_header,
+            env_names=("RLM_ADMIN_TOKEN",),
+            scope="admin API",
+        ) == "admin-secret"
+        assert require_token(
+            request_from_bearer,
+            env_names=("RLM_ADMIN_TOKEN",),
+            scope="admin API",
+        ) == "admin-secret"
+
+    def test_require_token_rejects_missing_token(self, monkeypatch):
+        from fastapi import HTTPException
+        from starlette.requests import Request
+        from rlm.server.auth_helpers import require_token
+
+        monkeypatch.setenv("RLM_ADMIN_TOKEN", "admin-secret")
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/protected",
+            "headers": [],
+            "query_string": b"",
+        })
+
+        with pytest.raises(HTTPException, match="Invalid or missing admin API token") as exc:
+            require_token(
+                request,
+                env_names=("RLM_ADMIN_TOKEN",),
+                scope="admin API",
+            )
+
+        assert exc.value.status_code == 401
+
+    def test_require_token_returns_503_when_unconfigured(self, monkeypatch):
+        from fastapi import HTTPException
+        from starlette.requests import Request
+        from rlm.server.auth_helpers import require_token
+
+        monkeypatch.delenv("RLM_ADMIN_TOKEN", raising=False)
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/protected",
+            "headers": [],
+            "query_string": b"",
+        })
+
+        with pytest.raises(HTTPException, match="admin API authentication is not configured") as exc:
+            require_token(
+                request,
+                env_names=("RLM_ADMIN_TOKEN",),
+                scope="admin API",
+            )
+
+        assert exc.value.status_code == 503
 
 
 # ===========================================================================

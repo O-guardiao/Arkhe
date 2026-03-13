@@ -2,43 +2,35 @@
 ---
 
 <h1 align="center" style="font-size:2.8em">
-<span>Recursive Language Models (<span style="color:orange">RLM</span>s)</span>
+<span>Arkhe</span>
 </h1>
 
-<p align="center" style="font-size:1.3em">
-  <a href="https://arxiv.org/abs/2512.24601">Full Paper</a> •
-  <a href="https://alexzhang13.github.io/blog/2025/rlm/">Blogpost</a> •
-  <a href="https://alexzhang13.github.io/rlm/">Documentation</a> •
-  <a href="https://github.com/alexzhang13/rlm-minimal">RLM Minimal</a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/alexzhang13/rlm/actions/workflows/style.yml">
-    <img src="https://github.com/alexzhang13/rlm/actions/workflows/style.yml/badge.svg" alt="Style" />
-  </a>
-  <a href="https://github.com/alexzhang13/rlm/actions/workflows/test.yml">
-    <img src="https://github.com/alexzhang13/rlm/actions/workflows/test.yml/badge.svg" alt="Test" />
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://arxiv.org/abs/2512.24601">
-    <img src="media/paper_preview.png" alt="Paper Preview" width="300"/>
-  </a>
+<p align="center" style="font-size:1.2em">
+Recursive orchestration engine for long-context agents, memory workflows, and multi-channel runtime.
 </p>
 
 > [!IMPORTANT]
-> This repository is a derived work based on the original Recursive Language Models project by Alex Zhang.
+> Arkhe is a derived work based in part on the original Recursive Language Models project by Alex Zhang.
 > Repository-level licensing for this copy is Apache-2.0. Upstream attribution and the original MIT license
 > text for inherited portions are preserved in [NOTICE](NOTICE) and [LICENSES/upstream-rlm-mit.txt](LICENSES/upstream-rlm-mit.txt).
 
-## Overview
-Recursive Language Models (RLMs) are a task-agnostic inference paradigm for language models (LMs) to handle near-infinite length contexts by enabling the LM to *programmatically* examine, decompose, and recursively call itself over its input. RLMs replace the canonical `llm.completion(prompt, model)` call with a `rlm.completion(prompt, model)` call. RLMs offload the context as a variable in a REPL environment that the LM can interact with and launch sub-LM calls inside of.
+> [!NOTE]
+> Public branding in this repository is now Arkhe. The current Python package namespace, legacy CLI,
+> and environment variables still use `rlm` and `RLM_*` for compatibility during the transition.
 
-This repository provides an extensible inference engine for using RLMs around standard API-based and local LLMs. The initial experiments and idea were proposed in a [blogpost](https://alexzhang13.github.io/blog/2025/rlm/) in 2025, with expanded results in an [arXiv preprint](https://arxiv.org/abs/2512.24601).
+## Overview
+Arkhe is a recursive agent runtime for handling long contexts, delegated subcalls, memory, tools, and multi-channel interaction without collapsing everything into a single prompt. It keeps the operational shell of the original RLM codebase, but pushes it toward a productized assistant runtime with sessions, gateways, MCP integration, webchat, and deployment-oriented controls.
+
+In practical terms, Arkhe provides:
+
+- A recursive execution engine around standard LLM backends
+- Session lifecycle, persistence, and memory support
+- FastAPI server, OpenAI-compatible API, WebSocket streaming, and webchat
+- Channel gateways for Telegram, Discord, WhatsApp, and Slack
+- Tooling for skills, MCP servers, diagnostics, and operational checks
 
 > [!NOTE]
-> This repository contains inference code for RLMs with support for various sandbox environments. Open-source contributions are welcome. This repository is maintained by the authors of the paper from the MIT OASYS lab.
+> The research roots of this repository still matter, but this fork is being positioned as Arkhe rather than as the canonical upstream RLM distribution.
 
 ---
 
@@ -83,8 +75,10 @@ pip install -e .
 ### First Run (wizard interativo)
 
 ```bash
-rlm setup
+arkhe setup
 ```
+
+Compatibilidade legada: `rlm setup` continua funcionando.
 
 O wizard configura:
 1. **Chave de API** — OpenAI, Anthropic ou Google
@@ -112,69 +106,69 @@ print(rlm.completion("Print me the first 100 powers of two.").response)
 ### Uso via servidor
 
 ```bash
-rlm start              # Inicia API + WebSocket em background
+arkhe start            # Inicia API + WebSocket em background
 # Acesse http://localhost:5000/webchat para conversar
-rlm stop               # Para o servidor
+arkhe stop             # Para o servidor
 ```
 
 ---
 
 ## CLI — Command Line Interface
 
-Após `pip install -e .`, o comando `rlm` fica disponível globalmente.  
-Também funciona via `python -m rlm`.
+Após `pip install -e .`, o comando `arkhe` fica disponível globalmente. O comando `rlm`
+permanece como alias de compatibilidade. Também funciona via `python -m rlm`.
 
 | Comando | Descrição |
 |---|---|
-| `rlm setup` | Wizard interativo de primeira instalação |
-| `rlm start` | Inicia o servidor (API + WebSocket) em background |
-| `rlm start --foreground` | Inicia no terminal com logs ao vivo |
-| `rlm start --api-only` | Apenas API REST (sem WebSocket) |
-| `rlm stop` | Para todos os processos RLM |
-| `rlm status` | Mostra processos ativos, PIDs e endpoints |
-| `rlm update` | Atualiza o checkout git local e roda `uv sync` |
-| `rlm doctor` | Diagnóstico completo: .env, API key, servidor, canais |
-| `rlm version` | Versão instalada |
-| `rlm token rotate` | Regenera RLM_WS_TOKEN e RLM_HOOK_TOKEN |
-| `rlm skill list` | Lista skills instaladas com versão e status |
-| `rlm skill install <source>` | Instala skill remota (GitHub ou URL) |
-| `rlm channel list` | Mostra canais configurados e faltantes |
-| `rlm peer add --name X --pubkey Y --ip Z` | Adiciona peer WireGuard |
+| `arkhe setup` | Wizard interativo de primeira instalação |
+| `arkhe start` | Inicia o servidor (API + WebSocket) em background |
+| `arkhe start --foreground` | Inicia no terminal com logs ao vivo |
+| `arkhe start --api-only` | Apenas API REST (sem WebSocket) |
+| `arkhe stop` | Para todos os processos Arkhe |
+| `arkhe status` | Mostra processos ativos, PIDs e endpoints |
+| `arkhe update` | Atualiza o checkout git local e roda `uv sync` |
+| `arkhe doctor` | Diagnóstico completo: .env, API key, servidor, canais |
+| `arkhe version` | Versão instalada |
+| `arkhe token rotate` | Regenera os tokens `RLM_WS_TOKEN`, `RLM_INTERNAL_TOKEN`, `RLM_ADMIN_TOKEN`, `RLM_HOOK_TOKEN` e `RLM_API_TOKEN` |
+| `arkhe skill list` | Lista skills instaladas com versão e status |
+| `arkhe skill install <source>` | Instala skill remota (GitHub ou URL) |
+| `arkhe channel list` | Mostra canais configurados e faltantes |
+| `arkhe peer add --name X --pubkey Y --ip Z` | Adiciona peer WireGuard |
 
 ### Exemplos de uso
 
 ```bash
 # Primeira vez
-rlm setup
+arkhe setup
 
 # Verificar se tudo está OK
-rlm doctor
+arkhe doctor
 
 # Atualizar checkout local com fast-forward seguro
-rlm update
+arkhe update
 
 # Iniciar e acompanhar logs
-rlm start --foreground
+arkhe start --foreground
 
 # Ver quais canais estão ativos
-rlm channel list
+arkhe channel list
 
 # Instalar skill do GitHub
-rlm skill install github:usuario/minha-skill
-rlm skill install github:usuario/minha-skill@branch
+arkhe skill install github:usuario/minha-skill
+arkhe skill install github:usuario/minha-skill@branch
 
 # Rotacionar tokens (após possível vazamento)
-rlm token rotate
-rlm stop && rlm start
+arkhe token rotate
+arkhe stop && arkhe start
 ```
 
 ### Makefile shortcuts
 
 ```bash
-make setup    # equivalente a: rlm setup
-make start    # equivalente a: rlm start
-make stop     # equivalente a: rlm stop
-make status   # equivalente a: rlm status
+make setup    # equivalente a: arkhe setup
+make start    # equivalente a: arkhe start
+make stop     # equivalente a: arkhe stop
+make status   # equivalente a: arkhe status
 make test     # roda a suíte de testes
 make check    # lint + format + tests
 ```
@@ -189,15 +183,14 @@ O servidor FastAPI expõe os seguintes endpoints:
 
 | Método | Endpoint | Descrição |
 |---|---|---|
-| `POST` | `/webhook/{client_id}` | Recebe e processa evento (precisa `RLM_HOOK_TOKEN`) |
-| `GET` | `/sessions` | Lista sessões ativas |
-| `GET` | `/sessions/{id}` | Detalhes de uma sessão |
-| `DELETE` | `/sessions/{id}` | Aborta execução |
-| `GET` | `/sessions/{id}/events` | Log de eventos |
-| `GET` | `/plugins` | Plugins disponíveis |
-| `GET` | `/routes` | Rotas configuradas |
-| `GET` | `/health` | Health check |
-| `GET` | `/status` | Status detalhado do engine |
+| `POST` | `/webhook/{client_id}` | Recebe e processa evento interno (precisa `RLM_INTERNAL_TOKEN`, fallback `RLM_WS_TOKEN`/`RLM_API_TOKEN`) |
+| `GET` | `/sessions` | Lista sessões ativas (precisa `RLM_ADMIN_TOKEN`) |
+| `GET` | `/sessions/{id}` | Detalhes de uma sessão (precisa `RLM_ADMIN_TOKEN`) |
+| `DELETE` | `/sessions/{id}` | Aborta execução (precisa `RLM_ADMIN_TOKEN`) |
+| `GET` | `/sessions/{id}/events` | Log de eventos (precisa `RLM_ADMIN_TOKEN`) |
+| `GET` | `/plugins` | Plugins disponíveis (precisa `RLM_ADMIN_TOKEN`) |
+| `GET` | `/routes` | Rotas configuradas (precisa `RLM_ADMIN_TOKEN`) |
+| `GET` | `/health` | Health check (precisa `RLM_ADMIN_TOKEN`) |
 
 ### OpenAI-Compatible API
 
@@ -205,7 +198,7 @@ O servidor FastAPI expõe os seguintes endpoints:
 |---|---|---|
 | `POST` | `/v1/chat/completions` | Endpoint compatível com OpenAI SDK (precisa `RLM_API_TOKEN`) |
 
-Permite usar o RLM como drop-in replacement em qualquer app que use a API da OpenAI.
+Permite usar o Arkhe como drop-in replacement em qualquer app que use a API da OpenAI.
 
 ### Gateways de Canal
 
@@ -271,6 +264,8 @@ Resumo por categoria:
 | `RLM_CORS_ORIGINS` | (vazio) | Origens CORS permitidas (vírgula-separado) |
 | **Segurança** | | |
 | `RLM_WS_TOKEN` | — | Token de autenticação WebSocket |
+| `RLM_INTERNAL_TOKEN` | — | Token interno do webhook central `/webhook/{client_id}` |
+| `RLM_ADMIN_TOKEN` | — | Token administrativo para health, sessões, cron, hooks e telemetria |
 | `RLM_HOOK_TOKEN` | — | Token para webhooks externos |
 | `RLM_API_TOKEN` | — | Token para API OpenAI-compatible |
 | `RLM_JWT_SECRET` | — | Secret para autenticação JWT avançada |
@@ -292,7 +287,7 @@ Referência completa com variáveis de canal: veja [`.env.example`](.env.example
 
 ## Skills System
 
-O RLM possui 19 skills integradas que ampliam as capacidades do agente:
+O Arkhe possui 19 skills integradas que ampliam as capacidades do agente:
 
 | Skill | Descrição |
 |---|---|
@@ -347,9 +342,9 @@ def web_search(query, max_results=5):
 ### Instalação de skills remotas
 
 ```bash
-rlm skill install github:usuario/repositorio
-rlm skill install github:usuario/repositorio@branch
-rlm skill install https://raw.githubusercontent.com/.../SKILL.md
+arkhe skill install github:usuario/repositorio
+arkhe skill install github:usuario/repositorio@branch
+arkhe skill install https://raw.githubusercontent.com/.../SKILL.md
 ```
 
 ---
@@ -398,7 +393,7 @@ results = mem.search_hybrid(
 
 ## REPL Environments
 
-O RLM suporta múltiplos ambientes de execução de código:
+O Arkhe suporta múltiplos ambientes de execução de código:
 
 | Ambiente | Isolamento | Requisitos |
 |---|---|---|
@@ -549,10 +544,10 @@ Sistema de agendamento de tarefas persistente com SQLite.
 
 ### Logs estruturados
 
-O RLM usa logging estruturado configurável via `RLM_LOG_LEVEL`:
+O Arkhe usa logging estruturado configurável via `RLM_LOG_LEVEL`:
 
 ```bash
-RLM_LOG_LEVEL=debug rlm start --foreground
+RLM_LOG_LEVEL=debug arkhe start --foreground
 ```
 
 ### Visualizador de trajetórias
@@ -582,7 +577,7 @@ Veja também: docs/logging.md
 ### Diagnóstico do sistema
 
 ```bash
-rlm doctor
+arkhe doctor
 ```
 
 Verifica:

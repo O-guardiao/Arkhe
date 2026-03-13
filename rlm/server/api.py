@@ -42,6 +42,7 @@ from rlm.core.skill_loader import SkillLoader
 from rlm.core.exec_approval import ExecApprovalGate
 from rlm.server.webhook_dispatch import create_webhook_router
 from rlm.server.openai_compat import create_openai_compat_router
+from rlm.server.auth_helpers import configured_tokens, require_token
 from rlm.plugins import PluginLoader
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
@@ -74,6 +75,26 @@ except ImportError:
 
 gateway_log = get_logger("api")
 
+_INTERNAL_AUTH_ENV_NAMES = ("RLM_INTERNAL_TOKEN", "RLM_WS_TOKEN", "RLM_API_TOKEN")
+_ADMIN_AUTH_ENV_NAMES = ("RLM_ADMIN_TOKEN", "RLM_API_TOKEN", "RLM_WS_TOKEN")
+
+
+def _require_internal_api_auth(request: Request) -> None:
+    require_token(
+        request,
+        env_names=_INTERNAL_AUTH_ENV_NAMES,
+        scope="internal API",
+        allow_query=True,
+    )
+
+
+def _require_admin_api_auth(request: Request) -> None:
+    require_token(
+        request,
+        env_names=_ADMIN_AUTH_ENV_NAMES,
+        scope="admin API",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Lifespan (replaces deprecated @app.on_event)
@@ -86,11 +107,19 @@ async def lifespan(app: FastAPI):
     gateway_log.info("Initializing infrastructure...")
 
     # Phase 9.4 (CiberSeg): Validate critical env vars before anything else
-    _missing_critical: list[str] = []
-    if not os.environ.get("RLM_HOOK_TOKEN") and not os.environ.get("RLM_API_TOKEN"):
+    if not os.environ.get("RLM_HOOK_TOKEN"):
         gateway_log.warn(
-            "Neither RLM_HOOK_TOKEN nor RLM_API_TOKEN is set. "
-            "All API endpoints will be unauthenticated."
+            "RLM_HOOK_TOKEN is not set. External webhook receiver will remain disabled."
+        )
+    if not configured_tokens(*_INTERNAL_AUTH_ENV_NAMES):
+        gateway_log.error(
+            "No internal auth token configured. Core /webhook/{client_id} will reject requests. "
+            "Set RLM_INTERNAL_TOKEN or reuse RLM_WS_TOKEN."
+        )
+    if not configured_tokens(*_ADMIN_AUTH_ENV_NAMES):
+        gateway_log.error(
+            "No admin auth token configured. Administrative endpoints will reject requests. "
+            "Set RLM_ADMIN_TOKEN, RLM_API_TOKEN, or RLM_WS_TOKEN."
         )
     # RLM_JWT_SECRET is checked lazily (only when JWT is used), but warn early
     _jwt_secret = os.environ.get("RLM_JWT_SECRET", "")
@@ -100,10 +129,16 @@ async def lifespan(app: FastAPI):
             "JWT authentication will fail at runtime."
         )
     # Warn about bind address
-    _bind_host = os.environ.get("RLM_HOST", "127.0.0.1")
-    if _bind_host == "0.0.0.0":
+    _api_bind_host = os.environ.get("RLM_API_HOST", "127.0.0.1")
+    if _api_bind_host == "0.0.0.0":
         gateway_log.warn(
-            "RLM_HOST=0.0.0.0 detected. Server is exposed on ALL interfaces. "
+            "RLM_API_HOST=0.0.0.0 detected. REST API is exposed on ALL interfaces. "
+            "Use 127.0.0.1 (loopback) or a VPN IP for production."
+        )
+    _ws_bind_host = os.environ.get("RLM_WS_HOST", "127.0.0.1")
+    if _ws_bind_host == "0.0.0.0":
+        gateway_log.warn(
+            "RLM_WS_HOST=0.0.0.0 detected. WebSocket server is exposed on ALL interfaces. "
             "Use 127.0.0.1 (loopback) or a VPN IP for production."
         )
 
@@ -299,6 +334,8 @@ async def receive_webhook(client_id: str, request: Request):
     through the EventRouter, loads appropriate plugins, and executes
     via the Supervisor with safety boundaries.
     """
+    _require_internal_api_auth(request)
+
     # Parse payload
     try:
         payload = await request.json()
@@ -596,6 +633,7 @@ async def receive_webhook(client_id: str, request: Request):
 @app.get("/sessions")
 async def list_sessions(request: Request, status: str | None = None):
     """List all sessions, optionally filtered by status."""
+    _require_admin_api_auth(request)
     sm: SessionManager = request.app.state.session_manager
     sessions = sm.list_sessions(status=status)
     return {
@@ -607,6 +645,7 @@ async def list_sessions(request: Request, status: str | None = None):
 @app.get("/sessions/{session_id}")
 async def get_session(session_id: str, request: Request):
     """Get details of a specific session."""
+    _require_admin_api_auth(request)
     sm: SessionManager = request.app.state.session_manager
     session = sm.get_session(session_id)
     if not session:
@@ -617,6 +656,7 @@ async def get_session(session_id: str, request: Request):
 @app.delete("/sessions/{session_id}")
 async def abort_session(session_id: str, request: Request):
     """Abort a running session or close an idle one."""
+    _require_admin_api_auth(request)
     sm: SessionManager = request.app.state.session_manager
     supervisor: RLMSupervisor = request.app.state.supervisor
 
@@ -636,6 +676,7 @@ async def abort_session(session_id: str, request: Request):
 @app.get("/sessions/{session_id}/events")
 async def get_session_events(session_id: str, request: Request, limit: int = 50):
     """Get event log for a session."""
+    _require_admin_api_auth(request)
     sm: SessionManager = request.app.state.session_manager
     events = sm.get_events(session_id, limit=limit)
     return {"session_id": session_id, "events": events}
@@ -648,6 +689,7 @@ async def get_session_events(session_id: str, request: Request, limit: int = 50)
 @app.get("/plugins")
 async def list_plugins(request: Request):
     """List all available plugins."""
+    _require_admin_api_auth(request)
     loader: PluginLoader = request.app.state.plugin_loader
     manifests = loader.list_available()
     return {
@@ -659,6 +701,7 @@ async def list_plugins(request: Request):
 @app.get("/routes")
 async def list_routes(request: Request):
     """List all configured event routes."""
+    _require_admin_api_auth(request)
     router: EventRouter = request.app.state.event_router
     return {"routes": router.list_routes()}
 
@@ -670,6 +713,7 @@ async def list_routes(request: Request):
 @app.get("/skills")
 async def list_skills(request: Request):
     """Lista todas as skills descobertas e quais estão elegíveis no ambiente atual."""
+    _require_admin_api_auth(request)
     skill_loader: SkillLoader = request.app.state.skill_loader
     all_skills = request.app.state.skills_all
     eligible_names = set(request.app.state.skill_loader.get_active_names())
@@ -695,6 +739,7 @@ async def list_skills(request: Request):
 @app.get("/skills/telemetry")
 async def list_skills_telemetry(request: Request, include_recent: bool = False, limit: int = 20):
     """Retorna resumo operacional da telemetria de skills."""
+    _require_admin_api_auth(request)
     telemetry = get_skill_telemetry()
     safe_limit = max(1, min(limit, 100))
     summary = telemetry.get_summary(include_recent=include_recent, limit=safe_limit)
@@ -706,6 +751,7 @@ async def list_skills_telemetry(request: Request, include_recent: bool = False, 
 @app.get("/skills/telemetry/{skill_name}")
 async def get_skill_telemetry_report(skill_name: str, request: Request, limit: int = 20):
     """Retorna estatísticas e eventos recentes de uma skill específica."""
+    _require_admin_api_auth(request)
     all_skill_names = {skill.name for skill in request.app.state.skills_all}
     if skill_name not in all_skill_names:
         raise HTTPException(404, f"Skill '{skill_name}' não encontrada")
@@ -715,24 +761,27 @@ async def get_skill_telemetry_report(skill_name: str, request: Request, limit: i
 
 
 @app.get("/skills/telemetry/compose")
-async def get_compose_telemetry(limit: int = 10):
+async def get_compose_telemetry(request: Request, limit: int = 10):
     """Retorna as composições mais frequentes observadas entre skills."""
+    _require_admin_api_auth(request)
     telemetry = get_skill_telemetry()
     safe_limit = max(1, min(limit, 100))
     return telemetry.get_transition_report(limit=safe_limit)
 
 
 @app.get("/skills/telemetry/session/{session_id}/compose")
-async def get_session_compose_telemetry(session_id: str, limit: int = 10):
+async def get_session_compose_telemetry(session_id: str, request: Request, limit: int = 10):
     """Retorna as transições observadas em uma sessão específica."""
+    _require_admin_api_auth(request)
     telemetry = get_skill_telemetry()
     safe_limit = max(1, min(limit, 100))
     return telemetry.get_transition_report(session_id=session_id, limit=safe_limit)
 
 
 @app.get("/skills/telemetry/search")
-async def search_skill_traces(query: str, skill_name: str = "", limit: int = 5):
+async def search_skill_traces(request: Request, query: str, skill_name: str = "", limit: int = 5):
     """Recupera traces relevantes por overlap lexical com a query atual."""
+    _require_admin_api_auth(request)
     telemetry = get_skill_telemetry()
     safe_limit = max(1, min(limit, 20))
     return {
@@ -757,6 +806,7 @@ class CronJobRequest(BaseModel):
 @app.get("/cron/jobs")
 async def list_cron_jobs(request: Request):
     """Lista todos os jobs agendados."""
+    _require_admin_api_auth(request)
     scheduler: RLMScheduler = request.app.state.scheduler
     jobs = scheduler.list_jobs()
     return {
@@ -780,6 +830,7 @@ async def list_cron_jobs(request: Request):
 @app.post("/cron/jobs", status_code=201)
 async def create_cron_job(body: CronJobRequest, request: Request):
     """Cria ou substitui um job agendado."""
+    _require_admin_api_auth(request)
     scheduler: RLMScheduler = request.app.state.scheduler
     job = CronJob(
         name=body.name,
@@ -795,6 +846,7 @@ async def create_cron_job(body: CronJobRequest, request: Request):
 @app.delete("/cron/jobs/{job_name}")
 async def delete_cron_job(job_name: str, request: Request):
     """Remove um job agendado pelo nome."""
+    _require_admin_api_auth(request)
     scheduler: RLMScheduler = request.app.state.scheduler
     removed = scheduler.remove_job(job_name)
     if not removed:
@@ -809,6 +861,7 @@ async def delete_cron_job(job_name: str, request: Request):
 @app.get("/hooks/stats")
 async def hooks_stats(request: Request):
     """Retorna estatísticas dos hooks registrados."""
+    _require_admin_api_auth(request)
     hooks: HookSystem = request.app.state.hooks
     return hooks.get_stats()
 
@@ -820,6 +873,7 @@ async def hooks_stats(request: Request):
 @app.get("/exec/pending")
 async def list_pending_approvals(request: Request):
     """Lista execuções aguardando aprovação humana."""
+    _require_admin_api_auth(request)
     gate: ExecApprovalGate = request.app.state.exec_approval
     return {"pending": gate.list_pending(), "stats": gate.stats()}
 
@@ -827,6 +881,7 @@ async def list_pending_approvals(request: Request):
 @app.post("/exec/approve/{request_id}")
 async def approve_exec(request_id: str, request: Request):
     """Aprova uma execução pendente. O REPL é desbloqueado imediatamente."""
+    _require_admin_api_auth(request)
     gate: ExecApprovalGate = request.app.state.exec_approval
     resolved_by = request.headers.get("X-Operator", "human")
     ok = gate.approve(request_id, resolved_by=resolved_by)
@@ -838,6 +893,7 @@ async def approve_exec(request_id: str, request: Request):
 @app.post("/exec/deny/{request_id}")
 async def deny_exec(request_id: str, request: Request):
     """Nega uma execução pendente. O REPL recebe PermissionError."""
+    _require_admin_api_auth(request)
     gate: ExecApprovalGate = request.app.state.exec_approval
     resolved_by = request.headers.get("X-Operator", "human")
     ok = gate.deny(request_id, resolved_by=resolved_by)
@@ -849,6 +905,7 @@ async def deny_exec(request_id: str, request: Request):
 @app.get("/exec/{request_id}")
 async def get_exec_record(request_id: str, request: Request):
     """Retorna o estado de uma solicitação de aprovação (pending ou resolved)."""
+    _require_admin_api_auth(request)
     gate: ExecApprovalGate = request.app.state.exec_approval
     record = gate.get_record(request_id)
     if not record:
@@ -863,6 +920,7 @@ async def get_exec_record(request_id: str, request: Request):
 @app.get("/health")
 async def health_check(request: Request):
     """Health check with system status."""
+    _require_admin_api_auth(request)
     sm: SessionManager = request.app.state.session_manager
     supervisor: RLMSupervisor = request.app.state.supervisor
     loader: PluginLoader = request.app.state.plugin_loader

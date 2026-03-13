@@ -1,7 +1,7 @@
 """Tests para o RLM CLI (rlm/cli/).
 
 Cobertura:
-  - main.py: parser, dispatch, token rotate, cmd_version
+    - main.py: parser, dispatch, token rotate, doctor, cmd_version
   - wizard.py: _write_env, _load_existing_env, _resolve_env_path
   - service.py: _read_pid/_write_pid/_pid_alive, start_services (mock),
                 stop_services (mock), show_status (mock)
@@ -58,7 +58,7 @@ class TestCLIParser:
             main(["version"])
         assert exc.value.code == 0
         out = capsys.readouterr().out
-        assert "rlm" in out
+        assert "arkhe" in out
 
     def test_unknown_command_exits_nonzero(self) -> None:
         from rlm.cli.main import main
@@ -259,7 +259,10 @@ class TestTokenRotate:
         assert rc == 0
         content = tmp_env.read_text(encoding="utf-8")
         assert "RLM_WS_TOKEN=" in content
+        assert "RLM_INTERNAL_TOKEN=" in content
+        assert "RLM_ADMIN_TOKEN=" in content
         assert "RLM_HOOK_TOKEN=" in content
+        assert "RLM_API_TOKEN=" in content
         # Garante que a chave existente foi preservada
         assert "OPENAI_API_KEY=sk-test" in content
 
@@ -267,9 +270,16 @@ class TestTokenRotate:
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         old_ws = "a" * 64
-        old_hook = "b" * 64
+        old_internal = "b" * 64
+        old_admin = "c" * 64
+        old_hook = "d" * 64
+        old_api = "e" * 64
         tmp_env.write_text(
-            f"RLM_WS_TOKEN={old_ws}\nRLM_HOOK_TOKEN={old_hook}\n",
+            f"RLM_WS_TOKEN={old_ws}\n"
+            f"RLM_INTERNAL_TOKEN={old_internal}\n"
+            f"RLM_ADMIN_TOKEN={old_admin}\n"
+            f"RLM_HOOK_TOKEN={old_hook}\n"
+            f"RLM_API_TOKEN={old_api}\n",
             encoding="utf-8",
         )
         import argparse
@@ -282,9 +292,15 @@ class TestTokenRotate:
         assert rc == 0
         content = tmp_env.read_text(encoding="utf-8")
         assert old_ws not in content
+        assert old_internal not in content
+        assert old_admin not in content
         assert old_hook not in content
+        assert old_api not in content
         assert "RLM_WS_TOKEN=" in content
+        assert "RLM_INTERNAL_TOKEN=" in content
+        assert "RLM_ADMIN_TOKEN=" in content
         assert "RLM_HOOK_TOKEN=" in content
+        assert "RLM_API_TOKEN=" in content
 
     def test_returns_1_if_no_env_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -316,7 +332,10 @@ class TestWizardEnvIO:
             "OPENAI_API_KEY": "sk-abc",
             "RLM_MODEL": "gpt-4o",
             "RLM_WS_TOKEN": secrets.token_hex(32),
+            "RLM_INTERNAL_TOKEN": secrets.token_hex(32),
+            "RLM_ADMIN_TOKEN": secrets.token_hex(32),
             "RLM_HOOK_TOKEN": secrets.token_hex(32),
+            "RLM_API_TOKEN": secrets.token_hex(32),
             "RLM_API_HOST": "127.0.0.1",
             "RLM_API_PORT": "5000",
         }

@@ -165,7 +165,16 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     section_order = [
         ("# --- LLM ---", ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "RLM_MODEL"]),
         ("# --- Servidor ---", ["RLM_API_HOST", "RLM_API_PORT", "RLM_WS_HOST", "RLM_WS_PORT"]),
-        ("# --- Segurança ---", ["RLM_WS_TOKEN", "RLM_HOOK_TOKEN"]),
+        (
+            "# --- Segurança ---",
+            [
+                "RLM_WS_TOKEN",
+                "RLM_INTERNAL_TOKEN",
+                "RLM_ADMIN_TOKEN",
+                "RLM_HOOK_TOKEN",
+                "RLM_API_TOKEN",
+            ],
+        ),
     ]
 
     for section_title, keys in section_order:
@@ -221,7 +230,8 @@ def run_wizard() -> int:
 
                 Este wizard irá:
                   • Configurar chaves de API e modelo LLM
-                  • Gerar tokens de segurança (WS + Webhook)
+                                    • Gerar tokens de segurança para WebSocket, tráfego interno,
+                                        administração, webhooks externos e API compatível OpenAI
                   • Salvar o arquivo [bold].env[/]
                   • (opcional) Instalar daemon systemd/launchd
             """),
@@ -308,27 +318,25 @@ def run_wizard() -> int:
     # ----------------------------------------------------------------- Step 3: Tokens
     _rule("Passo 3 — Tokens de segurança")
 
-    existing_ws = existing.get("RLM_WS_TOKEN", "")
-    if existing_ws:
-        regen_ws = _confirm(
-            f"[dim]RLM_WS_TOKEN já existe (…{existing_ws[-6:]}). Regenerar?[/]",
-            default=False,
-        )
-        config["RLM_WS_TOKEN"] = secrets.token_hex(32) if regen_ws else existing_ws
-    else:
-        config["RLM_WS_TOKEN"] = secrets.token_hex(32)
-        _print(f"[green]✓[/] RLM_WS_TOKEN gerado: [dim]…{config['RLM_WS_TOKEN'][-8:]}[/]")
+    token_specs = [
+        ("RLM_WS_TOKEN", "WebSocket / observabilidade"),
+        ("RLM_INTERNAL_TOKEN", "API interna /webhook/{client_id}"),
+        ("RLM_ADMIN_TOKEN", "rotas administrativas e health"),
+        ("RLM_HOOK_TOKEN", "webhooks externos /api/hooks"),
+        ("RLM_API_TOKEN", "API OpenAI-compatible /v1"),
+    ]
 
-    existing_hook = existing.get("RLM_HOOK_TOKEN", "")
-    if existing_hook:
-        regen_hook = _confirm(
-            f"[dim]RLM_HOOK_TOKEN já existe (…{existing_hook[-6:]}). Regenerar?[/]",
-            default=False,
-        )
-        config["RLM_HOOK_TOKEN"] = secrets.token_hex(32) if regen_hook else existing_hook
-    else:
-        config["RLM_HOOK_TOKEN"] = secrets.token_hex(32)
-        _print(f"[green]✓[/] RLM_HOOK_TOKEN gerado: [dim]…{config['RLM_HOOK_TOKEN'][-8:]}[/]")
+    for env_name, label in token_specs:
+        existing_value = existing.get(env_name, "")
+        if existing_value:
+            regenerate = _confirm(
+                f"[dim]{env_name} já existe para {label} (…{existing_value[-6:]}). Regenerar?[/]",
+                default=False,
+            )
+            config[env_name] = secrets.token_hex(32) if regenerate else existing_value
+        else:
+            config[env_name] = secrets.token_hex(32)
+            _print(f"[green]✓[/] {env_name} gerado: [dim]…{config[env_name][-8:]}[/]")
 
     _print()
 
@@ -389,7 +397,7 @@ def run_wizard() -> int:
     _print()
     _print(f"  Para iniciar o servidor:  [bold cyan]rlm start[/]")
     _print(f"  Para ver status:          [bold cyan]rlm status[/]")
-    _print(f"  Para rotacionar tokens:   [bold cyan]rlm token rotate[/]")
+    _print(f"  Para rotacionar tokens:   [bold cyan]arkhe token rotate[/]")
     _print()
 
     return 0

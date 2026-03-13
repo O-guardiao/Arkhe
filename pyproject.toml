@@ -1,10 +1,10 @@
 [project]
-name = "rlm"
+name = "arkhe"
 authors = [
     {name = "Alex Zhang", email = "altzhang@mit.edu"},
 ]
 version = "0.1.0"
-description = "Recursive Language Models."
+description = "Arkhe agent engine with recursive orchestration, memory, and multi-channel runtime."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -27,6 +27,7 @@ daytona = ["daytona>=0.128.1", "dill>=0.3.7"]
 prime = ["prime-sandboxes>=0.2.0", "dill>=0.3.7"]
 
 [project.scripts]
+arkhe = "rlm.cli.main:main"
 rlm = "rlm.cli.main:main"
 
 [build-system]
