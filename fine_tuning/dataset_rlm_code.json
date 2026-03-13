@@ -1,0 +1,182 @@
+[
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Implemente merge sort recursivo em Python e teste com uma lista desordenada."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nPreciso implementar merge sort. É um algoritmo dividir-e-conquistar clássico.\nVou usar sub_rlm para dividir o problema em dois subproblemas: implementar a fase de divisão e a fase de merge.\n</think>\n\n```repl\ndivide_impl = sub_rlm(\"Escreva a função recursiva merge_sort(arr) que divide a lista ao meio e chama a si mesma em cada metade. Retorne lista ordenada.\")\nprint(divide_impl)\n```\n\n```repl\nmerge_impl = sub_rlm(\"Escreva a função auxiliar merge(left, right) que mescla duas listas ordenadas em uma lista ordenada final.\")\nprint(merge_impl)\n```\n\n```repl\nfull_code = f\"\"\"\ndef merge(left, right):\n    result = []\n    i = j = 0\n    while i < len(left) and j < len(right):\n        if left[i] <= right[j]:\n            result.append(left[i])\n            i += 1\n        else:\n            result.append(right[j])\n            j += 1\n    result.extend(left[i:])\n    result.extend(right[j:])\n    return result\n\ndef merge_sort(arr):\n    if len(arr) <= 1:\n        return arr\n    mid = len(arr) // 2\n    left = merge_sort(arr[:mid])\n    right = merge_sort(arr[mid:])\n    return merge(left, right)\n\ntest = [38, 27, 43, 3, 9, 82, 10]\nprint(merge_sort(test))\n\"\"\"\nfinal_answer = full_code\nprint(\"Implementação completa com teste\")\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Analise este código Python e liste todos os bugs, depois corrija cada um:\n```python\ndef calcular_media(nums):\n    total = 0\n    for n in nums\n        total =+ n\n    return total / len(nums)\n```"
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nVou usar sub_rlm_parallel para analisar os bugs em paralelo, depois consolidar e corrigir.\nBugs visíveis: falta ':' no for, operador '=+' errado (deveria ser '+='), divisão por zero se lista vazia.\n</think>\n\n```repl\ntasks = [\n    \"Identifique erros de sintaxe neste Python: 'for n in nums' sem dois pontos\",\n    \"Identifique o bug com o operador '=+' quando deveria ser '+=' em acumulador\",\n    \"Identifique problema de divisão por zero quando lista vazia em total / len(nums)\"\n]\nbug_reports = sub_rlm_parallel(tasks)\nfor i, report in enumerate(bug_reports):\n    print(f\"Bug {i+1}: {report}\")\n```\n\n```repl\ncorrected_code = '''\ndef calcular_media(nums):\n    if not nums:\n        return 0.0\n    total = 0\n    for n in nums:\n        total += n\n    return total / len(nums)\n\n# Teste\nprint(calcular_media([1, 2, 3, 4, 5]))  # 3.0\nprint(calcular_media([]))               # 0.0\n'''\nfinal_answer = corrected_code\nprint(corrected_code)\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Gere código Python para processar 5 arquivos CSV em paralelo: carregar, calcular média de cada coluna numérica e salvar relatório."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nProcessamento paralelo de CSVs é ideal para sub_rlm_parallel — cada arquivo é independente.\nVou criar uma tarefa por arquivo e depois consolidar resultados.\n</think>\n\n```repl\nfiles = [\"vendas_jan.csv\", \"vendas_fev.csv\", \"vendas_mar.csv\", \"vendas_abr.csv\", \"vendas_mai.csv\"]\ntasks = [\n    f\"Escreva código Python para: carregar {f} com pandas, calcular df.mean(numeric_only=True), retornar dict com nome_arquivo e medias\"\n    for f in files\n]\nresults = sub_rlm_parallel(tasks)\nfor r in results:\n    print(r)\n```\n\n```repl\nimport pandas as pd\nimport json\nfrom pathlib import Path\n\ndef process_csv(filepath):\n    df = pd.read_csv(filepath)\n    means = df.mean(numeric_only=True).to_dict()\n    return {\"arquivo\": Path(filepath).name, \"medias\": means}\n\ndef process_all_parallel(files):\n    from concurrent.futures import ThreadPoolExecutor\n    with ThreadPoolExecutor(max_workers=5) as ex:\n        results = list(ex.map(process_csv, files))\n    return results\n\ndef save_report(results, output=\"relatorio.json\"):\n    with open(output, \"w\", encoding=\"utf-8\") as f:\n        json.dump(results, f, indent=2, ensure_ascii=False)\n    print(f\"Relatório salvo em {output}\")\n\nfinal_answer = \"Código gerado com ThreadPoolExecutor para processamento paralelo\"\nprint(final_answer)\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explique árvores binárias de busca e depois implemente: insert, search, e delete."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nVou usar sub_rlm para obter explicação conceitual e depois implementar cada operação separadamente.\nÁrvore BST: nó left < raiz, nó right > raiz. Isso garante busca O(log n) no caso médio.\n</think>\n\n```repl\nexplanation = llm_query(\"Explique BST (Binary Search Tree) em 3 parágrafos: definição, propriedade de ordenação, complexidade das operações\")\nprint(explanation)\n```\n\n```repl\nops = sub_rlm_parallel([\n    \"Implemente classe Node e método insert(val) recursivo para BST em Python\",\n    \"Implemente método search(val) recursivo para BST que retorna True/False\",\n    \"Implemente método delete(val) para BST tratando 3 casos: nó folha, 1 filho, 2 filhos\"\n])\ninsert_code, search_code, delete_code = ops\nprint(\"-- Insert --\"); print(insert_code)\nprint(\"-- Search --\"); print(search_code)\nprint(\"-- Delete --\"); print(delete_code)\n```\n\n```repl\nbst_code = '''\nclass Node:\n    def __init__(self, val):\n        self.val = val\n        self.left = self.right = None\n\nclass BST:\n    def __init__(self):\n        self.root = None\n\n    def insert(self, val):\n        def _insert(node, v):\n            if node is None:\n                return Node(v)\n            if v < node.val:\n                node.left = _insert(node.left, v)\n            elif v > node.val:\n                node.right = _insert(node.right, v)\n            return node\n        self.root = _insert(self.root, val)\n\n    def search(self, val):\n        def _search(node, v):\n            if node is None:\n                return False\n            if v == node.val:\n                return True\n            return _search(node.left, v) if v < node.val else _search(node.right, v)\n        return _search(self.root, val)\n\n    def delete(self, val):\n        def _min(node):\n            while node.left:\n                node = node.left\n            return node\n        def _delete(node, v):\n            if node is None:\n                return None\n            if v < node.val:\n                node.left = _delete(node.left, v)\n            elif v > node.val:\n                node.right = _delete(node.right, v)\n            else:\n                if not node.left:\n                    return node.right\n                if not node.right:\n                    return node.left\n                successor = _min(node.right)\n                node.val = successor.val\n                node.right = _delete(node.right, successor.val)\n            return node\n        self.root = _delete(self.root, val)\n'''\nfinal_answer = bst_code\nprint(\"BST completa implementada\")\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Crie um pipeline de dados: leia uma lista de textos, extraia palavras-chave de cada um em paralelo, depois agrupe por frequência."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nPipeline de dados com processamento paralelo. Cada texto é independente para extração de keywords.\nUsarei sub_rlm_parallel para extrair keywords de cada texto em paralelo, depois agrupamento sequencial.\n</think>\n\n```repl\ntextos = [\n    \"Python é uma linguagem de programação muito popular para ciência de dados\",\n    \"Machine learning usa algoritmos para aprender padrões em dados\",\n    \"Ciência de dados combina estatística e programação para análise\",\n    \"Algoritmos de deep learning precisam de muitos dados para treinamento\"\n]\n\ntasks = [\n    f'Extraia 5 palavras-chave importantes (sem stopwords) do texto: \"{t}\". Retorne apenas as palavras, separadas por vírgula.'\n    for t in textos\n]\nkeywords_raw = sub_rlm_parallel(tasks)\nfor i, kw in enumerate(keywords_raw):\n    print(f\"Texto {i+1}: {kw}\")\n```\n\n```repl\nfrom collections import Counter\n\nall_keywords = []\nfor kw_str in keywords_raw:\n    kws = [k.strip().lower() for k in kw_str.split(',')]\n    all_keywords.extend(kws)\n\nfreq = Counter(all_keywords)\nranked = freq.most_common(10)\nprint(\"Top 10 palavras-chave por frequência:\")\nfor word, count in ranked:\n    print(f\"  {word}: {count}\")\n\nfinal_answer = ranked\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Implemente o algoritmo de Dijkstra para menor caminho em grafos ponderados."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nDijkstra: grafo com pesos não-negativos, heap de prioridade para nó de menor distância.\nVou usar sub_rlm para obter a estrutura principal e depois completar a implementação.\n</think>\n\n```repl\nalgo_spec = sub_rlm(\"Descreva o algoritmo de Dijkstra passo a passo: inicialização de distâncias infinitas, heap de prioridade, relaxamento de arestas, condição de término\")\nprint(algo_spec)\n```\n\n```repl\nimport heapq\n\ndef dijkstra(graph, start):\n    \"\"\"\n    graph: dict {node: [(neighbor, weight), ...]}\n    start: nó inicial\n    Retorna: dict de distâncias mínimas de start para cada nó\n    \"\"\"\n    dist = {node: float('inf') for node in graph}\n    dist[start] = 0\n    heap = [(0, start)]\n\n    while heap:\n        d, u = heapq.heappop(heap)\n        if d > dist[u]:\n            continue\n        for v, w in graph.get(u, []):\n            nd = dist[u] + w\n            if nd < dist[v]:\n                dist[v] = nd\n                heapq.heappush(heap, (nd, v))\n    return dist\n\n# Teste\ng = {\n    'A': [('B', 4), ('C', 2)],\n    'B': [('D', 3), ('C', 1)],\n    'C': [('B', 1), ('D', 5)],\n    'D': []\n}\nresult = dijkstra(g, 'A')\nprint(result)  # {'A': 0, 'B': 3, 'C': 2, 'D': 6}\nfinal_answer = result\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Dado um texto longo sobre inteligência artificial, resuma cada seção separadamente e depois crie um resumo geral consolidado."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nTexto longo com múltiplas seções — padrão clássico de chunking do RLM.\nUsarei sub_rlm_parallel para resumir seções em paralelo, depois llm_query para consolidar.\n</think>\n\n```repl\ntext = context.get(\"text\", \"\")\n# Dividir em seções por headers ou parágrafos\nimport re\nsections = re.split(r'\\n#{1,3}\\s+|\\n\\n+', text)\nsections = [s.strip() for s in sections if len(s.strip()) > 100]\nprint(f\"Encontradas {len(sections)} seções\")\nfor i, s in enumerate(sections[:3]):\n    print(f\"Seção {i+1} (prévia): {s[:80]}...\")\n```\n\n```repl\nsummary_tasks = [\n    f\"Resuma em 2-3 frases esta seção de texto sobre IA: {sec[:800]}\"\n    for sec in sections\n]\nsection_summaries = sub_rlm_parallel(summary_tasks)\nfor i, summ in enumerate(section_summaries):\n    print(f\"Resumo seção {i+1}: {summ}\")\n```\n\n```repl\nall_summaries = \"\\n\".join([f\"Seção {i+1}: {s}\" for i, s in enumerate(section_summaries)])\nfinal_summary = llm_query(\n    f\"Com base nos resumos de cada seção abaixo, crie um resumo executivo consolidado em 1 parágrafo:\\n\\n{all_summaries}\"\n)\nfinal_answer = final_summary\nprint(final_answer)\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Escreva uma função Python que verifique se uma string é palíndromo de forma recursiva."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nPalíndromo recursivo: caso base (0 ou 1 char = True), caso recursivo (primeiro == último e recursão no meio).\nImplementação direta sem necessidade de sub_rlm.\n</think>\n\n```repl\npalindrome_variants = llm_query_batched([\n    \"Implemente is_palindrome(s) recursiva em Python verificando primeiro e último caractere\",\n    \"Implemente is_palindrome(s) recursiva em Python com limpeza de espaços/pontuação antes\"\n])\nfor i, v in enumerate(palindrome_variants):\n    print(f\"Versão {i+1}:\\n{v}\\n\")\n```\n\n```repl\ndef is_palindrome(s: str) -> bool:\n    # Limpa a string\n    s = ''.join(c.lower() for c in s if c.isalnum())\n    # Caso base\n    if len(s) <= 1:\n        return True\n    # Caso recursivo\n    if s[0] != s[-1]:\n        return False\n    return is_palindrome(s[1:-1])\n\n# Testes\nassert is_palindrome(\"racecar\") == True\nassert is_palindrome(\"A man a plan a canal Panama\") == True\nassert is_palindrome(\"hello\") == False\nassert is_palindrome(\"\") == True\nprint(\"Todos os testes passaram!\")\nfinal_answer = is_palindrome\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Implemente um sistema de cache LRU (Least Recently Used) em Python."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nLRU Cache: capacidade máxima, eviction do item menos recentemente usado.\nEstrutura ideal: OrderedDict (O(1) para move_to_end) ou doubly linked list + hashmap.\nVou implementar com OrderedDict que é a solução mais Pythonica.\n</think>\n\n```repl\ndesign_notes = sub_rlm(\"Explique como implementar LRU Cache com OrderedDict em Python: qual operação mantém ordem de acesso, como evitar overflow de capacidade, complexidade O(1) para get e put\")\nprint(design_notes)\n```\n\n```repl\nfrom collections import OrderedDict\n\nclass LRUCache:\n    def __init__(self, capacity: int):\n        self.capacity = capacity\n        self.cache = OrderedDict()\n\n    def get(self, key: int) -> int:\n        if key not in self.cache:\n            return -1\n        self.cache.move_to_end(key)\n        return self.cache[key]\n\n    def put(self, key: int, value: int) -> None:\n        if key in self.cache:\n            self.cache.move_to_end(key)\n        self.cache[key] = value\n        if len(self.cache) > self.capacity:\n            self.cache.popitem(last=False)\n\n# Teste\ncache = LRUCache(2)\ncache.put(1, 1)\ncache.put(2, 2)\nprint(cache.get(1))   # 1\ncache.put(3, 3)       # evict key 2\nprint(cache.get(2))   # -1 (evicted)\nprint(cache.get(3))   # 3\n\nfinal_answer = \"LRU Cache implementado com OrderedDict, O(1) para get e put\"\nprint(final_answer)\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Crie um decorator Python para medir tempo de execução e número de chamadas de qualquer função."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nDecorator com functools.wraps para preservar metadados. Precisa ser thread-safe para contagem.\nVou criar versão simples e depois versão com classe que acumula estatísticas.\n</think>\n\n```repl\ndecorator_approaches = llm_query_batched([\n    \"Escreva decorator Python com functools.wraps que mede tempo com time.perf_counter e imprime ao finalizar\",\n    \"Escreva decorator Python como classe com __call__ que acumula total_calls e total_time como atributos\"\n])\nfor i, a in enumerate(decorator_approaches):\n    print(f\"Abordagem {i+1}:\\n{a}\\n---\")\n```\n\n```repl\nimport time\nimport functools\nfrom threading import Lock\n\ndef profiled(func):\n    \"\"\"Decorator que mede tempo e conta chamadas de forma thread-safe.\"\"\"\n    func._calls = 0\n    func._total_time = 0.0\n    func._lock = Lock()\n\n    @functools.wraps(func)\n    def wrapper(*args, **kwargs):\n        start = time.perf_counter()\n        result = func(*args, **kwargs)\n        elapsed = time.perf_counter() - start\n        with func._lock:\n            func._calls += 1\n            func._total_time += elapsed\n        print(f\"[{func.__name__}] call #{func._calls} | {elapsed*1000:.2f}ms | total {func._total_time*1000:.2f}ms\")\n        return result\n    return wrapper\n\n@profiled\ndef fib(n):\n    if n <= 1: return n\n    return fib(n-1) + fib(n-2)\n\nprint(fib(10))\nfinal_answer = profiled\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Implemente busca binária recursiva e explique a complexidade de O(log n)."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nBusca binária: divide o array ao meio a cada passo. Recursão T(n) = T(n/2) + O(1) → O(log n) pelo Teorema Mestre.\n</think>\n\n```repl\ncomplexity_explanation = llm_query(\"Explique por que busca binária é O(log n) usando o Teorema Mestre: T(n) = T(n/2) + O(1), como isso resulta em log base 2 de n passos\")\nprint(complexity_explanation)\n```\n\n```repl\ndef binary_search(arr: list, target: int, low: int = 0, high: int = None) -> int:\n    \"\"\"\n    Retorna índice do target em arr ordenado, ou -1 se não encontrado.\n    Complexidade: O(log n) tempo, O(log n) espaço (stack recursivo)\n    \"\"\"\n    if high is None:\n        high = len(arr) - 1\n\n    # Caso base: elemento não encontrado\n    if low > high:\n        return -1\n\n    mid = (low + high) // 2\n\n    if arr[mid] == target:\n        return mid\n    elif arr[mid] < target:\n        return binary_search(arr, target, mid + 1, high)\n    else:\n        return binary_search(arr, target, low, mid - 1)\n\n# Testes\narr = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]\nprint(binary_search(arr, 7))   # 3\nprint(binary_search(arr, 6))   # -1\nprint(binary_search(arr, 1))   # 0\nprint(binary_search(arr, 19))  # 9\n\nfinal_answer = binary_search\nprint(\"Busca binária recursiva implementada e testada\")\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Compare três abordagens para lidar com dados faltantes em DataFrames pandas: drop, fill com média, e interpolação."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nTrês abordagens independentes — ideal para sub_rlm_parallel. Depois consolido com comparação.\n</think>\n\n```repl\napproaches = sub_rlm_parallel([\n    \"Mostre código pandas para remover linhas/colunas com NaN usando dropna() com diferentes parâmetros thresh, subset, axis\",\n    \"Mostre código pandas para preencher NaN com média, mediana e moda usando fillna() e SimpleImputer do sklearn\",\n    \"Mostre código pandas para interpolação temporal e linear de NaN com interpolate(), ffill() e bfill()\"\n])\nfor i, approach in enumerate(approaches):\n    label = [\"DROP\", \"FILL COM MÉDIA\", \"INTERPOLAÇÃO\"][i]\n    print(f\"\\n=== {label} ===\")\n    print(approach)\n```\n\n```repl\ncomparison = llm_query(\n    \"\"\"Compare estas 3 abordagens para dados faltantes em termos de:\n    1. Quando usar cada uma\n    2. Impacto no tamanho do dataset\n    3. Risco de viés introduzido\n    Seja direto e objetivo.\"\"\"\n)\nfinal_answer = comparison\nprint(final_answer)\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Gere um código Python completo para web scraping de preços de produtos usando requests e BeautifulSoup."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nWeb scraping envolve: fazer request, parsear HTML, extrair dados, tratar erros.\nVou usar sub_rlm para cada parte crítica: estrutura base, extração de preços, tratamento de erros.\n</think>\n\n```repl\nscraper_base = sub_rlm(\"Escreva função Python scrape_page(url) com requests.Session, headers de user-agent realista, timeout=10, retry 3x com backoff exponencial em caso de erro\")\nprint(scraper_base)\n```\n\n```repl\nprice_extractor = sub_rlm(\"Escreva função extract_prices(html) com BeautifulSoup que encontra elementos com classe 'price', 'preco' ou atributo data-price, retorna lista de floats\")\nprint(price_extractor)\n```\n\n```repl\nfull_scraper = '''\nimport requests\nfrom bs4 import BeautifulSoup\nimport time\nimport re\n\ndef scrape_prices(url: str, max_retries: int = 3) -> list[float]:\n    headers = {\n        \"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\"\n    }\n    session = requests.Session()\n\n    for attempt in range(max_retries):\n        try:\n            resp = session.get(url, headers=headers, timeout=10)\n            resp.raise_for_status()\n            break\n        except requests.RequestException as e:\n            if attempt == max_retries - 1:\n                raise\n            time.sleep(2 ** attempt)\n\n    soup = BeautifulSoup(resp.text, \"html.parser\")\n    prices = []\n\n    for selector in [\".price\", \".preco\", \"[data-price]\", \".product-price\"]:\n        elements = soup.select(selector)\n        for el in elements:\n            raw = el.get(\"data-price\") or el.get_text()\n            clean = re.sub(r\"[^\\d.,]\", \"\", raw).replace(\",\", \".\")\n            try:\n                prices.append(float(clean))\n            except ValueError:\n                continue\n\n    return list(set(prices))\n'''\nfinal_answer = full_scraper\nprint(\"Scraper completo com retry e extração robusta\")\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Implemente um sistema de filas com prioridade (priority queue) e use para simular escalonamento de processos."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nPriority queue com heapq. Simulação de escalonamento: processos chegam com bursts e prioridades diferentes.\nVou implementar estrutura de dados e depois a simulação separadamente.\n</think>\n\n```repl\npq_design = llm_query(\"Explique como heapq do Python implementa min-heap e como simular max-heap com valores negativados para priority queue\")\nprint(pq_design)\n```\n\n```repl\nimport heapq\nfrom dataclasses import dataclass, field\nfrom typing import Any\n\n@dataclass(order=True)\nclass Process:\n    priority: int          # menor número = maior prioridade\n    pid: int = field(compare=False)\n    burst_time: int = field(compare=False)\n    name: str = field(compare=False)\n\nclass Scheduler:\n    def __init__(self):\n        self.queue = []\n        self.time = 0\n\n    def add_process(self, pid, name, burst_time, priority):\n        proc = Process(priority=priority, pid=pid, burst_time=burst_time, name=name)\n        heapq.heappush(self.queue, proc)\n        print(f\"  [+] Adicionado: {name} (PID={pid}, burst={burst_time}, prio={priority})\")\n\n    def run(self):\n        print(\"\\nEscalonamento por prioridade:\")\n        while self.queue:\n            proc = heapq.heappop(self.queue)\n            print(f\"  t={self.time}: Executando {proc.name} por {proc.burst_time} unidades\")\n            self.time += proc.burst_time\n\nsched = Scheduler()\nsched.add_process(1, \"sistema\", burst_time=2, priority=1)\nsched.add_process(2, \"usuario\", burst_time=5, priority=3)\nsched.add_process(3, \"io\", burst_time=1, priority=2)\nsched.add_process(4, \"idle\", burst_time=10, priority=5)\nsched.run()\n\nfinal_answer = \"Priority Queue + Scheduler implementados com heapq\"\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Escreva testes unitários completos usando pytest para uma função de validação de email."
+      },
+      {
+        "role": "assistant",
+        "content": "<think>\nTestes unitários requerem: casos válidos, casos inválidos, edge cases.\nVou usar llm_query_batched para gerar grupos de casos de teste em paralelo.\n</think>\n\n```repl\ntest_cases = llm_query_batched([\n    \"Liste 5 emails válidos para testar: formato correto, subdomínios, caracteres especiais permitidos\",\n    \"Liste 5 emails inválidos: sem @, sem domínio, espaços, caracteres proibidos, múltiplos @\",\n    \"Liste 3 edge cases de email: string vazia, apenas @, email muito longo (>320 chars)\"\n])\nvalid, invalid, edges = test_cases\nprint(\"Válidos:\", valid)\nprint(\"Inválidos:\", invalid)\nprint(\"Edge cases:\", edges)\n```\n\n```repl\ntest_code = '''\nimport re\nimport pytest\n\ndef validate_email(email: str) -> bool:\n    if not email or len(email) > 320:\n        return False\n    pattern = r'^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$'\n    return bool(re.match(pattern, email))\n\n# Testes válidos\n@pytest.mark.parametrize(\"email\", [\n    \"user@example.com\",\n    \"user.name+tag@sub.domain.org\",\n    \"user123@test.co.uk\",\n    \"a@b.io\",\n])\ndef test_valid_emails(email):\n    assert validate_email(email) is True\n\n# Testes inválidos\n@pytest.mark.parametrize(\"email\", [\n    \"notanemail\",\n    \"@nodomain.com\",\n    \"spaces in@email.com\",\n    \"double@@at.com\",\n    \"\",\n    None,\n    \"a\" * 321,\n])\ndef test_invalid_emails(email):\n    assert validate_email(email) is False\n'''\nfinal_answer = test_code\nprint(test_code)\n```\n\nFINAL_VAR(final_answer)"
+      }
+    ]
+  }
+]

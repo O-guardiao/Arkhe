@@ -1,0 +1,16 @@
+This repository contains a derived work based in part on the original
+Recursive Language Models (RLM) project by Alex Zhang.
+
+Upstream source reference:
+https://github.com/alexzhang13/rlm
+
+Inherited portions from the upstream project were originally distributed under
+the MIT License. The preserved upstream MIT license text is included in:
+
+LICENSES/upstream-rlm-mit.txt
+
+Repository-level licensing for this copy is Apache License 2.0, except where
+separate notices apply to inherited third-party material.
+
+This NOTICE file is informational and attributional. It does not replace the
+obligation to preserve upstream license notices where required.

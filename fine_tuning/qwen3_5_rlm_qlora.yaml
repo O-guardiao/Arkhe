@@ -1,0 +1,50 @@
+### ============================================================
+### LLaMA Factory — QLoRA 4-bit para Qwen3.5-4B no Colab T4
+### Target: melhorar geração de código RLM + recursão sub_rlm
+### ============================================================
+
+### Model
+model_name_or_path: Qwen/Qwen3.5-4B
+
+### Method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### QLoRA — quantização 4-bit para caber no T4 (15 GB)
+quantization_bit: 4
+quantization_method: bitsandbytes
+
+### Dataset
+template: qwen3_5
+dataset: rlm_code
+dataset_dir: /content/drive/MyDrive/rlm_finetune/data
+cutoff_len: 4096
+max_samples: 2000
+overwrite_cache: true
+preprocessing_num_workers: 4
+
+### Output
+output_dir: /content/drive/MyDrive/rlm_finetune/output
+logging_steps: 10
+save_steps: 100
+plot_loss: true
+overwrite_output_dir: true
+
+### Treinamento
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 0.0002
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+fp16: true
+
+### Avaliação (desabilitada — dataset pequeno)
+val_size: 0.05
+eval_strategy: steps
+eval_steps: 100
