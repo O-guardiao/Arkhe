@@ -74,8 +74,8 @@ Esse fluxo:
 - clona ou atualiza o Arkhe em `~/.arkhe/repo`
 - roda `uv sync`
 - cria wrappers `arkhe` e `rlm` em `~/.local/bin`
-- gera um `.env` com defaults locais seguros e os cinco tokens do runtime
-- deixa apenas a chave do provedor LLM pendente, caso você não a informe durante a instalação
+- abre automaticamente o `arkhe setup` quando houver shell interativo
+- usa um `.env` bootstrap com defaults seguros como fallback quando não houver TTY
 
 Instalação manual:
 
@@ -95,7 +95,7 @@ pip install -e .
 arkhe setup
 ```
 
-Se você usou o one-liner, o `.env` já será criado automaticamente. Nesse caso, o `arkhe setup` fica como etapa opcional para revisão interativa e instalação de daemon.
+Se você usou o one-liner em shell interativo, o instalador já entra no `arkhe setup` no final. Se rodar em modo não interativo, ele cai no `.env` bootstrap e você pode abrir o menu depois com `cd ~/.arkhe/repo && uv run arkhe setup`.
 
 Compatibilidade legada: `rlm setup` continua funcionando.
 

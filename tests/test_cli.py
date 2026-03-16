@@ -406,6 +406,83 @@ class TestTokenGeneration:
         assert len(tokens) == 100  # sem colisões
 
 
+class TestSetupFlowFlag:
+    """Parser aceita --flow no subcomando setup."""
+
+    def test_setup_flow_quickstart(self) -> None:
+        from rlm.cli.main import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args(["setup", "--flow", "quickstart"])
+        assert args.flow == "quickstart"
+
+    def test_setup_flow_advanced(self) -> None:
+        from rlm.cli.main import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args(["setup", "--flow", "advanced"])
+        assert args.flow == "advanced"
+
+    def test_setup_flow_default_is_none(self) -> None:
+        from rlm.cli.main import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args(["setup"])
+        assert args.flow is None
+
+    def test_setup_flow_invalid_rejected(self) -> None:
+        from rlm.cli.main import _build_parser
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["setup", "--flow", "invalid"])
+
+
+class TestWizardPrompterInterface:
+    """WizardPrompter ABC e RichPrompter podem ser instanciados."""
+
+    def test_wizard_cancelled_error(self) -> None:
+        from rlm.cli.wizard import WizardCancelledError
+        err = WizardCancelledError("test")
+        assert str(err) == "test"
+        err2 = WizardCancelledError()
+        assert "cancelado" in str(err2)
+
+    def test_rich_prompter_instantiates(self) -> None:
+        from rlm.cli.wizard import RichPrompter
+        prompter = RichPrompter()
+        assert prompter is not None
+
+    def test_summarize_existing_config(self) -> None:
+        from rlm.cli.wizard import _summarize_existing_config
+        config = {
+            "OPENAI_API_KEY": "sk-1234567890abcdef",
+            "RLM_MODEL": "gpt-4o",
+            "RLM_API_HOST": "127.0.0.1",
+            "RLM_API_PORT": "5000",
+            "RLM_WS_HOST": "127.0.0.1",
+            "RLM_WS_PORT": "8765",
+            "RLM_WS_TOKEN": "abc123",
+        }
+        summary = _summarize_existing_config(config)
+        assert "OpenAI" in summary
+        assert "gpt-4o" in summary
+        assert "127.0.0.1" in summary
+        assert "1 configurados" in summary
+
+    def test_summarize_empty_config(self) -> None:
+        from rlm.cli.wizard import _summarize_existing_config
+        assert "(vazio)" in _summarize_existing_config({})
+
+    def test_probe_server_unreachable(self) -> None:
+        from rlm.cli.wizard import _probe_server
+        # Porta que certamente não está em uso
+        assert _probe_server("127.0.0.1", "19999") is False
+
+    def test_run_wizard_accepts_flow_param(self) -> None:
+        """run_wizard aceita parâmetro flow sem erro de assinatura."""
+        import inspect
+        from rlm.cli.wizard import run_wizard
+        sig = inspect.signature(run_wizard)
+        assert "flow" in sig.parameters
+
+
 # =========================================================================== #
 # 3. service.py                                                                #
 # =========================================================================== #

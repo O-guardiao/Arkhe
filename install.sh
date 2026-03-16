@@ -14,11 +14,13 @@
 #   3. Instala `uv` se necessário                                               #
 #   4. Clona ou atualiza o repositório em ~/.arkhe/repo                         #
 #   5. Executa `uv sync`                                                        #
-#   6. Gera um `.env` com defaults seguros e cinco tokens de runtime            #
-#   7. Cria wrappers `arkhe` e `rlm` em ~/.local/bin                            #
+#   6. Cria wrappers `arkhe` e `rlm` em ~/.local/bin                            #
+#   7. Abre `arkhe setup` em shells interativos                                 #
+#   8. Cai em `.env` seguro como fallback não interativo                        #
 #                                                                               #
 # Variáveis opcionais:                                                          #
 #   ARKHE_REPO_URL, ARKHE_INSTALL_DIR, ARKHE_BIN_DIR, ARKHE_MODEL               #
+#   ARKHE_SKIP_WIZARD=1 para pular o menu interativo                            #
 # =============================================================================#
 
 set -euo pipefail
@@ -159,6 +161,10 @@ prompt_via_tty() {
   echo "$reply"
 }
 
+has_tty() {
+  [ -r /dev/tty ] && [ -w /dev/tty ]
+}
+
 create_env_file() {
   local py_bin="$1"
   local env_path="$2"
@@ -208,6 +214,27 @@ EOF
   if [ ! -f "$project_root/.env.example" ]; then
     warn "Template .env.example não encontrado; revise manualmente o arquivo gerado."
   fi
+}
+
+run_setup_wizard() {
+  local project_root="$1"
+  if [ "${ARKHE_SKIP_WIZARD:-0}" = "1" ]; then
+    warn "Wizard interativo pulado porque ARKHE_SKIP_WIZARD=1."
+    return 1
+  fi
+  if ! has_tty; then
+    warn "Sem TTY interativo; mantendo apenas o .env bootstrap."
+    return 1
+  fi
+
+  info "Abrindo arkhe setup para revisar chaves, modelo e daemon..."
+  if (cd "$project_root" && uv run arkhe setup </dev/tty >/dev/tty 2>/dev/tty); then
+    ok "Wizard interativo concluído"
+    return 0
+  fi
+
+  warn "arkhe setup falhou; mantendo o .env bootstrap em $project_root/.env"
+  return 1
 }
 
 create_wrapper() {
@@ -270,6 +297,7 @@ main() {
   sync_project "$project_root"
   install_wrappers "$project_root"
   create_env_file "$py_bin" "$project_root/.env" "$project_root"
+  run_setup_wizard "$project_root" || true
 
   local arkhe_cmd="$WRAPPER_DIR/arkhe"
   if "$arkhe_cmd" version >/dev/null 2>&1; then
@@ -287,10 +315,10 @@ main() {
   echo -e "  Configuração: ${CYAN}$project_root/.env${RESET}"
   echo -e "  CLI:          ${CYAN}$arkhe_cmd${RESET}"
   echo
-  echo -e "  ${CYAN}1.${RESET} Edite ${CYAN}$project_root/.env${RESET} e preencha sua chave do provedor, se ainda estiver vazia"
+  echo -e "  ${CYAN}1.${RESET} Se o wizard não abriu, execute ${CYAN}(cd $project_root && uv run arkhe setup)${RESET}"
   echo -e "  ${CYAN}2.${RESET} Inicie com ${CYAN}$arkhe_cmd start --foreground${RESET}"
   echo -e "  ${CYAN}3.${RESET} Rode ${CYAN}$arkhe_cmd doctor${RESET} para validar a instalação"
-  echo -e "  ${CYAN}4.${RESET} Se quiser instalação guiada de daemon, execute ${CYAN}$arkhe_cmd setup${RESET}"
+  echo -e "  ${CYAN}4.${RESET} Use ${CYAN}ARKHE_SKIP_WIZARD=1${RESET} apenas para bootstrap não interativo"
   echo
 }
 

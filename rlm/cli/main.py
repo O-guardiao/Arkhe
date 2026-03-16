@@ -290,12 +290,12 @@ def _print_success(msg: str) -> None:
 # Subcomandos                                                                  #
 # --------------------------------------------------------------------------- #
 
-def cmd_setup(args: argparse.Namespace) -> int:  # noqa: ARG001
+def cmd_setup(args: argparse.Namespace) -> int:
     """Executa o wizard interativo de configuração."""
     if not _require_supported_runtime("arkhe setup"):
         return 1
     from rlm.cli.wizard import run_wizard
-    return run_wizard()
+    return run_wizard(flow=getattr(args, "flow", None))
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -935,7 +935,13 @@ Compatibilidade:
     sub = parser.add_subparsers(dest="command", metavar="<comando>")
 
     # --- setup ---
-    sub.add_parser("setup", help="Wizard interativo de instalação")
+    p_setup = sub.add_parser("setup", help="Wizard interativo de instalação")
+    p_setup.add_argument(
+        "--flow",
+        choices=["quickstart", "advanced"],
+        default=None,
+        help="Modo do wizard: quickstart (defaults automáticos) ou advanced (configuração manual)",
+    )
 
     # --- start ---
     p_start = sub.add_parser("start", help="Inicia o servidor Arkhe")

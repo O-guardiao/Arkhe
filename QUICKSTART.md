@@ -15,7 +15,9 @@ Se o alvo for Linux, macOS ou WSL, o caminho mais rápido é o instalador one-li
 curl -fsSL https://raw.githubusercontent.com/O-guardiao/Arkhe/main/install.sh | bash
 ```
 
-Ele prepara o checkout em `~/.arkhe/repo`, gera o `.env` com tokens de segurança e deixa só a chave do provedor para ajuste final.
+Ele prepara o checkout em `~/.arkhe/repo` e, quando houver TTY interativo, continua direto no `arkhe setup` para você preencher chaves, modelo e opções de daemon.
+
+Sem TTY, ele faz bootstrap seguro com `.env` local e você abre o menu depois com `cd ~/.arkhe/repo && uv run arkhe setup`.
 
 ---
 
