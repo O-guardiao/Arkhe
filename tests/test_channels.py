@@ -1851,37 +1851,38 @@ class TestWebChatCleanup:
 
 class TestCLINewParsers:
     def test_doctor_parser_exists(self) -> None:
-        from rlm.cli.main import _build_parser
-        parser = _build_parser()
+        from rlm.cli.parser import build_parser
+        parser = build_parser()
         args = parser.parse_args(["doctor"])
         assert args.command == "doctor"
 
     def test_skill_list_parsed(self) -> None:
-        from rlm.cli.main import _build_parser
-        args = _build_parser().parse_args(["skill", "list"])
+        from rlm.cli.parser import build_parser
+        args = build_parser().parse_args(["skill", "list"])
         assert args.command == "skill"
         assert args.skill_command == "list"
 
     def test_skill_install_source_parsed(self) -> None:
-        from rlm.cli.main import _build_parser
-        args = _build_parser().parse_args(["skill", "install", "github:usuario/repo@main"])
+        from rlm.cli.parser import build_parser
+        args = build_parser().parse_args(["skill", "install", "github:usuario/repo@main"])
         assert args.skill_command == "install"
         assert args.source == "github:usuario/repo@main"
         assert args.force is False
 
     def test_skill_install_force_flag(self) -> None:
-        from rlm.cli.main import _build_parser
-        args = _build_parser().parse_args(["skill", "install", "github:usuario/repo", "--force"])
+        from rlm.cli.parser import build_parser
+        args = build_parser().parse_args(["skill", "install", "github:usuario/repo", "--force"])
         assert args.force is True
 
     def test_channel_list_parsed(self) -> None:
-        from rlm.cli.main import _build_parser
-        args = _build_parser().parse_args(["channel", "list"])
+        from rlm.cli.parser import build_parser
+        args = build_parser().parse_args(["channel", "list"])
         assert args.command == "channel"
         assert args.channel_command == "list"
 
     def test_doctor_in_dispatch(self) -> None:
-        from rlm.cli.main import DISPATCH, cmd_doctor
+        from rlm.cli.commands.doctor import cmd_doctor
+        from rlm.cli.main import DISPATCH
         assert DISPATCH.get("doctor") is cmd_doctor
 
     def test_skill_subcommand_without_action_shows_help(self) -> None:
@@ -1905,7 +1906,7 @@ class TestCmdChannelList:
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         import argparse
-        from rlm.cli.main import cmd_channel_list
+        from rlm.cli.commands.channel import cmd_channel_list
 
         for var in ["TELEGRAM_TOKEN", "DISCORD_WEBHOOK_URL", "DISCORD_BOT_TOKEN",
                     "WHATSAPP_TOKEN", "WHATSAPP_PHONE_ID", "SLACK_BOT_TOKEN",
@@ -1919,7 +1920,7 @@ class TestCmdChannelList:
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         import argparse
-        from rlm.cli.main import cmd_channel_list
+        from rlm.cli.commands.channel import cmd_channel_list
 
         for var in ["TELEGRAM_TOKEN", "DISCORD_WEBHOOK_URL", "DISCORD_BOT_TOKEN",
                     "WHATSAPP_TOKEN", "WHATSAPP_PHONE_ID", "SLACK_BOT_TOKEN"]:
@@ -1940,20 +1941,20 @@ class TestCmdSkillList:
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import argparse
-        import rlm.cli.main as cli_main
+        from rlm.cli.commands.skill import cmd_skill_list
 
         monkeypatch.chdir(tmp_path)
         skills_dir = tmp_path / "rlm" / "skills"
         skills_dir.mkdir(parents=True)
 
-        rc = cli_main.cmd_skill_list(argparse.Namespace())
+        rc = cmd_skill_list(argparse.Namespace())
         assert rc == 0
 
     def test_skill_with_frontmatter_listed(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         import argparse
-        import rlm.cli.main as cli_main
+        from rlm.cli.commands.skill import cmd_skill_list
 
         skill_dir = tmp_path / "rlm" / "skills" / "minha-skill"
         skill_dir.mkdir(parents=True)
@@ -1962,7 +1963,7 @@ class TestCmdSkillList:
         )
         monkeypatch.setenv("RLM_SKILLS_DIR", str(tmp_path / "rlm" / "skills"))
 
-        cli_main.cmd_skill_list(argparse.Namespace())
+        cmd_skill_list(argparse.Namespace())
         out = capsys.readouterr().out
         assert "minha-skill" in out
 
@@ -1972,7 +1973,7 @@ class TestCmdSkillInstall:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import argparse
-        from rlm.cli.main import cmd_skill_install
+        from rlm.cli.commands.skill import cmd_skill_install
 
         args = argparse.Namespace(source="nao_e_github_nem_url", force=False)
         rc = cmd_skill_install(args)
@@ -1982,7 +1983,7 @@ class TestCmdSkillInstall:
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import argparse
-        import rlm.cli.main as cli_main
+        from rlm.cli.commands.skill import cmd_skill_install
 
         (tmp_path / "rlm" / "skills").mkdir(parents=True)
         monkeypatch.setenv("RLM_SKILLS_DIR", str(tmp_path / "rlm" / "skills"))
@@ -1992,7 +1993,7 @@ class TestCmdSkillInstall:
         fake_resp = _MockResponse(skill_content)
         with patch("urllib.request.urlopen", _mock_urlopen(fake_resp)):
             args = argparse.Namespace(source="github:usuario/testskill", force=False)
-            rc = cli_main.cmd_skill_install(args)
+            rc = cmd_skill_install(args)
 
         # Skill instalada com sucesso
         assert rc == 0
@@ -2003,7 +2004,7 @@ class TestCmdSkillInstall:
         self, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         import argparse
-        import rlm.cli.main as cli_main
+        from rlm.cli.commands.skill import cmd_skill_install
 
         skill_dir = tmp_path / "rlm" / "skills" / "overskill"
         skill_dir.mkdir(parents=True)
@@ -2015,7 +2016,7 @@ class TestCmdSkillInstall:
 
         with patch("urllib.request.urlopen", _mock_urlopen(fake_resp)):
             args = argparse.Namespace(source="github:user/overskill", force=True)
-            rc = cli_main.cmd_skill_install(args)
+            rc = cmd_skill_install(args)
 
         assert rc == 0
         content = (skill_dir / "SKILL.md").read_text()
@@ -2025,7 +2026,7 @@ class TestCmdSkillInstall:
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import argparse
-        import rlm.cli.main as cli_main
+        from rlm.cli.commands.skill import cmd_skill_install
 
         skill_dir = tmp_path / "rlm" / "skills" / "existingskill"
         skill_dir.mkdir(parents=True)
@@ -2037,6 +2038,6 @@ class TestCmdSkillInstall:
 
         with patch("urllib.request.urlopen", _mock_urlopen(fake_resp)):
             args = argparse.Namespace(source="github:user/existingskill", force=False)
-            rc = cli_main.cmd_skill_install(args)
+            rc = cmd_skill_install(args)
 
         assert rc == 1  # deve falhar sem --force

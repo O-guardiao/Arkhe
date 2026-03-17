@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import json
 import asyncio
+import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Any, Callable
+
+from dotenv import load_dotenv
 
 
 @dataclass
@@ -309,3 +312,33 @@ class SSEStream:
             else:
                 time.sleep(0.1)
                 yield ": keepalive\n\n"
+
+
+def main() -> int:
+    """Standalone WebSocket server entrypoint.
+
+    Intended for ws-only debugging. The default production path embeds the
+    WebSocket server inside the API process so they share the same event bus.
+    """
+    load_dotenv()
+    bus = RLMEventBus()
+    thread = start_ws_server(
+        event_bus=bus,
+        host=os.environ.get("RLM_WS_HOST", "127.0.0.1"),
+        port=int(os.environ.get("RLM_WS_PORT", "8765")),
+        ws_token=os.environ.get("RLM_WS_TOKEN"),
+    )
+    if thread is None:
+        return 1
+
+    print("[RLM WS] Standalone mode: no API event bridge attached.")
+    try:
+        while thread.is_alive():
+            thread.join(timeout=1.0)
+    except KeyboardInterrupt:
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -20,6 +20,7 @@ Endpoints:
 import json
 import asyncio
 import os
+from importlib import import_module
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -30,7 +31,6 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import uvicorn
 
 from rlm.core.session import SessionManager
 from rlm.core.supervisor import RLMSupervisor, SupervisorConfig, ExecutionResult
@@ -43,6 +43,7 @@ from rlm.core.exec_approval import ExecApprovalGate
 from rlm.server.webhook_dispatch import create_webhook_router
 from rlm.server.openai_compat import create_openai_compat_router
 from rlm.server.auth_helpers import configured_tokens, require_token
+from rlm.server.ws_server import RLMEventBus, start_ws_server
 from rlm.plugins import PluginLoader
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
@@ -53,24 +54,28 @@ try:
     from rlm.server.discord_gateway import router as _discord_router
     _HAS_DISCORD_GW = True
 except ImportError:
+    _discord_router = None
     _HAS_DISCORD_GW = False
 
 try:
     from rlm.server.whatsapp_gateway import router as _whatsapp_router
     _HAS_WHATSAPP_GW = True
 except ImportError:
+    _whatsapp_router = None
     _HAS_WHATSAPP_GW = False
 
 try:
     from rlm.server.slack_gateway import router as _slack_router
     _HAS_SLACK_GW = True
 except ImportError:
+    _slack_router = None
     _HAS_SLACK_GW = False
 
 try:
     from rlm.server.webchat import router as _webchat_router
     _HAS_WEBCHAT = True
 except ImportError:
+    _webchat_router = None
     _HAS_WEBCHAT = False
 
 gateway_log = get_logger("api")
@@ -105,6 +110,8 @@ async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle."""
     # --- Startup ---
     gateway_log.info("Initializing infrastructure...")
+    app.state.event_bus = RLMEventBus()
+    app.state.ws_thread = None
 
     # Phase 9.4 (CiberSeg): Validate critical env vars before anything else
     if not os.environ.get("RLM_HOOK_TOKEN"):
@@ -153,6 +160,7 @@ async def lifespan(app: FastAPI):
         "max_iterations": int(os.environ.get("RLM_MAX_ITERATIONS", "30")),
         "persistent": True,
         "verbose": True,
+        "event_bus": app.state.event_bus,
     }
 
     app.state.session_manager = SessionManager(
@@ -228,6 +236,15 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = RLMScheduler(execute_fn=_run_scheduled_job)
     app.state.scheduler.start()
 
+    ws_disabled = os.environ.get("RLM_WS_DISABLED", "false").lower() == "true"
+    if not ws_disabled:
+        app.state.ws_thread = start_ws_server(
+            event_bus=app.state.event_bus,
+            host=os.environ.get("RLM_WS_HOST", "127.0.0.1"),
+            port=int(os.environ.get("RLM_WS_PORT", "8765")),
+            ws_token=os.environ.get("RLM_WS_TOKEN"),
+        )
+
     gateway_log.info("✓ Session Manager initialized")
     gateway_log.info("✓ Supervisor initialized")
     gateway_log.info(f"✓ Plugins available: {[p.name for p in app.state.plugin_loader.list_available()]}")
@@ -248,6 +265,12 @@ async def lifespan(app: FastAPI):
         gateway_log.info("✓ WhatsApp gateway: GET+POST /whatsapp/webhook")
     if os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("SLACK_SIGNING_SECRET"):
         gateway_log.info("✓ Slack gateway: POST /slack/events")
+    if ws_disabled:
+        gateway_log.info("• WebSocket: desabilitado via RLM_WS_DISABLED=true")
+    elif app.state.ws_thread is not None:
+        gateway_log.info("✓ WebSocket observability thread started")
+    else:
+        gateway_log.warn("WebSocket observability unavailable (missing dependency or startup failure)")
     gateway_log.info("✓ WebChat: GET /webchat")
     gateway_log.info("Ready to receive events.")
 
@@ -306,18 +329,22 @@ if _HAS_DISCORD_GW and (
     os.environ.get("DISCORD_APP_PUBLIC_KEY") or
     os.environ.get("RLM_DISCORD_SKIP_VERIFY", "").lower() == "true"
 ):
+    assert _discord_router is not None
     app.include_router(_discord_router)
 
 if _HAS_WHATSAPP_GW and os.environ.get("WHATSAPP_VERIFY_TOKEN"):
+    assert _whatsapp_router is not None
     app.include_router(_whatsapp_router)
 
 if _HAS_SLACK_GW and (
     os.environ.get("SLACK_BOT_TOKEN") or
     os.environ.get("SLACK_SIGNING_SECRET")
 ):
+    assert _slack_router is not None
     app.include_router(_slack_router)
 
 if _HAS_WEBCHAT:
+    assert _webchat_router is not None
     app.include_router(_webchat_router)
 
 
@@ -468,8 +495,9 @@ async def receive_webhook(client_id: str, request: Request):
     if session.rlm_instance:
         env = getattr(session.rlm_instance, '_persistent_env', None)
         if env and hasattr(env, 'locals'):
+            repl_locals = env.locals
             if plugins_to_load:
-                plugin_loader.inject_multiple(plugins_to_load, env.locals)
+                plugin_loader.inject_multiple(plugins_to_load, repl_locals)
                 
             # Phase 9.2 / 11.3: Inject reply helpers bound to this specific client_id
             from rlm.plugins.channel_registry import ChannelRegistry
@@ -499,52 +527,52 @@ async def receive_webhook(client_id: str, request: Request):
                 """Envia mídia (imagem, áudio, documento) pelo canal original."""
                 return ChannelRegistry.send_media(session.client_id, media_url_or_path, caption)
 
-            env.locals['reply'] = reply
-            env.locals['reply_audio'] = reply_audio
-            env.locals['send_media'] = send_media
+            repl_locals['reply'] = reply
+            repl_locals['reply_audio'] = reply_audio
+            repl_locals['send_media'] = send_media
 
             # Phase 9.1: Activate eligible MCP skills
             skill_loader.activate_all(
                 eligible_skills,
-                env.locals,
+                repl_locals,
                 activation_scope=session.session_id,
             )
             # Inject dynamic skill context (keyword-routed)
             if _dynamic_skill_context:
-                env.locals['__rlm_skills__'] = _dynamic_skill_context
+                repl_locals['__rlm_skills__'] = _dynamic_skill_context
             elif skill_context:
-                env.locals['__rlm_skills__'] = skill_context
+                repl_locals['__rlm_skills__'] = skill_context
 
             # SIF Factory — Camada 2: callables compiladas (shell, weather, web_search...).
             # LLM chama diretamente sem boilerplate: shell("cmd"), weather("SP")
-            skill_loader.inject_sif_callables(eligible_skills, env.locals)
+            skill_loader.inject_sif_callables(eligible_skills, repl_locals)
 
             # Inject skill_doc + skill_list REPL globals (Camada 3: on-demand lazy)
             _skill_doc_fn, _skill_list_fn = skill_loader.build_skill_doc_fn(eligible_skills)
-            env.locals['skill_doc'] = _skill_doc_fn
-            env.locals['skill_list'] = _skill_list_fn
+            repl_locals['skill_doc'] = _skill_doc_fn
+            repl_locals['skill_list'] = _skill_list_fn
 
             # Phase 9.2: Exec Approval Gate
             approval_gate: ExecApprovalGate = request.app.state.exec_approval
             approval_required: bool = request.app.state.exec_approval_required
             if approval_required:
-                env.locals['confirm_exec'] = approval_gate.make_repl_fn(session.session_id)
+                repl_locals['confirm_exec'] = approval_gate.make_repl_fn(session.session_id)
             else:
                 # Gate disponível mas não obrigatório — LLM pode chamar voluntariamente
                 _gate_fn = approval_gate.make_repl_fn(session.session_id)
-                env.locals['confirm_exec'] = _gate_fn
+                repl_locals['confirm_exec'] = _gate_fn
 
-            env.locals.setdefault(PENDING_HANDOFFS_KEY, [])
+            repl_locals.setdefault(PENDING_HANDOFFS_KEY, [])
 
-            env.locals['request_handoff'] = make_handoff_fn(
+            repl_locals['request_handoff'] = make_handoff_fn(
                 session_id=session.session_id,
                 log_event=sm.log_event,
                 hooks=hooks,
                 telemetry=get_skill_telemetry(),
                 client_id=client_id,
-                state_sink=lambda payload: env.locals[PENDING_HANDOFFS_KEY].append(dict(payload)),
+                state_sink=lambda payload: repl_locals[PENDING_HANDOFFS_KEY].append(dict(payload)),
             )
-            env.locals['handoff_roles'] = list(VALID_HANDOFF_ROLES)
+            repl_locals['handoff_roles'] = list(VALID_HANDOFF_ROLES)
 
     # Execute via Supervisor (in a thread to not block FastAPI)
     loop = asyncio.get_event_loop()
@@ -591,12 +619,13 @@ async def receive_webhook(client_id: str, request: Request):
     if result.status == "completed" and session.rlm_instance is not None:
         env = getattr(session.rlm_instance, '_persistent_env', None)
         if env and hasattr(env, 'locals'):
+            repl_locals = env.locals
             role_outcome = orchestrate_roles(
                 rlm=session.rlm_instance,
                 prompt=_query_text or str(prompt),
                 response=result.response or "",
                 prompt_plan=_prompt_plan,
-                repl_locals=env.locals,
+                repl_locals=repl_locals,
                 log_event=sm.log_event,
                 session_id=session.session_id,
                 hooks=hooks,
@@ -949,6 +978,7 @@ def start_server(host: str = "127.0.0.1", port: int = 5000):
     Para expor via VPN WireGuard: start_server(host="10.0.0.1").
     NUNCA use host="0.0.0.0" em produção sem nginx/Caddy + TLS na frente.
     """
+    uvicorn = import_module("uvicorn")
     uvicorn.run(
         "rlm.server.api:app",
         host=host,

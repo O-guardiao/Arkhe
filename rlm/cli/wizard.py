@@ -18,9 +18,14 @@ import secrets
 import sys
 import textwrap
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 T = TypeVar("T")
+
+if TYPE_CHECKING:
+    from rich.console import Console as RichConsole
+else:
+    RichConsole = Any
 
 
 # ═══════════════════════════════════════════════════════════════════════════ #
@@ -95,6 +100,12 @@ try:
 
     HAS_RICH = True
 except ImportError:  # pragma: no cover
+    Console = None
+    Panel = None
+    Confirm = None
+    Prompt = None
+    Rule = None
+    Table = None
     HAS_RICH = False
 
 
@@ -140,10 +151,10 @@ class RichPrompter(WizardPrompter):
     """Implementação do WizardPrompter usando Rich."""
 
     def __init__(self) -> None:
+        self._console: RichConsole | None = None
         if HAS_RICH:
+            assert Console is not None
             self._console = Console()
-        else:
-            self._console = None
 
     # --- output ---
 
@@ -155,6 +166,7 @@ class RichPrompter(WizardPrompter):
 
     def intro(self, title: str) -> None:
         if self._console:
+            assert Panel is not None
             self._console.print(Panel(title, border_style="green", expand=False))
         else:
             print(f"\n{'═' * 60}")
@@ -164,6 +176,7 @@ class RichPrompter(WizardPrompter):
 
     def outro(self, message: str) -> None:
         if self._console:
+            assert Rule is not None
             self._console.print()
             self._console.print(Rule(style="green"))
             self._console.print(f"  {message}")
@@ -174,6 +187,7 @@ class RichPrompter(WizardPrompter):
 
     def note(self, message: str, title: str = "") -> None:
         if self._console:
+            assert Panel is not None
             self._console.print(Panel(message, title=title or None, expand=False))
         else:
             if title:
@@ -210,6 +224,7 @@ class RichPrompter(WizardPrompter):
         while True:
             try:
                 if self._console:
+                    assert Prompt is not None
                     raw = Prompt.ask("Escolha", default=default_idx, console=self._console)
                 else:
                     raw = input(f"  Escolha [{default_idx}]: ").strip() or default_idx
@@ -237,6 +252,7 @@ class RichPrompter(WizardPrompter):
         while True:
             try:
                 if self._console:
+                    assert Prompt is not None
                     raw = Prompt.ask(
                         f"{message}{hint}",
                         default=default or None,
@@ -262,6 +278,7 @@ class RichPrompter(WizardPrompter):
     def confirm(self, message: str, default: bool = True) -> bool:
         try:
             if self._console:
+                assert Confirm is not None
                 return Confirm.ask(message, default=default, console=self._console)
             else:
                 hint = "S/n" if default else "s/N"
@@ -300,6 +317,7 @@ def _confirm(question: str, default: bool = True) -> bool:
 
 def _rule(title: str = "") -> None:
     if _console:
+        assert Rule is not None
         _console.print(Rule(title, style="dim"))
     else:
         print(f"\n{'─' * 50} {title}")
