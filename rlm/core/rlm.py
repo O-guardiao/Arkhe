@@ -232,6 +232,7 @@ class RLM:
         else:
             env_kwargs = self.environment_kwargs.copy()
             env_kwargs["lm_handler_address"] = (lm_handler.host, lm_handler.port)
+            env_kwargs["event_bus"] = self.event_bus
             # Phase 11.2: Para prompts multimodais, usa texto extraído como REPL context
             env_kwargs["context_payload"] = (
                 self._extract_text_from_multimodal(prompt)
@@ -342,6 +343,21 @@ class RLM:
             texts.append(f"[{audio_count} arquivo(s) de áudio fornecido(s)]")
         return " ".join(texts)
 
+    @staticmethod
+    def _record_environment_event(
+        environment: BaseEnv,
+        event_type: str,
+        data: dict[str, Any] | None = None,
+        *,
+        origin: str = "rlm",
+    ) -> None:
+        recorder = getattr(environment, "record_runtime_event", None)
+        if callable(recorder):
+            try:
+                recorder(event_type, data, origin=origin)
+            except Exception:
+                pass
+
     def completion(
         self,
         prompt: str | dict[str, Any],
@@ -372,7 +388,17 @@ class RLM:
             return self._fallback_answer(prompt)
 
         with self._spawn_completion_context(prompt) as (lm_handler, environment):
+            self._record_environment_event(
+                environment,
+                "completion.started",
+                {
+                    "depth": self.depth,
+                    "max_iterations": self.max_iterations,
+                    "persistent": self.persistent,
+                },
+            )
             message_history = self._setup_prompt(prompt)
+            cancelled_by_environment = False
 
             # ── Phase 9.3: Inject sub_rlm into REPL globals ────────────────────
             # sub_rlm(task)               → execução serial (1 filho de cada vez)
@@ -469,10 +495,28 @@ class RLM:
             self.hooks.trigger("completion.started", context={"prompt": str(prompt)[:100]})
 
             for i in range(self.max_iterations):
+                self._record_environment_event(
+                    environment,
+                    "iteration.started",
+                    {
+                        "iteration": i + 1,
+                        "message_count": len(message_history),
+                    },
+                )
                 # Fase 10: CancellationToken check (composicional, substitui abort_event)
                 if self._cancel_token.is_cancelled:
                     if getattr(self, 'verbose', None):
                         print(f"[CancellationToken] Cancelled: {self._cancel_token.reason}")
+                    break
+
+                env_cancel_requested = getattr(environment, "is_cancel_requested", None)
+                if callable(env_cancel_requested) and env_cancel_requested():
+                    cancelled_by_environment = True
+                    self._record_environment_event(
+                        environment,
+                        "completion.cancelled",
+                        {"iteration": i + 1, "source": "environment"},
+                    )
                     break
 
                 # Supervisor hook: check for external abort signal (legacy compat)
@@ -483,11 +527,30 @@ class RLM:
 
                 # Phase 8 + Fase 10: Context Compaction com ReentrancyBarrier
                 if self.compactor.should_compact(message_history):
+                    pre_compaction_count = len(message_history)
+
                     def _do_compact():
                         nonlocal message_history
+                        self._record_environment_event(
+                            environment,
+                            "compaction.started",
+                            {
+                                "iteration": i + 1,
+                                "message_count": pre_compaction_count,
+                            },
+                        )
                         message_history = self.compactor.compact(
                             message_history,
                             llm_fn=lambda p: lm_handler.completion(p)
+                        )
+                        self._record_environment_event(
+                            environment,
+                            "compaction.completed",
+                            {
+                                "iteration": i + 1,
+                                "before": pre_compaction_count,
+                                "after": len(message_history),
+                            },
                         )
                         self.hooks.trigger("compaction.completed", context=self.compactor.get_stats())
                         if getattr(self, 'verbose', None):
@@ -542,6 +605,17 @@ class RLM:
                 final_answer = find_final_answer(iteration.response, environment=environment)
                 iteration.final_answer = final_answer
 
+                self._record_environment_event(
+                    environment,
+                    "iteration.completed",
+                    {
+                        "iteration": i + 1,
+                        "code_blocks": len(iteration.code_blocks),
+                        "has_final": final_answer is not None,
+                        "iteration_time_s": iteration.iteration_time,
+                    },
+                )
+
                 # If logger is used, log the iteration.
                 if self.logger:
                     self.logger.log(iteration)
@@ -578,6 +652,16 @@ class RLM:
                             "time": time_end - time_start,
                         })
 
+                    self._record_environment_event(
+                        environment,
+                        "completion.finalized",
+                        {
+                            "iteration": i + 1,
+                            "elapsed_s": time_end - time_start,
+                            "used_default_answer": False,
+                        },
+                    )
+
                     # Store message history in persistent environment
                     if self.persistent and isinstance(environment, SupportsPersistence):
                         environment.add_history(message_history)
@@ -605,12 +689,37 @@ class RLM:
                 # Update message history with the new messages.
                 message_history.extend(new_messages)
 
+            if cancelled_by_environment:
+                time_end = time.perf_counter()
+                usage = lm_handler.get_usage_summary()
+                cancelled_answer = "[CANCELLED] coordination stop requested"
+                return RLMChatCompletion(
+                    root_model=self.backend_kwargs.get("model_name", "unknown")
+                    if self.backend_kwargs
+                    else "unknown",
+                    prompt=prompt,
+                    response=cancelled_answer,
+                    usage_summary=usage,
+                    execution_time=time_end - time_start,
+                    artifacts=None,
+                )
+
             # Default behavior: we run out of iterations, provide one final answer
             time_end = time.perf_counter()
             final_answer = self._default_answer(message_history, lm_handler)
             usage = lm_handler.get_usage_summary()
             self.verbose.print_final_answer(final_answer)
             self.verbose.print_summary(self.max_iterations, time_end - time_start, usage.to_dict())
+
+            self._record_environment_event(
+                environment,
+                "completion.finalized",
+                {
+                    "iteration": self.max_iterations,
+                    "elapsed_s": time_end - time_start,
+                    "used_default_answer": True,
+                },
+            )
 
             # Store message history in persistent environment
             if self.persistent and isinstance(environment, SupportsPersistence):
@@ -647,6 +756,15 @@ class RLM:
         response = lm_handler.completion(prompt)
         code_block_strs = find_code_blocks(response)
         code_blocks = []
+
+        self._record_environment_event(
+            environment,
+            "model.response_received",
+            {
+                "response_chars": len(response),
+                "code_blocks": len(code_block_strs),
+            },
+        )
 
         for code_block_str in code_block_strs:
             code_result: REPLResult = environment.execute_code(code_block_str)

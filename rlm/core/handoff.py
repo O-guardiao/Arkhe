@@ -40,6 +40,8 @@ class HandoffRecord:
     failures: list[str] = field(default_factory=list)
     suggested_mode: str = ""
     timestamp: str = ""
+    task_id: int | None = None
+    parent_task_id: int | None = None
 
     def __post_init__(self) -> None:
         self.target_role = _normalize_role(self.target_role)
@@ -70,6 +72,7 @@ def make_handoff_fn(
     telemetry: SkillTelemetryStore | None = None,
     client_id: str = "",
     state_sink: Callable[[dict[str, Any]], None] | None = None,
+    task_sink: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> Callable[..., dict[str, Any]]:
     telemetry_store = telemetry or get_skill_telemetry()
 
@@ -92,6 +95,13 @@ def make_handoff_fn(
             suggested_mode=suggested_mode,
         )
         payload = record.to_payload()
+        if task_sink is not None:
+            task_payload = task_sink(dict(payload))
+            if isinstance(task_payload, dict):
+                if task_payload.get("task_id") is not None:
+                    payload["task_id"] = int(task_payload["task_id"])
+                if task_payload.get("parent_task_id") is not None:
+                    payload["parent_task_id"] = int(task_payload["parent_task_id"])
         log_event(session_id, "agent_handoff", payload)
         if hooks is not None:
             hooks.trigger("agent.handoff", session_id=session_id, context=payload)

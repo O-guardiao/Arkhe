@@ -80,12 +80,14 @@ def orchestrate_roles(
         if hooks is not None:
             hooks.trigger("agent.role_execution", session_id=session_id, context=payload)
         if handoff.target_role in {"worker", "micro"}:
-            current_response = _run_worker(sub_rlm, handoff, prompt, current_response, skill_snapshot)
+            current_response = _run_worker(rlm, sub_rlm, handoff, prompt, current_response, skill_snapshot)
             outcome.steps.append({"role": handoff.target_role, "action": "executed"})
             continue
         if handoff.target_role == "evaluator":
             decision = _run_evaluator(sub_rlm, prompt, current_response, skill_snapshot)
             current_response, did_retry, escalated = _apply_evaluator_decision(
+                rlm=rlm,
+                handoff=handoff,
                 sub_rlm=sub_rlm,
                 decision=decision,
                 prompt=prompt,
@@ -97,16 +99,20 @@ def orchestrate_roles(
                 retries_left -= 1
                 outcome.retried = True
             outcome.escalated = outcome.escalated or escalated
+            _update_handoff_task(rlm, handoff, current_response)
             outcome.steps.append({"role": "evaluator", "action": decision.get("action", "accept")})
             continue
         if handoff.target_role == "human":
             outcome.escalated = True
             current_response = _build_human_escalation(handoff, current_response, skill_snapshot)
+            _update_handoff_task(rlm, handoff, current_response)
             outcome.steps.append({"role": "human", "action": "escalated"})
 
     if auto_eval and not any(step.get("role") == "evaluator" for step in outcome.steps):
         decision = _run_evaluator(sub_rlm, prompt, current_response, skill_snapshot)
         current_response, did_retry, escalated = _apply_evaluator_decision(
+            rlm=rlm,
+            handoff=None,
             sub_rlm=sub_rlm,
             decision=decision,
             prompt=prompt,
@@ -124,6 +130,7 @@ def orchestrate_roles(
 
 
 def _run_worker(
+    rlm: Any,
     sub_rlm: Callable[..., str],
     handoff: HandoffRecord,
     prompt: str,
@@ -144,7 +151,37 @@ def _run_worker(
         f"Falhas observadas: {', '.join(handoff.failures) or 'nenhuma'}\n"
         "Entregue a melhor resposta operacional final em texto claro."
     )
-    return sub_rlm(task, context=context, max_iterations=10, timeout_s=240)
+    result = sub_rlm(
+        task,
+        context=context,
+        max_iterations=10,
+        timeout_s=240,
+        _task_id=handoff.task_id,
+    )
+    _update_handoff_task(rlm, handoff, result)
+    return result
+
+
+def _update_handoff_task(rlm: Any, handoff: HandoffRecord, result: str) -> None:
+    if handoff.task_id is None:
+        return
+    env = getattr(rlm, "_persistent_env", None)
+    update_task = getattr(env, "update_runtime_task", None)
+    if not callable(update_task):
+        return
+    status = "cancelled" if str(result).startswith("[CANCELLED]") else "completed"
+    try:
+        update_task(
+            int(handoff.task_id),
+            status=status,
+            note=str(result)[:200],
+            metadata={
+                "target_role": handoff.target_role,
+                "parent_task_id": handoff.parent_task_id,
+            },
+        )
+    except Exception:
+        return
 
 
 def _run_evaluator(
@@ -172,6 +209,8 @@ def _run_evaluator(
 
 def _apply_evaluator_decision(
     *,
+    rlm: Any,
+    handoff: HandoffRecord | None,
     sub_rlm: Callable[..., str],
     decision: dict[str, Any],
     prompt: str,
@@ -187,6 +226,23 @@ def _apply_evaluator_decision(
         retry_prompt = str(decision.get("retry_prompt", "")).strip() or (
             "Refaça a resposta usando as fallback policies e cobrindo explicitamente as postconditions esperadas."
         )
+        if handoff is not None and handoff.task_id is not None:
+            env = getattr(rlm, "_persistent_env", None)
+            update_task = getattr(env, "update_runtime_task", None)
+            if callable(update_task):
+                try:
+                    update_task(
+                        int(handoff.task_id),
+                        status="in-progress",
+                        note=retry_prompt[:200],
+                        metadata={
+                            "target_role": handoff.target_role,
+                            "parent_task_id": handoff.parent_task_id,
+                            "retry_requested": True,
+                        },
+                    )
+                except Exception:
+                    pass
         retried = sub_rlm(
             retry_prompt,
             context=(
@@ -197,6 +253,7 @@ def _apply_evaluator_decision(
             ),
             max_iterations=8,
             timeout_s=180,
+            _task_id=handoff.task_id if handoff is not None else None,
         )
         return retried, True, False
     if action == "escalate":

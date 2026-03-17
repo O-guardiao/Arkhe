@@ -4,6 +4,11 @@ These tests verify LocalREPL's multi-context and multi-history capabilities
 which support the persistent=True mode in RLM for multi-turn conversations.
 """
 
+import asyncio
+from types import SimpleNamespace
+from pathlib import Path
+
+from rlm.core.sibling_bus import SiblingBus
 from rlm.environments.local_repl import LocalREPL
 
 
@@ -217,4 +222,147 @@ prev_question = history_0[0]['content']
         assert repl.get_context_count() == 2
         assert repl.get_history_count() == 1
 
+        repl.cleanup()
+
+
+class TestLocalREPLRuntimeWorkbench:
+    """Tests for task ledger, attachments and timeline persistence."""
+
+    def test_runtime_workbench_apis_are_available(self, tmp_path: Path):
+        """Task ledger, attachments and timeline should be callable from REPL code."""
+        repl = LocalREPL()
+        sample = tmp_path / "sample.txt"
+        sample.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+        result = repl.execute_code(
+            f'''
+task = task_start("Normalize dataset")
+attach_text("brief", "Need to normalize the current dataset.")
+attach_file(r"{sample}", start_line=2, end_line=3)
+timeline_mark("analysis.started", {{"source": "test"}})
+current_task = task_current()
+attachments = attachment_list()
+events = timeline_recent(limit=10)
+'''
+        )
+
+        assert result.stderr == ""
+        assert repl.locals["current_task"]["title"] == "Normalize dataset"
+        assert len(repl.locals["attachments"]) == 2
+        assert any(entry["event_type"] == "analysis.started" for entry in repl.locals["events"])
+        repl.cleanup()
+
+    def test_runtime_workbench_persists_in_checkpoint(self, tmp_path: Path):
+        """Task ledger, attachments and timeline should survive checkpoint restore."""
+        checkpoint = tmp_path / "runtime-checkpoint.json"
+
+        repl = LocalREPL()
+        result = repl.execute_code(
+            '''
+task = task_start("Review context")
+attach_context("payload", {"kind": "json", "items": [1, 2, 3]})
+timeline_mark("checkpoint.prepared", {"ok": True})
+'''
+        )
+        assert result.stderr == ""
+        save_message = repl.save_checkpoint(str(checkpoint))
+        assert "Checkpoint saved" in save_message
+        repl.cleanup()
+
+        restored = LocalREPL()
+        load_message = restored.load_checkpoint(str(checkpoint))
+        snapshot = restored.get_runtime_state_snapshot()
+
+        assert "Checkpoint restored" in load_message
+        assert snapshot["tasks"]["current"]["title"] == "Review context"
+        assert snapshot["attachments"]["items"][0]["label"] == "payload"
+        assert any(
+            entry["event_type"] == "checkpoint.prepared"
+            for entry in snapshot["timeline"]["entries"]
+        )
+        restored.cleanup()
+
+    def test_coordination_digest_tracks_sibling_bus_events(self):
+        """The runtime snapshot should reflect sibling bus traffic and control signals."""
+        bus = SiblingBus()
+        repl = LocalREPL()
+        repl.attach_sibling_bus(bus, branch_id=7)
+
+        bus.publish("results/ready", {"ok": True}, sender_id=2)
+        bus.publish_control("control/stop", {"reason": "winner-found"}, sender_id=3)
+        _ = bus.subscribe("results/ready", timeout_s=0.01)
+        _ = bus.poll_control("control/stop", receiver_id=7)
+
+        snapshot = repl.get_runtime_state_snapshot()
+        coordination = snapshot["coordination"]
+
+        assert coordination["attached"] is True
+        assert coordination["branch_id"] == 7
+        assert coordination["latest_stats"]["operation_counts"]["publish"] >= 1
+        assert coordination["latest_stats"]["operation_counts"]["control_publish"] >= 1
+        assert any(event["operation"] == "publish" for event in coordination["events"])
+        assert any(event["operation"] == "control_poll_hit" for event in coordination["events"])
+        assert any(
+            entry["event_type"] == "coordination.bus_event"
+            for entry in snapshot["timeline"]["entries"]
+        )
+        repl.cleanup()
+
+    def test_runtime_snapshot_filters_coordination_and_branch_tasks(self):
+        """Runtime snapshot should filter coordination events and preserve branch-task bindings."""
+        repl = LocalREPL()
+        repl.register_subagent_task(
+            mode="parallel",
+            title="branch zero",
+            branch_id=0,
+            metadata={"role": "winner"},
+        )
+        repl.register_subagent_task(
+            mode="parallel",
+            title="branch one",
+            branch_id=1,
+            metadata={"role": "loser"},
+        )
+        repl._coordination_digest.record_event("publish", topic="result/main", sender_id=0)
+        repl._coordination_digest.record_event("control_publish", topic="control/stop", sender_id=0)
+
+        snapshot = repl.get_runtime_state_snapshot(
+            coordination_limit=10,
+            coordination_operation="control_publish",
+            coordination_topic="control/stop",
+            coordination_branch_id=0,
+        )
+
+        assert len(snapshot["coordination"]["events"]) == 1
+        assert snapshot["coordination"]["events"][0]["topic"] == "control/stop"
+        assert len(snapshot["coordination"]["branch_tasks"]) == 1
+        assert snapshot["coordination"]["branch_tasks"][0]["branch_id"] == 0
+        repl.cleanup()
+
+    def test_runtime_endpoint_supports_coordination_filters(self, monkeypatch):
+        """Session runtime endpoint should forward coordination filters to the snapshot."""
+        from rlm.server import api as api_module
+
+        monkeypatch.setattr(api_module, "_require_admin_api_auth", lambda request: None)
+
+        repl = LocalREPL()
+        repl.register_subagent_task(mode="parallel", title="branch zero", branch_id=0)
+        repl._coordination_digest.record_event("control_publish", topic="control/stop", sender_id=0)
+        session = SimpleNamespace(rlm_instance=SimpleNamespace(_persistent_env=repl))
+        session_manager = SimpleNamespace(get_session=lambda session_id: session)
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(session_manager=session_manager)))
+
+        response = asyncio.run(
+            api_module.get_session_runtime(
+                "session-1",
+                request,
+                coordination_limit=5,
+                coordination_operation="control_publish",
+                coordination_topic="control/stop",
+                coordination_branch_id=0,
+            )
+        )
+
+        assert response["runtime"]["coordination"]["filters"]["branch_id"] == 0
+        assert response["runtime"]["coordination"]["events"][0]["topic"] == "control/stop"
         repl.cleanup()

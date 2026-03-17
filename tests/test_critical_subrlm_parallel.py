@@ -20,9 +20,13 @@ from __future__ import annotations
 import pathlib
 import time
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+from rlm.core.cancellation import CancellationToken
+from rlm.environments.local_repl import LocalREPL
 
 
 # ===========================================================================
@@ -79,7 +83,10 @@ class TestImportsAndSignature:
         from rlm.core.sub_rlm import SubRLMParallelTaskResult
         import dataclasses
         fields = {f.name for f in dataclasses.fields(SubRLMParallelTaskResult)}
-        assert {"task", "branch_id", "ok", "answer", "error", "elapsed_s"} == fields
+        assert {
+            "task", "branch_id", "ok", "answer", "error", "elapsed_s",
+            "task_id", "parent_task_id", "status",
+        } == fields
 
     def test_factory_returns_two_callables(self):
         from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
@@ -243,6 +250,59 @@ class TestIndividualFailureTolerance:
         ok_count = sum(1 for r in result if not r.startswith("[ERRO"))
         assert ok_count >= 2
 
+    def test_stop_on_solution_cancels_redundant_branch_and_records_task_binding(self):
+        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+
+        env = LocalREPL()
+        parent = SimpleNamespace(
+            depth=0,
+            max_depth=3,
+            backend="openai",
+            backend_kwargs={"model_name": "gpt-4o-mini"},
+            environment_type="local",
+            environment_kwargs={},
+            event_bus=None,
+            _persistent_env=env,
+            _async_bus=None,
+            _async_branch_counter=0,
+            _cancel_token=CancellationToken.NONE,
+            _shared_memory=None,
+        )
+
+        def _side_effect(**kwargs):
+            branch_id = kwargs["environment_kwargs"]["_sibling_branch_id"]
+            cancel_event = kwargs["environment_kwargs"]["_cancel_event"]
+            instance = MagicMock()
+
+            def _completion(prompt):
+                completion = MagicMock()
+                if branch_id == 0:
+                    completion.response = "winner-result"
+                    return completion
+                while not cancel_event.is_set():
+                    time.sleep(0.01)
+                completion.response = "[CANCELLED] coordination stop requested"
+                return completion
+
+            instance.completion.side_effect = _completion
+            return instance
+
+        mock_cls = MagicMock(side_effect=_side_effect)
+        par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
+        result = par(["winner task", "redundant task"], timeout_s=2.0)
+        snapshot = env.get_runtime_state_snapshot(coordination_limit=20)
+
+        assert result[0] == "winner-result"
+        assert result[1].startswith("[CANCELLED branch 1]")
+        assert any(item["branch_id"] == 0 for item in snapshot["coordination"]["branch_tasks"])
+        assert any(item["branch_id"] == 1 for item in snapshot["coordination"]["branch_tasks"])
+        assert any(item["status"] == "cancelled" for item in snapshot["coordination"]["branch_tasks"])
+        assert any(
+            event["operation"] == "control_publish" and event["topic"] == "control/solution_found"
+            for event in snapshot["coordination"]["events"]
+        )
+        env.cleanup()
+
     def test_failed_task_result_contains_erro_prefix(self):
         """Tarefa que falha retorna string começando com '[ERRO branch N]' entre as demais."""
         from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMError
@@ -341,10 +401,66 @@ class TestParallelDetailed:
         assert results[0].elapsed_s >= 0.0
 
     def test_detailed_empty_returns_empty(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMParallelDetailedResults
         parent = _make_parent_mock()
         _, par_det = make_sub_rlm_parallel_fn(parent)
-        assert par_det([]) == []
+        result = par_det([])
+        assert isinstance(result, SubRLMParallelDetailedResults)
+        assert result == []
+
+    def test_detailed_records_summary_and_parent_task_tree(self):
+        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMParallelDetailedResults
+
+        env = LocalREPL()
+        env.create_runtime_task("root", status="in-progress", current=True)
+        parent = SimpleNamespace(
+            depth=0,
+            max_depth=3,
+            backend="openai",
+            backend_kwargs={"model_name": "gpt-4o-mini"},
+            environment_type="local",
+            environment_kwargs={},
+            event_bus=None,
+            _persistent_env=env,
+            _async_bus=None,
+            _async_branch_counter=0,
+            _cancel_token=CancellationToken.NONE,
+            _shared_memory=None,
+        )
+
+        def _side_effect(**kwargs):
+            branch_id = kwargs["environment_kwargs"]["_sibling_branch_id"]
+            cancel_event = kwargs["environment_kwargs"]["_cancel_event"]
+            instance = MagicMock()
+
+            def _completion(prompt):
+                completion = MagicMock()
+                if branch_id == 0:
+                    completion.response = "winner-detailed"
+                    return completion
+                while not cancel_event.is_set():
+                    time.sleep(0.01)
+                completion.response = "[CANCELLED] coordination stop requested"
+                return completion
+
+            instance.completion.side_effect = _completion
+            return instance
+
+        mock_cls = MagicMock(side_effect=_side_effect)
+        _, par_det = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
+        results = par_det(["winner", "redundant"], timeout_s=2.0)
+        snapshot = env.get_runtime_state_snapshot(coordination_limit=20)
+
+        assert isinstance(results, SubRLMParallelDetailedResults)
+        assert results.summary["winner_branch_id"] == 0
+        assert results.summary["cancelled_count"] == 1
+        assert results.summary["batch_task_id"] is not None
+        assert set(results.summary["task_ids_by_branch"].keys()) == {"0", "1"}
+        assert results[0].parent_task_id == results.summary["batch_task_id"]
+        assert results[1].status == "cancelled"
+        batch_task = next(item for item in snapshot["tasks"]["items"] if item["task_id"] == results.summary["batch_task_id"])
+        assert batch_task["parent_id"] is not None
+        env.cleanup()
 
 
 # ===========================================================================

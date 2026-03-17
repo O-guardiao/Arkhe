@@ -91,3 +91,23 @@ class TestMakeHandoffFn:
         traces = telemetry.get_relevant_traces("deploy shell timeout", event_type="handoff")
         assert traces
         assert traces[0]["payload"]["target_role"] == "evaluator"
+
+    def test_handoff_can_bind_task_tree_metadata(self):
+        log_event = MagicMock()
+        task_sink = MagicMock(return_value={"task_id": 41, "parent_task_id": 7})
+
+        request_handoff = make_handoff_fn(
+            session_id="sess-3",
+            log_event=log_event,
+            task_sink=task_sink,
+        )
+
+        result = request_handoff(
+            "worker",
+            reason="delegar execução",
+            remaining_goal="rodar comando seguro",
+        )
+
+        assert result["handoff"]["task_id"] == 41
+        assert result["handoff"]["parent_task_id"] == 7
+        task_sink.assert_called_once()

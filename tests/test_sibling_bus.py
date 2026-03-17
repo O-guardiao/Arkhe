@@ -862,6 +862,18 @@ class TestSiblingBusControlChannels:
         assert result is None
         assert elapsed < 0.5
 
+    def test_publish_signal_uses_semantic_type_and_mapped_topic(self):
+        from rlm.core.sibling_bus import SiblingBus
+
+        bus = SiblingBus()
+        bus.publish_signal("solution_found", {"winner": 0}, sender_id=3)
+
+        signal = bus.poll_control("control/solution_found", receiver_id=9)
+        assert signal is not None
+        assert signal["topic"] == "control/solution_found"
+        assert signal["sender_id"] == 3
+        assert signal["semantic_type"] == "solution_found"
+
 
 # ===========================================================================
 # Telemetria

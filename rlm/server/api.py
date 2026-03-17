@@ -564,6 +564,31 @@ async def receive_webhook(client_id: str, request: Request):
 
             repl_locals.setdefault(PENDING_HANDOFFS_KEY, [])
 
+            def _handoff_task_sink(payload: dict[str, Any]) -> dict[str, Any] | None:
+                create_task = getattr(env, 'create_runtime_task', None)
+                current_task_id = getattr(env, 'current_runtime_task_id', None)
+                if not callable(create_task):
+                    return None
+                parent_task_id = current_task_id() if callable(current_task_id) else None
+                if parent_task_id is None:
+                    return None
+                handoff_task = create_task(
+                    f"[handoff:{payload.get('target_role', 'unknown')}] {str(payload.get('remaining_goal', ''))[:120]}",
+                    parent_task_id=parent_task_id,
+                    status='in-progress',
+                    metadata={
+                        'mode': 'handoff',
+                        'target_role': payload.get('target_role', ''),
+                        'reason': payload.get('reason', ''),
+                        'suggested_mode': payload.get('suggested_mode', ''),
+                    },
+                    current=False,
+                )
+                return {
+                    'task_id': handoff_task.get('task_id'),
+                    'parent_task_id': parent_task_id,
+                }
+
             repl_locals['request_handoff'] = make_handoff_fn(
                 session_id=session.session_id,
                 log_event=sm.log_event,
@@ -571,6 +596,7 @@ async def receive_webhook(client_id: str, request: Request):
                 telemetry=get_skill_telemetry(),
                 client_id=client_id,
                 state_sink=lambda payload: repl_locals[PENDING_HANDOFFS_KEY].append(dict(payload)),
+                task_sink=_handoff_task_sink,
             )
             repl_locals['handoff_roles'] = list(VALID_HANDOFF_ROLES)
 
@@ -709,6 +735,40 @@ async def get_session_events(session_id: str, request: Request, limit: int = 50)
     sm: SessionManager = request.app.state.session_manager
     events = sm.get_events(session_id, limit=limit)
     return {"session_id": session_id, "events": events}
+
+
+@app.get("/sessions/{session_id}/runtime")
+async def get_session_runtime(
+    session_id: str,
+    request: Request,
+    coordination_limit: int = 0,
+    coordination_operation: str | None = None,
+    coordination_topic: str | None = None,
+    coordination_branch_id: int | None = None,
+):
+    """Retorna snapshot do runtime workbench da sessão ativa."""
+    _require_admin_api_auth(request)
+    sm: SessionManager = request.app.state.session_manager
+    session = sm.get_session(session_id)
+    if not session:
+        raise HTTPException(404, f"Session {session_id} not found")
+    if session.rlm_instance is None:
+        raise HTTPException(409, f"Session {session_id} has no active RLM instance")
+
+    env = getattr(session.rlm_instance, "_persistent_env", None)
+    snapshot = getattr(env, "get_runtime_state_snapshot", None)
+    if not callable(snapshot):
+        raise HTTPException(409, f"Session {session_id} has no runtime workbench snapshot")
+
+    return {
+        "session_id": session_id,
+        "runtime": snapshot(
+            coordination_limit=coordination_limit,
+            coordination_operation=coordination_operation,
+            coordination_topic=coordination_topic,
+            coordination_branch_id=coordination_branch_id,
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------

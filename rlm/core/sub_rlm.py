@@ -37,10 +37,171 @@ import queue as _queue_mod
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
+
+from rlm.core.types import ClientBackend, EnvironmentType
 
 if TYPE_CHECKING:
     from rlm.core.rlm import RLM
+
+
+def _record_parent_runtime_event(
+    parent: "RLM",
+    event_type: str,
+    data: dict[str, Any] | None = None,
+) -> None:
+    env = getattr(parent, "_persistent_env", None)
+    recorder = getattr(env, "record_runtime_event", None)
+    if callable(recorder):
+        try:
+            recorder(event_type, data, origin="sub_rlm")
+        except Exception:
+            pass
+
+def _attach_parent_bus(parent: "RLM", bus: Any) -> None:
+    env = getattr(parent, "_persistent_env", None)
+    attach = getattr(env, "attach_sibling_bus", None)
+    if callable(attach):
+        try:
+            attach(bus)
+        except Exception:
+            pass
+
+
+def _get_parent_env(parent: "RLM") -> Any | None:
+    return getattr(parent, "_persistent_env", None)
+
+
+def _register_parent_subagent_task(
+    parent: "RLM",
+    *,
+    mode: str,
+    title: str,
+    branch_id: int | None,
+    child_depth: int,
+    task_preview: str,
+    task_id: int | None = None,
+    parent_task_id: int | None = None,
+) -> int | None:
+    env = _get_parent_env(parent)
+    if env is None:
+        return task_id
+
+    metadata = {
+        "mode": mode,
+        "branch_id": branch_id,
+        "child_depth": child_depth,
+        "task_preview": task_preview,
+    }
+    if task_id is not None:
+        update = getattr(env, "update_subagent_task", None)
+        if callable(update):
+            try:
+                update(task_id=task_id, branch_id=branch_id, metadata=metadata)
+                return task_id
+            except Exception:
+                return task_id
+        return task_id
+
+    register = getattr(env, "register_subagent_task", None)
+    if callable(register):
+        try:
+            task = register(
+                mode=mode,
+                title=title,
+                branch_id=branch_id,
+                parent_task_id=parent_task_id,
+                metadata=metadata,
+            )
+            if isinstance(task, dict) and "task_id" in task:
+                return int(task["task_id"])
+            return None
+        except Exception:
+            return None
+    return None
+
+
+def _update_parent_subagent_task(
+    parent: "RLM",
+    *,
+    task_id: int | None,
+    branch_id: int | None,
+    status: str,
+    note: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if task_id is None:
+        return
+    env = _get_parent_env(parent)
+    if env is None:
+        return
+    update = getattr(env, "update_subagent_task", None)
+    if callable(update):
+        try:
+            update(
+                task_id=task_id,
+                branch_id=branch_id,
+                status=status,
+                note=note,
+                metadata=metadata,
+            )
+        except Exception:
+            pass
+
+
+def _ensure_parallel_batch_root(
+    parent: "RLM",
+    *,
+    task_count: int,
+    coordination_policy: str,
+) -> int | None:
+    env = _get_parent_env(parent)
+    if env is None:
+        return None
+    create = getattr(env, "create_runtime_task", None)
+    current_task_id = getattr(env, "current_runtime_task_id", None)
+    if not callable(create):
+        return None
+    parent_task_id = current_task_id() if callable(current_task_id) else None
+    try:
+        task = create(
+            f"[parallel batch] {task_count} branches",
+            parent_task_id=parent_task_id,
+            status="in-progress",
+            metadata={
+                "mode": "parallel_batch",
+                "task_count": task_count,
+                "coordination_policy": coordination_policy,
+            },
+            current=True,
+        )
+        if isinstance(task, dict) and "task_id" in task:
+            return int(task["task_id"])
+    except Exception:
+        return None
+    return None
+
+
+def _set_parent_parallel_summary(
+    parent: "RLM",
+    *,
+    winner_branch_id: int | None,
+    cancelled_count: int,
+    failed_count: int,
+    total_tasks: int,
+) -> None:
+    env = _get_parent_env(parent)
+    summary = getattr(env, "set_parallel_summary", None)
+    if callable(summary):
+        try:
+            summary(
+                winner_branch_id=winner_branch_id,
+                cancelled_count=cancelled_count,
+                failed_count=failed_count,
+                total_tasks=total_tasks,
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +329,8 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
         max_iterations: int = 8,
         timeout_s: float = 300.0,
         return_artifacts: bool = False,
+        _task_id: int | None = None,
+        _cancel_event: "threading.Event | None" = None,
         _sibling_bus: "Any | None" = None,
         _sibling_branch_id: "int | None" = None,
     ) -> "str | SubRLMArtifactResult":
@@ -225,6 +388,32 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
         else:
             full_prompt = task.strip()
 
+        subagent_mode = "parallel" if _sibling_branch_id is not None else "serial"
+        task_preview = task[:160]
+        runtime_task_id = _register_parent_subagent_task(
+            parent,
+            mode=subagent_mode,
+            title=f"[{subagent_mode}] {task_preview}",
+            branch_id=_sibling_branch_id,
+            child_depth=child_depth,
+            task_preview=task_preview,
+            task_id=_task_id,
+        )
+
+        _record_parent_runtime_event(
+            parent,
+            "subagent.spawned",
+            {
+                "mode": subagent_mode,
+                "task_preview": task_preview,
+                "child_depth": child_depth,
+                "branch_id": _sibling_branch_id,
+                "task_id": runtime_task_id,
+            },
+        )
+        if _sibling_bus is not None:
+            _attach_parent_bus(parent, _sibling_bus)
+
         # ── Spawn child RLM ───────────────────────────────────────────────────
         # _rlm_cls permite injeção em testes sem circular import.
         if _rlm_cls is not None:
@@ -238,6 +427,8 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
         if _sibling_bus is not None:
             _env_kwargs["_sibling_bus"] = _sibling_bus
             _env_kwargs["_sibling_branch_id"] = _sibling_branch_id
+        if _cancel_event is not None:
+            _env_kwargs["_cancel_event"] = _cancel_event
 
         # Lacuna 1: Compartilhar memória do pai com filhos
         _parent_memory = getattr(parent, "_shared_memory", None)
@@ -250,9 +441,9 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
             _env_kwargs["_parent_memory"] = _parent_memory
 
         child = _cls(
-            backend=parent.backend,
+            backend=cast(ClientBackend, parent.backend),
             backend_kwargs=parent.backend_kwargs.copy() if parent.backend_kwargs else None,
-            environment=parent.environment_type,
+            environment=cast(EnvironmentType, parent.environment_type),
             environment_kwargs=_env_kwargs if _env_kwargs else None,
             depth=child_depth,
             max_depth=parent.max_depth,
@@ -291,6 +482,28 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
 
         if thread.is_alive():
             # Thread ainda rodando → timeout
+            _record_parent_runtime_event(
+                parent,
+                "subagent.finished",
+                {
+                    "mode": "serial",
+                    "task_preview": task_preview,
+                    "child_depth": child_depth,
+                    "branch_id": _sibling_branch_id,
+                    "task_id": runtime_task_id,
+                    "ok": False,
+                    "timed_out": True,
+                    "elapsed_s": elapsed,
+                },
+            )
+            _update_parent_subagent_task(
+                parent,
+                task_id=runtime_task_id,
+                branch_id=_sibling_branch_id,
+                status="blocked",
+                note=f"timeout after {elapsed:.2f}s",
+                metadata={"timed_out": True, "elapsed_s": elapsed},
+            )
             raise SubRLMTimeoutError(
                 f"sub_rlm: filho não terminou em {timeout_s:.0f}s "
                 f"(depth={child_depth}). "
@@ -299,14 +512,87 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
 
         if error_holder:
             exc = error_holder[0]
+            _record_parent_runtime_event(
+                parent,
+                "subagent.finished",
+                {
+                    "mode": "serial",
+                    "task_preview": task_preview,
+                    "child_depth": child_depth,
+                    "branch_id": _sibling_branch_id,
+                    "task_id": runtime_task_id,
+                    "ok": False,
+                    "timed_out": False,
+                    "elapsed_s": elapsed,
+                    "error": str(exc),
+                },
+            )
+            _update_parent_subagent_task(
+                parent,
+                task_id=runtime_task_id,
+                branch_id=_sibling_branch_id,
+                status="blocked",
+                note=str(exc),
+                metadata={"timed_out": False, "elapsed_s": elapsed, "error": str(exc)},
+            )
             raise SubRLMError(
                 f"sub_rlm: filho falhou (depth={child_depth}): {exc}"
             ) from exc
 
         if not result_holder:
+            _record_parent_runtime_event(
+                parent,
+                "subagent.finished",
+                {
+                    "mode": "serial",
+                    "task_preview": task_preview,
+                    "child_depth": child_depth,
+                    "branch_id": _sibling_branch_id,
+                    "task_id": runtime_task_id,
+                    "ok": False,
+                    "timed_out": False,
+                    "elapsed_s": elapsed,
+                    "error": "empty result",
+                },
+            )
+            _update_parent_subagent_task(
+                parent,
+                task_id=runtime_task_id,
+                branch_id=_sibling_branch_id,
+                status="blocked",
+                note="empty result",
+                metadata={"timed_out": False, "elapsed_s": elapsed, "error": "empty result"},
+            )
             raise SubRLMError(
                 f"sub_rlm: filho não retornou resposta (depth={child_depth})."
             )
+
+        _record_parent_runtime_event(
+            parent,
+            "subagent.finished",
+            {
+                "mode": "serial",
+                "task_preview": task_preview,
+                "child_depth": child_depth,
+                "branch_id": _sibling_branch_id,
+                "task_id": runtime_task_id,
+                "ok": True,
+                "timed_out": False,
+                "elapsed_s": elapsed,
+            },
+        )
+
+        result_preview = result_holder[0][0] if return_artifacts else result_holder[0]
+        result_text = str(result_preview)
+        final_status = "cancelled" if result_text.startswith("[CANCELLED]") else "completed"
+        _update_parent_subagent_task(
+            parent,
+            task_id=runtime_task_id,
+            branch_id=_sibling_branch_id,
+            status=final_status,
+            note=result_text[:200],
+            metadata={"timed_out": False, "elapsed_s": elapsed},
+        )
 
         if return_artifacts:
             answer, arts = result_holder[0]
@@ -512,6 +798,7 @@ def make_sub_rlm_async_fn(
         parent._async_bus = _SiblingBus()
         parent._async_branch_counter = 0
     _bus = parent._async_bus
+    _attach_parent_bus(parent, _bus)
 
     def sub_rlm_async(
         task: str,
@@ -577,6 +864,27 @@ def make_sub_rlm_async_fn(
         # ID único deste filho na rede P2P — monotônico, nunca reutilizado
         branch_id: int = parent._async_branch_counter
         parent._async_branch_counter += 1
+        task_preview = task[:160]
+        runtime_task_id = _register_parent_subagent_task(
+            parent,
+            mode="async",
+            title=f"[async b{branch_id}] {task_preview}",
+            branch_id=branch_id,
+            child_depth=child_depth,
+            task_preview=task_preview,
+        )
+
+        _record_parent_runtime_event(
+            parent,
+            "subagent.spawned",
+            {
+                "mode": "async",
+                "task_preview": task_preview,
+                "child_depth": child_depth,
+                "branch_id": branch_id,
+                "task_id": runtime_task_id,
+            },
+        )
 
         _env_kwargs = parent.environment_kwargs.copy() if parent.environment_kwargs else {}
         _env_kwargs["_parent_log_queue"] = log_queue
@@ -596,9 +904,9 @@ def make_sub_rlm_async_fn(
             _env_kwargs["_parent_memory"] = _parent_memory
 
         child = _cls(
-            backend=parent.backend,
+            backend=cast(ClientBackend, parent.backend),
             backend_kwargs=parent.backend_kwargs.copy() if parent.backend_kwargs else None,
-            environment=parent.environment_type,
+            environment=cast(EnvironmentType, parent.environment_type),
             environment_kwargs=_env_kwargs if _env_kwargs else None,
             depth=child_depth,
             max_depth=parent.max_depth,
@@ -621,8 +929,51 @@ def make_sub_rlm_async_fn(
             try:
                 completion = child.completion(full_prompt)
                 result_holder.append(completion.response)
+                _record_parent_runtime_event(
+                    parent,
+                    "subagent.finished",
+                    {
+                        "mode": "async",
+                        "task_preview": task_preview,
+                        "child_depth": child_depth,
+                        "branch_id": branch_id,
+                        "task_id": runtime_task_id,
+                        "ok": True,
+                        "timed_out": False,
+                    },
+                )
+                result_text = str(completion.response)
+                _update_parent_subagent_task(
+                    parent,
+                    task_id=runtime_task_id,
+                    branch_id=branch_id,
+                    status="cancelled" if result_text.startswith("[CANCELLED]") else "completed",
+                    note=result_text[:200],
+                )
             except Exception as exc:  # noqa: BLE001
                 error_holder.append(exc)
+                _record_parent_runtime_event(
+                    parent,
+                    "subagent.finished",
+                    {
+                        "mode": "async",
+                        "task_preview": task_preview,
+                        "child_depth": child_depth,
+                        "branch_id": branch_id,
+                        "task_id": runtime_task_id,
+                        "ok": False,
+                        "timed_out": False,
+                        "error": str(exc),
+                    },
+                )
+                _update_parent_subagent_task(
+                    parent,
+                    task_id=runtime_task_id,
+                    branch_id=branch_id,
+                    status="blocked",
+                    note=str(exc),
+                    metadata={"error": str(exc)},
+                )
 
         thread = threading.Thread(
             target=_run,
@@ -677,6 +1028,20 @@ class SubRLMParallelTaskResult:
     answer: str | None
     error: str | None
     elapsed_s: float
+    task_id: int | None = None
+    parent_task_id: int | None = None
+    status: str = "not-started"
+
+
+class SubRLMParallelDetailedResults(list[SubRLMParallelTaskResult]):
+    def __init__(
+        self,
+        items: list[SubRLMParallelTaskResult] | None = None,
+        *,
+        summary: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(items or [])
+        self.summary = dict(summary or {})
 
 
 def make_sub_rlm_parallel_fn(
@@ -724,6 +1089,7 @@ def make_sub_rlm_parallel_fn(
         parent._async_bus = _SiblingBus()
         parent._async_branch_counter = 0
     _sibling_bus_instance = parent._async_bus
+    _attach_parent_bus(parent, _sibling_bus_instance)
 
     def sub_rlm_parallel(
         tasks: "list[str]",
@@ -732,6 +1098,7 @@ def make_sub_rlm_parallel_fn(
         timeout_s: float = 300.0,
         max_workers: int = 5,
         return_artifacts: bool = False,
+        coordination_policy: str = "stop_on_solution",
     ) -> "list[str] | list[SubRLMArtifactResult]":
         """
         Executa N tarefas independentes em paralelo, retorna lista de respostas.
@@ -783,6 +1150,24 @@ def make_sub_rlm_parallel_fn(
         if not tasks:
             return []
 
+        batch_task_id = _ensure_parallel_batch_root(
+            parent,
+            task_count=len(tasks),
+            coordination_policy=coordination_policy,
+        )
+
+        _record_parent_runtime_event(
+            parent,
+            "subagent.parallel_started",
+            {
+                "task_count": len(tasks),
+                "max_workers": max_workers,
+                "child_depth": parent.depth + 1,
+                "batch_task_id": batch_task_id,
+                "coordination_policy": coordination_policy,
+            },
+        )
+
         # Depth guard antecipado — antes de criar qualquer thread
         child_depth = parent.depth + 1
         if child_depth >= parent.max_depth:
@@ -795,6 +1180,51 @@ def make_sub_rlm_parallel_fn(
         _n = min(len(tasks), max(1, max_workers))
         answers: list[Any] = [None] * len(tasks)
         errors:  list[str | None] = [None] * len(tasks)
+        cancel_events = {i: threading.Event() for i in range(len(tasks))}
+        branch_task_ids: dict[int, int | None] = {}
+        winner_branch_id: int | None = None
+        winner_lock = threading.Lock()
+
+        for branch_id, task in enumerate(tasks):
+            task_preview = task[:160]
+            branch_task_ids[branch_id] = _register_parent_subagent_task(
+                parent,
+                mode="parallel",
+                title=f"[parallel b{branch_id}] {task_preview}",
+                branch_id=branch_id,
+                child_depth=child_depth,
+                task_preview=task_preview,
+                parent_task_id=batch_task_id,
+            )
+
+        def _apply_stop_signal(source_branch_id: int | None, reason: str) -> None:
+            for branch_id, cancel_event in cancel_events.items():
+                if source_branch_id is not None and branch_id == source_branch_id:
+                    continue
+                cancel_event.set()
+                _update_parent_subagent_task(
+                    parent,
+                    task_id=branch_task_ids.get(branch_id),
+                    branch_id=branch_id,
+                    status="cancelled",
+                    note=reason,
+                    metadata={"cancel_reason": reason},
+                )
+
+        def _coordination_observer(event: dict[str, Any]) -> None:
+            if event.get("operation") != "control_publish":
+                return
+            signal_type = str(event.get("metadata", {}).get("semantic_type", "")).strip()
+            if signal_type not in {"stop", "solution_found"}:
+                return
+            sender_id = event.get("sender_id")
+            payload = event.get("payload")
+            _apply_stop_signal(sender_id if isinstance(sender_id, int) else None, str(payload))
+
+        add_observer = getattr(_sibling_bus_instance, "add_observer", None)
+        remove_observer = getattr(_sibling_bus_instance, "remove_observer", None)
+        if callable(add_observer):
+            add_observer(_coordination_observer)
 
         def _run_one(branch_id: int, task: str) -> tuple[int, Any, str | None]:
             """Executa uma tarefa, retorna (branch_id, answer, error)."""
@@ -805,9 +1235,14 @@ def make_sub_rlm_parallel_fn(
                     max_iterations=max_iterations,
                     timeout_s=timeout_s,
                     return_artifacts=return_artifacts,
+                    _task_id=branch_task_ids.get(branch_id),
+                    _cancel_event=cancel_events[branch_id],
                     _sibling_bus=_sibling_bus_instance,
                     _sibling_branch_id=branch_id,
                 )
+                answer_text = answer.answer if isinstance(answer, SubRLMArtifactResult) else str(answer)
+                if answer_text.startswith("[CANCELLED]"):
+                    return branch_id, None, f"[CANCELLED branch {branch_id}] {answer_text}"
                 return branch_id, answer, None
             except SubRLMDepthError:
                 raise  # propaga imediatamente — depth é fatal para todos
@@ -831,6 +1266,22 @@ def make_sub_rlm_parallel_fn(
                         bid, answer, err = future.result()
                         answers[bid] = answer
                         errors[bid]  = err
+                        if err is None and answer is not None and coordination_policy == "stop_on_solution":
+                            with winner_lock:
+                                if winner_branch_id is None:
+                                    winner_branch_id = bid
+                                    publish_control = getattr(_sibling_bus_instance, "publish_control", None)
+                                    if callable(publish_control):
+                                        publish_control(
+                                            "control/solution_found",
+                                            {
+                                                "winning_branch_id": bid,
+                                                "winning_task_id": branch_task_ids.get(bid),
+                                                "policy": coordination_policy,
+                                            },
+                                            sender_id=bid,
+                                            signal_type="solution_found",
+                                        )
                     except SubRLMDepthError:
                         for f in futures:
                             f.cancel()
@@ -843,8 +1294,17 @@ def make_sub_rlm_parallel_fn(
                 for f, bid in futures.items():
                     if not f.done():
                         errors[bid] = f"[ERRO branch {bid}] timeout total ({_total_timeout:.0f}s)"
+                        _update_parent_subagent_task(
+                            parent,
+                            task_id=branch_task_ids.get(bid),
+                            branch_id=bid,
+                            status="blocked",
+                            note=errors[bid],
+                        )
                         f.cancel()
         finally:
+            if callable(remove_observer):
+                remove_observer(_coordination_observer)
             executor.shutdown(wait=False, cancel_futures=True)
 
         # Montar resultado final
@@ -872,11 +1332,15 @@ def make_sub_rlm_parallel_fn(
 
         result: list[str] = []
         failed_count = 0
+        cancelled_count = 0
         for i, (ans, err) in enumerate(zip(answers, errors)):
             if ans is not None:
                 result.append(ans)
             else:
-                failed_count += 1
+                if err is not None and err.startswith("[CANCELLED branch"):
+                    cancelled_count += 1
+                elif err is not None:
+                    failed_count += 1
                 result.append(err or f"[ERRO branch {i}] sem resposta")
 
         if failed_count == len(tasks):
@@ -884,6 +1348,39 @@ def make_sub_rlm_parallel_fn(
                 f"sub_rlm_parallel: todas as {len(tasks)} tarefas falharam. "
                 f"Verifique erros: {[r for r in result]}"
             )
+
+        _record_parent_runtime_event(
+            parent,
+            "subagent.parallel_finished",
+            {
+                "task_count": len(tasks),
+                "failed_count": failed_count,
+                "cancelled_count": cancelled_count,
+                "child_depth": parent.depth + 1,
+                "winner_branch_id": winner_branch_id,
+                "batch_task_id": batch_task_id,
+            },
+        )
+
+        _set_parent_parallel_summary(
+            parent,
+            winner_branch_id=winner_branch_id,
+            cancelled_count=cancelled_count,
+            failed_count=failed_count,
+            total_tasks=len(tasks),
+        )
+        _update_parent_subagent_task(
+            parent,
+            task_id=batch_task_id,
+            branch_id=None,
+            status="completed" if failed_count < len(tasks) else "blocked",
+            note=f"winner={winner_branch_id}, cancelled={cancelled_count}, failed={failed_count}",
+            metadata={
+                "winner_branch_id": winner_branch_id,
+                "cancelled_count": cancelled_count,
+                "failed_count": failed_count,
+            },
+        )
 
         return result
 
@@ -893,7 +1390,8 @@ def make_sub_rlm_parallel_fn(
         max_iterations: int = 15,
         timeout_s: float = 60.0,
         max_workers: int = 5,
-    ) -> "list[SubRLMParallelTaskResult]":
+        coordination_policy: str = "stop_on_solution",
+    ) -> "SubRLMParallelDetailedResults":
         """
         Igual a sub_rlm_parallel(), mas retorna SubRLMParallelTaskResult por tarefa.
         Útil quando o LLM precisa inspecionar individualmente quais falharam e por quê.
@@ -908,7 +1406,7 @@ def make_sub_rlm_parallel_fn(
         import time as _time
 
         if not tasks:
-            return []
+            return SubRLMParallelDetailedResults([])
 
         child_depth = parent.depth + 1
         if child_depth >= parent.max_depth:
@@ -917,8 +1415,59 @@ def make_sub_rlm_parallel_fn(
                 f"(depth={parent.depth}, max_depth={parent.max_depth})."
             )
 
+        batch_task_id = _ensure_parallel_batch_root(
+            parent,
+            task_count=len(tasks),
+            coordination_policy=coordination_policy,
+        )
+
         _n = min(len(tasks), max(1, max_workers))
         detail_results: list[SubRLMParallelTaskResult | None] = [None] * len(tasks)
+        cancel_events = {i: threading.Event() for i in range(len(tasks))}
+        branch_task_ids: dict[int, int | None] = {}
+        winner_branch_id: int | None = None
+        winner_lock = threading.Lock()
+
+        for branch_id, task in enumerate(tasks):
+            task_preview = task[:160]
+            branch_task_ids[branch_id] = _register_parent_subagent_task(
+                parent,
+                mode="parallel_detailed",
+                title=f"[parallel detailed b{branch_id}] {task_preview}",
+                branch_id=branch_id,
+                child_depth=child_depth,
+                task_preview=task_preview,
+                parent_task_id=batch_task_id,
+            )
+
+        def _apply_stop_signal(source_branch_id: int | None, reason: str) -> None:
+            for branch_id, cancel_event in cancel_events.items():
+                if source_branch_id is not None and branch_id == source_branch_id:
+                    continue
+                cancel_event.set()
+                _update_parent_subagent_task(
+                    parent,
+                    task_id=branch_task_ids.get(branch_id),
+                    branch_id=branch_id,
+                    status="cancelled",
+                    note=reason,
+                    metadata={"cancel_reason": reason},
+                )
+
+        def _coordination_observer(event: dict[str, Any]) -> None:
+            if event.get("operation") != "control_publish":
+                return
+            signal_type = str(event.get("metadata", {}).get("semantic_type", "")).strip()
+            if signal_type not in {"stop", "solution_found"}:
+                return
+            sender_id = event.get("sender_id")
+            payload = event.get("payload")
+            _apply_stop_signal(sender_id if isinstance(sender_id, int) else None, str(payload))
+
+        add_observer = getattr(_sibling_bus_instance, "add_observer", None)
+        remove_observer = getattr(_sibling_bus_instance, "remove_observer", None)
+        if callable(add_observer):
+            add_observer(_coordination_observer)
 
         def _run_one_detailed(branch_id: int, task: str) -> SubRLMParallelTaskResult:
             import time as _t
@@ -929,19 +1478,48 @@ def make_sub_rlm_parallel_fn(
                     context=context,
                     max_iterations=max_iterations,
                     timeout_s=timeout_s,
+                    _task_id=branch_task_ids.get(branch_id),
+                    _cancel_event=cancel_events[branch_id],
                     _sibling_bus=_sibling_bus_instance,
                     _sibling_branch_id=branch_id,
                 )
+                answer_text = answer.answer if isinstance(answer, SubRLMArtifactResult) else str(answer)
+                status = "cancelled" if answer_text.startswith("[CANCELLED]") else "completed"
+                if status == "completed" and coordination_policy == "stop_on_solution":
+                    nonlocal winner_branch_id
+                    with winner_lock:
+                        if winner_branch_id is None:
+                            winner_branch_id = branch_id
+                            publish_control = getattr(_sibling_bus_instance, "publish_control", None)
+                            if callable(publish_control):
+                                publish_control(
+                                    "control/solution_found",
+                                    {
+                                        "winning_branch_id": branch_id,
+                                        "winning_task_id": branch_task_ids.get(branch_id),
+                                        "policy": coordination_policy,
+                                    },
+                                    sender_id=branch_id,
+                                    signal_type="solution_found",
+                                )
                 return SubRLMParallelTaskResult(
                     task=task, branch_id=branch_id, ok=True,
-                    answer=answer, error=None,
+                    answer=answer_text, error=None,
                     elapsed_s=_t.perf_counter() - t0,
+                    task_id=branch_task_ids.get(branch_id),
+                    parent_task_id=batch_task_id,
+                    status=status,
                 )
             except Exception as exc:
+                error_text = str(exc)
+                status = "cancelled" if error_text.startswith("[CANCELLED]") else "blocked"
                 return SubRLMParallelTaskResult(
                     task=task, branch_id=branch_id, ok=False,
-                    answer=None, error=str(exc),
+                    answer=None, error=error_text,
                     elapsed_s=_t.perf_counter() - t0,
+                    task_id=branch_task_ids.get(branch_id),
+                    parent_task_id=batch_task_id,
+                    status=status,
                 )
 
         _total_timeout = timeout_s * _n + 60.0
@@ -965,6 +1543,9 @@ def make_sub_rlm_parallel_fn(
                             task=tasks[bid], branch_id=bid, ok=False,
                             answer=None, error=f"thread interna: {exc}",
                             elapsed_s=0.0,
+                            task_id=branch_task_ids.get(bid),
+                            parent_task_id=batch_task_id,
+                            status="blocked",
                         )
             except _cf.TimeoutError:
                 for f, bid in futures.items():
@@ -974,12 +1555,53 @@ def make_sub_rlm_parallel_fn(
                             answer=None,
                             error=f"timeout total ({_total_timeout:.0f}s)",
                             elapsed_s=_total_timeout,
+                            task_id=branch_task_ids.get(bid),
+                            parent_task_id=batch_task_id,
+                            status="blocked",
                         )
                         f.cancel()
         finally:
+            if callable(remove_observer):
+                remove_observer(_coordination_observer)
             executor.shutdown(wait=False, cancel_futures=True)
 
-        return [r for r in detail_results if r is not None]  # type: ignore
+        final_results = [r for r in detail_results if r is not None]
+        cancelled_count = sum(1 for r in final_results if r.status == "cancelled")
+        failed_count = sum(1 for r in final_results if r.status == "blocked")
+
+        _set_parent_parallel_summary(
+            parent,
+            winner_branch_id=winner_branch_id,
+            cancelled_count=cancelled_count,
+            failed_count=failed_count,
+            total_tasks=len(tasks),
+        )
+        _update_parent_subagent_task(
+            parent,
+            task_id=batch_task_id,
+            branch_id=None,
+            status="completed" if failed_count < len(tasks) else "blocked",
+            note=f"winner={winner_branch_id}, cancelled={cancelled_count}, failed={failed_count}",
+            metadata={
+                "winner_branch_id": winner_branch_id,
+                "cancelled_count": cancelled_count,
+                "failed_count": failed_count,
+            },
+        )
+
+        return SubRLMParallelDetailedResults(
+            final_results,
+            summary={
+                "winner_branch_id": winner_branch_id,
+                "cancelled_count": cancelled_count,
+                "failed_count": failed_count,
+                "task_ids_by_branch": {
+                    str(branch_id): task_id
+                    for branch_id, task_id in sorted(branch_task_ids.items())
+                },
+                "batch_task_id": batch_task_id,
+            },
+        )
 
     sub_rlm_parallel.__name__ = "sub_rlm_parallel"
     setattr(sub_rlm_parallel, "_parent_depth", parent.depth)

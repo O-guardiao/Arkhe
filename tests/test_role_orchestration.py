@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 from rlm.core.handoff import HandoffRecord
 from rlm.core.role_orchestrator import PENDING_HANDOFFS_KEY, orchestrate_roles, pop_pending_handoffs
@@ -90,6 +91,47 @@ def test_evaluator_retry_refaz_resposta():
         )
     assert outcome.retried is True
     assert outcome.response == "resposta refeita"
+
+
+def test_evaluator_retry_reusa_task_id_do_handoff():
+    plan = _make_plan()
+    repl_locals = {
+        PENDING_HANDOFFS_KEY: [
+            HandoffRecord(
+                target_role="evaluator",
+                reason="validar saída",
+                remaining_goal="garantir postconditions",
+                task_id=77,
+                parent_task_id=12,
+            ).to_payload()
+        ]
+    }
+    fake_sub = MagicMock(side_effect=[
+        '{"action": "retry", "retry_prompt": "refaça usando fallback"}',
+        "resposta refeita",
+    ])
+    update_runtime_task = MagicMock()
+    fake_rlm = SimpleNamespace(
+        _persistent_env=SimpleNamespace(update_runtime_task=update_runtime_task)
+    )
+
+    with patch("rlm.core.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
+        outcome = orchestrate_roles(
+            rlm=fake_rlm,
+            prompt="colete logs",
+            response="timeout",
+            prompt_plan=plan,
+            repl_locals=repl_locals,
+            log_event=lambda *_args, **_kwargs: None,
+            session_id="sess-1",
+        )
+
+    assert outcome.retried is True
+    assert fake_sub.call_args_list[1].kwargs["_task_id"] == 77
+    assert update_runtime_task.call_args_list[0].args[0] == 77
+    assert update_runtime_task.call_args_list[0].kwargs["status"] == "in-progress"
+    assert update_runtime_task.call_args_list[-1].args[0] == 77
+    assert update_runtime_task.call_args_list[-1].kwargs["status"] == "completed"
 
 
 def test_auto_eval_escalate_sem_handoff():

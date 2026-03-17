@@ -2,6 +2,7 @@ import copy
 import io
 import json
 import os
+import pathlib
 import shutil
 import sys
 import tempfile
@@ -9,9 +10,15 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, cast
 
 from rlm.core.fast import LMRequest, send_lm_request, send_lm_request_batched
+from rlm.core.runtime_workbench import (
+    CoordinationDigest,
+    ContextAttachmentStore,
+    ExecutionTimeline,
+    TaskLedger,
+)
 from rlm.core.types import REPLResult, RLMChatCompletion
 from rlm.environments.base_env import (
     RESERVED_TOOL_NAMES,
@@ -33,7 +40,13 @@ _BLOCKED_RUNTIME_MODULES: frozenset[str] = frozenset({
 })
 
 
-def _safe_import(name: str, *args: object, **kwargs: object) -> object:
+def _safe_import(
+    name: str,
+    globals: dict[str, object] | None = None,
+    locals: dict[str, object] | None = None,
+    fromlist: tuple[str, ...] = (),
+    level: int = 0,
+) -> object:
     """Runtime guard for __import__() inside REPL exec().
 
     Catches dynamic bypass attempts the AST auditor cannot block, such as
@@ -45,10 +58,10 @@ def _safe_import(name: str, *args: object, **kwargs: object) -> object:
             f"Import of '{root}' is blocked by the RLM Security Sandbox. "
             "Use the provided SIF tools instead."
         )
-    return __import__(name, *args, **kwargs)
+    return __import__(name, globals, locals, fromlist, level)
 
 
-def _safe_open(path: str, *args: object, **kwargs: object) -> object:
+def _safe_open(path: str, *args: Any, **kwargs: Any) -> object:
     """Sandboxed ``open()`` that enforces path restrictions before delegation.
 
     Uses :meth:`REPLAuditor.check_path_access` to block access to sensitive
@@ -191,6 +204,7 @@ class LocalREPL(NonIsolatedEnv):
         compaction: bool = False,
         **kwargs,
     ):
+        self._event_bus = kwargs.pop("event_bus", None)
         # Pop sibling bus before passing kwargs to super (BaseEnv doesn't know it)
         self._sibling_bus = kwargs.pop("_sibling_bus", None)
         self._sibling_branch_id: int | None = kwargs.pop("_sibling_branch_id", None)
@@ -229,9 +243,16 @@ class LocalREPL(NonIsolatedEnv):
         # Evolution 6.1: Epistemic Foraging — REPL failure tracking
         self._repl_failure_count: int = 0   # Consecutive failures (resets on success)
         self.foraging_threshold: int = 3    # Failures before entering Foraging Mode
+        self._task_ledger = TaskLedger()
+        self._context_attachments = ContextAttachmentStore()
+        self._execution_timeline = ExecutionTimeline(on_record=self._publish_timeline_event)
+        self._coordination_digest = CoordinationDigest()
 
         # Setup globals, locals, and modules in environment.
         self.setup()
+
+        if self._sibling_bus is not None:
+            self.attach_sibling_bus(self._sibling_bus, branch_id=self._sibling_branch_id)
 
         if compaction:
             self._compaction_history: list[Any] = []
@@ -270,6 +291,223 @@ class LocalREPL(NonIsolatedEnv):
 
         # Evolution 6.1: Expose reset_foraging as REPL tool
         self.globals["reset_foraging"] = self.reset_foraging
+
+        def task_create(
+            title: str,
+            parent: int | None = None,
+            status: str = "not-started",
+            note: str = "",
+            metadata: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            entry = self._task_ledger.create(
+                title,
+                parent_id=parent,
+                status=status,
+                note=note,
+                metadata=metadata,
+            )
+            self.record_runtime_event(
+                "task.created",
+                {
+                    "task_id": entry["task_id"],
+                    "title": entry["title"],
+                    "status": entry["status"],
+                    "parent_id": entry["parent_id"],
+                },
+            )
+            return entry
+
+        def task_start(
+            title: str,
+            parent: int | None = None,
+            note: str = "",
+            metadata: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            entry = self._task_ledger.start(title, parent_id=parent, note=note, metadata=metadata)
+            self.record_runtime_event(
+                "task.started",
+                {
+                    "task_id": entry["task_id"],
+                    "title": entry["title"],
+                    "parent_id": entry["parent_id"],
+                },
+            )
+            return entry
+
+        def task_update(
+            task_id: int,
+            status: str | None = None,
+            note: str | None = None,
+            title: str | None = None,
+            metadata: dict[str, Any] | None = None,
+            current: bool | None = None,
+        ) -> dict[str, Any]:
+            entry = self._task_ledger.update(
+                task_id,
+                status=status,
+                note=note,
+                title=title,
+                metadata=metadata,
+                current=current,
+            )
+            self.record_runtime_event(
+                "task.updated",
+                {
+                    "task_id": entry["task_id"],
+                    "status": entry["status"],
+                    "current": self._task_ledger.current(),
+                },
+            )
+            return entry
+
+        def task_list(status: str | None = None) -> list[dict[str, Any]]:
+            return self._task_ledger.list(status)
+
+        def task_current() -> dict[str, Any] | None:
+            return self._task_ledger.current()
+
+        def task_set_current(task_id: int | None) -> dict[str, Any] | None:
+            entry = self._task_ledger.set_current(task_id)
+            self.record_runtime_event(
+                "task.current_changed",
+                {"task_id": task_id, "current": entry},
+            )
+            return entry
+
+        def attach_text(
+            label: str,
+            content: str,
+            kind: str = "text",
+            metadata: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            attachment = self._context_attachments.add_text(
+                label,
+                content,
+                kind=kind,
+                metadata=metadata,
+            )
+            self.record_runtime_event(
+                "attachment.added",
+                {
+                    "attachment_id": attachment["attachment_id"],
+                    "kind": attachment["kind"],
+                    "label": attachment["label"],
+                },
+            )
+            return attachment
+
+        def attach_context(
+            label: str,
+            payload: Any,
+            kind: str = "context",
+            metadata: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            attachment = self._context_attachments.add_context(
+                label,
+                payload,
+                kind=kind,
+                metadata=metadata,
+            )
+            self.record_runtime_event(
+                "attachment.added",
+                {
+                    "attachment_id": attachment["attachment_id"],
+                    "kind": attachment["kind"],
+                    "label": attachment["label"],
+                },
+            )
+            return attachment
+
+        def attach_file(
+            path: str,
+            label: str | None = None,
+            start_line: int | None = None,
+            end_line: int | None = None,
+            metadata: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            str_path = str(path)
+            self._auditor.check_path_access(str_path)
+            target = pathlib.Path(str_path)
+            if not target.exists() or not target.is_file():
+                raise FileNotFoundError(f"file not found: {target}")
+            with target.open("r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+            s = max(1, int(start_line)) - 1 if start_line is not None else 0
+            e = min(len(lines), int(end_line)) if end_line is not None else len(lines)
+            content = "".join(lines[s:e])
+            attachment = self._context_attachments.add_text(
+                label or target.name,
+                content,
+                kind="file",
+                metadata={
+                    **dict(metadata or {}),
+                    "start_line": s + 1,
+                    "end_line": e,
+                },
+                source_ref=str(target),
+            )
+            self.record_runtime_event(
+                "attachment.added",
+                {
+                    "attachment_id": attachment["attachment_id"],
+                    "kind": attachment["kind"],
+                    "label": attachment["label"],
+                    "source_ref": attachment["source_ref"],
+                },
+            )
+            return attachment
+
+        def attachment_list(
+            kind: str | None = None,
+            pinned_only: bool | None = None,
+        ) -> list[dict[str, Any]]:
+            return self._context_attachments.list(
+                kind=kind,
+                pinned_only=pinned_only,
+                include_content=False,
+            )
+
+        def attachment_get(attachment_id: str) -> dict[str, Any] | None:
+            return self._context_attachments.get(attachment_id, include_content=True)
+
+        def attachment_pin(attachment_id: str, pinned: bool = True) -> dict[str, Any]:
+            attachment = self._context_attachments.pin(attachment_id, pinned=pinned)
+            self.record_runtime_event(
+                "attachment.pinned",
+                {
+                    "attachment_id": attachment_id,
+                    "pinned": pinned,
+                },
+            )
+            return attachment
+
+        def timeline_recent(limit: int = 20, event_type: str | None = None) -> list[dict[str, Any]]:
+            return self._execution_timeline.recent(limit=limit, event_type=event_type)
+
+        def timeline_mark(
+            event_type: str,
+            data: dict[str, Any] | None = None,
+            origin: str = "manual",
+        ) -> dict[str, Any]:
+            return self.record_runtime_event(event_type, data, origin=origin)
+
+        self._runtime_scaffold_refs = {
+            "task_create": task_create,
+            "task_start": task_start,
+            "task_update": task_update,
+            "task_list": task_list,
+            "task_current": task_current,
+            "task_set_current": task_set_current,
+            "attach_text": attach_text,
+            "attach_context": attach_context,
+            "attach_file": attach_file,
+            "attachment_list": attachment_list,
+            "attachment_get": attachment_get,
+            "attachment_pin": attachment_pin,
+            "timeline_recent": timeline_recent,
+            "timeline_mark": timeline_mark,
+        }
+        self.globals.update(self._runtime_scaffold_refs)
 
         # Custom tools: inject into globals (callables) or locals (values)
         for name, entry in self.custom_tools.items():
@@ -333,7 +571,7 @@ class LocalREPL(NonIsolatedEnv):
                         parent_log("cancelado pelo pai, encerrando limpo")
                         FINAL_VAR("cancelado")
                 """
-                return _ce.is_set()
+                return bool(_ce and _ce.is_set())
 
             self.globals["check_cancel"] = check_cancel
 
@@ -417,6 +655,211 @@ class LocalREPL(NonIsolatedEnv):
 
         self.globals["mcts_explore"] = _mcts_explore
 
+    def _publish_timeline_event(self, payload: dict[str, Any]) -> None:
+        if self._event_bus is None:
+            return
+        try:
+            self._event_bus.emit("timeline_event", payload)
+        except Exception:
+            pass
+
+    def record_runtime_event(
+        self,
+        event_type: str,
+        data: dict[str, Any] | None = None,
+        *,
+        origin: str = "runtime",
+    ) -> dict[str, Any]:
+        return self._execution_timeline.record(event_type, data, origin=origin)
+
+    def current_runtime_task(self) -> dict[str, Any] | None:
+        return self._task_ledger.current()
+
+    def current_runtime_task_id(self) -> int | None:
+        current = self.current_runtime_task()
+        return current.get("task_id") if current is not None else None
+
+    def create_runtime_task(
+        self,
+        title: str,
+        *,
+        parent_task_id: int | None = None,
+        status: str = "not-started",
+        note: str = "",
+        metadata: dict[str, Any] | None = None,
+        current: bool = False,
+    ) -> dict[str, Any]:
+        return self._task_ledger.create(
+            title,
+            parent_id=parent_task_id,
+            status=status,
+            note=note,
+            metadata=metadata,
+            current=current,
+        )
+
+    def update_runtime_task(
+        self,
+        task_id: int,
+        *,
+        title: str | None = None,
+        status: str | None = None,
+        note: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        current: bool | None = None,
+    ) -> dict[str, Any]:
+        return self._task_ledger.update(
+            task_id,
+            title=title,
+            status=status,
+            note=note,
+            metadata=metadata,
+            current=current,
+        )
+
+    def register_subagent_task(
+        self,
+        *,
+        mode: str,
+        title: str,
+        branch_id: int | None = None,
+        parent_task_id: int | None = None,
+        metadata: dict[str, Any] | None = None,
+        current: bool = False,
+    ) -> dict[str, Any]:
+        resolved_parent = parent_task_id
+        if resolved_parent is None:
+            resolved_parent = self.current_runtime_task_id()
+        task = self.create_runtime_task(
+            title,
+            parent_task_id=resolved_parent,
+            status="in-progress",
+            metadata=metadata,
+            current=current,
+        )
+        if branch_id is not None:
+            self._coordination_digest.bind_branch_task(
+                int(branch_id),
+                int(task["task_id"]),
+                mode=mode,
+                title=task["title"],
+                parent_task_id=resolved_parent,
+                status=task["status"],
+                metadata=metadata,
+            )
+        return task
+
+    def update_subagent_task(
+        self,
+        *,
+        task_id: int,
+        branch_id: int | None = None,
+        status: str | None = None,
+        note: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        current: bool | None = None,
+    ) -> dict[str, Any]:
+        task = self.update_runtime_task(
+            task_id,
+            status=status,
+            note=note,
+            metadata=metadata,
+            current=current,
+        )
+        if branch_id is not None:
+            self._coordination_digest.update_branch_task(
+                int(branch_id),
+                status=task["status"],
+                metadata=metadata,
+            )
+        return task
+
+    def set_parallel_summary(
+        self,
+        *,
+        winner_branch_id: int | None,
+        cancelled_count: int,
+        failed_count: int,
+        total_tasks: int,
+    ) -> dict[str, Any]:
+        return self._coordination_digest.set_parallel_summary(
+            winner_branch_id=winner_branch_id,
+            cancelled_count=cancelled_count,
+            failed_count=failed_count,
+            total_tasks=total_tasks,
+        )
+
+    def get_runtime_state_snapshot(
+        self,
+        *,
+        coordination_limit: int = 0,
+        coordination_operation: str | None = None,
+        coordination_topic: str | None = None,
+        coordination_branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "tasks": {
+                "current": self._task_ledger.current(),
+                "items": self._task_ledger.list(),
+            },
+            "attachments": {
+                "items": self._context_attachments.list(include_content=False),
+            },
+            "timeline": {
+                "entries": self._execution_timeline.recent(limit=0),
+            },
+            "coordination": self._coordination_digest.filtered_snapshot(
+                limit=coordination_limit,
+                operation=coordination_operation,
+                topic=coordination_topic,
+                branch_id=coordination_branch_id,
+            ),
+        }
+
+    def attach_sibling_bus(self, sibling_bus: Any, *, branch_id: int | None = None) -> None:
+        self._sibling_bus = sibling_bus
+        if branch_id is not None:
+            self._sibling_branch_id = branch_id
+        self._coordination_digest.attach(branch_id=self._sibling_branch_id)
+
+        add_observer = getattr(sibling_bus, "add_observer", None)
+        if callable(add_observer):
+            add_observer(self._handle_sibling_bus_event)
+
+        get_stats = getattr(sibling_bus, "get_stats", None)
+        if callable(get_stats):
+            try:
+                stats = get_stats()
+                self._coordination_digest.update_stats(
+                    stats if isinstance(stats, dict) else None
+                )
+            except Exception:
+                pass
+
+    def _handle_sibling_bus_event(self, payload: dict[str, Any]) -> None:
+        event = self._coordination_digest.record_event(
+            payload.get("operation", "unknown"),
+            topic=payload.get("topic", ""),
+            sender_id=payload.get("sender_id"),
+            receiver_id=payload.get("receiver_id"),
+            payload=payload.get("payload"),
+            metadata=payload.get("metadata"),
+        )
+        self._coordination_digest.update_stats(payload.get("stats"))
+        self.record_runtime_event(
+            "coordination.bus_event",
+            {
+                "operation": event["operation"],
+                "topic": event["topic"],
+                "sender_id": event["sender_id"],
+                "receiver_id": event["receiver_id"],
+            },
+            origin="coordination",
+        )
+
+    def is_cancel_requested(self) -> bool:
+        return bool(self._cancel_event and self._cancel_event.is_set())
+
     def _final_var(self, variable_name: str) -> str:
         """Return the value of a variable as a final answer."""
         variable_name = variable_name.strip().strip("\"'")
@@ -452,6 +895,10 @@ class LocalREPL(NonIsolatedEnv):
             model: Optional model name to use (if handler has multiple clients).
         """
         if not self.lm_handler_address:
+            self.record_runtime_event(
+                "llm_query.called",
+                {"model": model, "prompt_chars": len(prompt), "ok": False},
+            )
             return "Error: No LM handler configured"
 
         try:
@@ -459,15 +906,53 @@ class LocalREPL(NonIsolatedEnv):
             response = send_lm_request(self.lm_handler_address, request)
 
             if not response.success:
+                self.record_runtime_event(
+                    "llm_query.called",
+                    {
+                        "model": model,
+                        "prompt_chars": len(prompt),
+                        "ok": False,
+                        "error": response.error,
+                    },
+                )
                 return f"Error: {response.error}"
 
             # Track this LLM call
-            self._pending_llm_calls.append(
-                response.chat_completion,
+            chat_completion = response.chat_completion
+            if chat_completion is None:
+                self.record_runtime_event(
+                    "llm_query.called",
+                    {
+                        "model": model,
+                        "prompt_chars": len(prompt),
+                        "ok": False,
+                        "error": "missing chat_completion payload",
+                    },
+                )
+                return "Error: LM response missing chat completion"
+
+            self._pending_llm_calls.append(chat_completion)
+
+            self.record_runtime_event(
+                "llm_query.called",
+                {
+                    "model": model or chat_completion.root_model,
+                    "prompt_chars": len(prompt),
+                    "ok": True,
+                },
             )
 
-            return response.chat_completion.response
+            return chat_completion.response
         except Exception as e:
+            self.record_runtime_event(
+                "llm_query.called",
+                {
+                    "model": model,
+                    "prompt_chars": len(prompt),
+                    "ok": False,
+                    "error": str(e),
+                },
+            )
             return f"Error: LM query failed - {e}"
 
     def _llm_query_batched(self, prompts: list[str], model: str | None = None) -> list[str]:
@@ -481,11 +966,16 @@ class LocalREPL(NonIsolatedEnv):
             List of responses in the same order as input prompts.
         """
         if not self.lm_handler_address:
+            self.record_runtime_event(
+                "llm_query_batched.called",
+                {"model": model, "prompt_count": len(prompts), "ok": False},
+            )
             return ["Error: No LM handler configured"] * len(prompts)
 
         try:
+            batched_prompts = cast(list[str | dict[str, Any]], list(prompts))
             responses = send_lm_request_batched(
-                self.lm_handler_address, prompts, model=model, depth=self.depth
+                self.lm_handler_address, batched_prompts, model=model, depth=self.depth
             )
 
             results = []
@@ -493,12 +983,34 @@ class LocalREPL(NonIsolatedEnv):
                 if not response.success:
                     results.append(f"Error: {response.error}")
                 else:
+                    chat_completion = response.chat_completion
+                    if chat_completion is None:
+                        results.append("Error: missing chat_completion payload")
+                        continue
                     # Track this LLM call in list of all calls -- we may want to do this hierarchically
-                    self._pending_llm_calls.append(response.chat_completion)
-                    results.append(response.chat_completion.response)
+                    self._pending_llm_calls.append(chat_completion)
+                    results.append(chat_completion.response)
+
+            self.record_runtime_event(
+                "llm_query_batched.called",
+                {
+                    "model": model,
+                    "prompt_count": len(prompts),
+                    "ok": all(not r.startswith("Error:") for r in results),
+                },
+            )
 
             return results
         except Exception as e:
+            self.record_runtime_event(
+                "llm_query_batched.called",
+                {
+                    "model": model,
+                    "prompt_count": len(prompts),
+                    "ok": False,
+                    "error": str(e),
+                },
+            )
             return [f"Error: LM query failed - {e}"] * len(prompts)
 
     def load_context(self, context_payload: dict | list | str):
@@ -556,6 +1068,10 @@ class LocalREPL(NonIsolatedEnv):
         # Flag codebase mode
         self._codebase_mode = True
         self._codebase_path = codebase_path
+        self.record_runtime_event(
+            "context.codebase_loaded",
+            {"path": codebase_path},
+        )
 
     def add_context(
         self, context_payload: dict | list | str, context_index: int | None = None
@@ -597,6 +1113,15 @@ class LocalREPL(NonIsolatedEnv):
         # The LLM always reads 'context' first, so it must reflect the current prompt.
         self.execute_code(f"context = {var_name}")
 
+        self.record_runtime_event(
+            "context.added",
+            {
+                "context_index": context_index,
+                "var_name": var_name,
+                "context_type": type(context_payload).__name__,
+            },
+        )
+
         return context_index
 
     def update_handler_address(self, address: tuple[str, int]) -> None:
@@ -633,6 +1158,13 @@ class LocalREPL(NonIsolatedEnv):
             self.locals["history"] = self.locals[var_name]
 
         self._history_count = max(self._history_count, history_index + 1)
+        self.record_runtime_event(
+            "history.added",
+            {
+                "history_index": history_index,
+                "message_count": len(message_history),
+            },
+        )
         return history_index
 
     def get_history_count(self) -> int:
@@ -675,6 +1207,8 @@ class LocalREPL(NonIsolatedEnv):
         # _rlm_scaffold_refs if they were registered (populated by rlm.py).
         for name, fn in getattr(self, "_rlm_scaffold_refs", {}).items():
             self.globals[name] = fn
+        for name, fn in getattr(self, "_runtime_scaffold_refs", {}).items():
+            self.globals[name] = fn
         # Restore context/history aliases — point to the LATEST context/history
         latest_ctx = f"context_{self._context_count - 1}" if self._context_count > 0 else "context_0"
         if latest_ctx in self.locals:
@@ -694,6 +1228,10 @@ class LocalREPL(NonIsolatedEnv):
             self._auditor.audit_code(code)
         except SecurityViolation as e:
             self._repl_failure_count += 1
+            self.record_runtime_event(
+                "repl.error",
+                {"error": f"SecurityAuditViolation: {e}"},
+            )
             return REPLResult(
                 stdout="",
                 stderr=f"SecurityAuditViolation: {e}",
@@ -704,6 +1242,10 @@ class LocalREPL(NonIsolatedEnv):
 
         # Clear pending LLM calls from previous execution
         self._pending_llm_calls = []
+        self.record_runtime_event(
+            "repl.started",
+            {"code_chars": len(code)},
+        )
 
         # Sanitize backslash line-continuation mistakes the model often makes:
         #   1) `code \ # comment`  → backslash BEFORE inline comment: SyntaxError
@@ -760,13 +1302,23 @@ class LocalREPL(NonIsolatedEnv):
             # Soft reset: if stderr is clean, only reset if not already incrementing
             pass
 
-        return REPLResult(
+        result = REPLResult(
             stdout=stdout,
             stderr=stderr,
             locals=self.locals.copy(),
             execution_time=time.perf_counter() - start_time,
             rlm_calls=self._pending_llm_calls.copy(),
         )
+        self.record_runtime_event(
+            "repl.executed" if not stderr else "repl.error",
+            {
+                "stdout_chars": len(stdout),
+                "stderr_chars": len(stderr),
+                "llm_call_count": len(result.rlm_calls),
+                "execution_time": result.execution_time,
+            },
+        )
+        return result
 
     def is_in_foraging_mode(self) -> bool:
         """True when consecutive REPL failures have crossed the foraging threshold."""
@@ -804,6 +1356,12 @@ class LocalREPL(NonIsolatedEnv):
             "history_count": self._history_count,
             "codebase_mode": getattr(self, "_codebase_mode", False),
             "codebase_path": getattr(self, "_codebase_path", None),
+            "runtime_workbench": {
+                "tasks": self._task_ledger.snapshot(),
+                "attachments": self._context_attachments.snapshot(),
+                "timeline": self._execution_timeline.snapshot(),
+                "coordination": self._coordination_digest.snapshot(),
+            },
             "locals_serialized": {},
             "locals_skipped": [],
         }
@@ -863,6 +1421,12 @@ class LocalREPL(NonIsolatedEnv):
                 restored += 1
             except Exception:
                 pass
+
+        runtime_workbench = state.get("runtime_workbench", {})
+        self._task_ledger.restore(runtime_workbench.get("tasks"))
+        self._context_attachments.restore(runtime_workbench.get("attachments"))
+        self._execution_timeline.restore(runtime_workbench.get("timeline"))
+        self._coordination_digest.restore(runtime_workbench.get("coordination"))
 
         # Re-inject codebase tools if checkpoint was in codebase mode
         codebase_path = state.get("codebase_path")

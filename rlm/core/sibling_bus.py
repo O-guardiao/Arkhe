@@ -95,6 +95,9 @@ class SiblingMessage:
     sender_id: int | None = None
     """branch_id do remetente (0-based), preenchido automaticamente."""
 
+    semantic_type: str = "data"
+    """Tipo semântico da mensagem para coordenação explícita."""
+
     timestamp: float = field(
         default_factory=lambda: __import__("time").perf_counter()
     )
@@ -130,6 +133,17 @@ _CHANNEL_MAXSIZE: int = 1_000
 #: Tamanho máximo do payload de uma mensagem (1 MB).
 #: Bloqueia ataques de memory-bomb via publicação de objetos gigantes.
 _MAX_PAYLOAD_BYTES: int = 1_048_576
+
+VALID_SIGNAL_TYPES: frozenset[str] = frozenset(
+    {"data", "solution_found", "stop", "switch_strategy", "consensus_reached", "custom"}
+)
+
+SIGNAL_TOPIC_MAP: dict[str, str] = {
+    "solution_found": "control/solution_found",
+    "stop": "control/stop",
+    "switch_strategy": "control/switch_strategy",
+    "consensus_reached": "control/consensus_reached",
+}
 
 
 class SiblingBusError(RuntimeError):
@@ -172,6 +186,8 @@ class SiblingBus:
         self._control_channels: dict[str, ControlChannel] = {}
         self._lock = threading.Lock()
         self._telemetry_lock = threading.Lock()
+        self._observer_lock = threading.Lock()
+        self._observers: list[Any] = []
         self._operation_counts: dict[str, int] = {
             "publish": 0,
             "subscribe_hit": 0,
@@ -203,6 +219,18 @@ class SiblingBus:
         except (TypeError, ValueError) as exc:
             raise SiblingBusError("timeout_s deve ser numérico") from exc
         return max(0.0, numeric)
+
+    def _normalize_signal_type(self, signal_type: str | None) -> str:
+        normalized = str(signal_type or "data").strip().lower().replace("-", "_")
+        if normalized not in VALID_SIGNAL_TYPES:
+            raise SiblingBusError(
+                f"signal_type inválido: {signal_type!r}. Use um de {sorted(VALID_SIGNAL_TYPES)}"
+            )
+        return normalized
+
+    def topic_for_signal(self, signal_type: str) -> str:
+        normalized = self._normalize_signal_type(signal_type)
+        return SIGNAL_TOPIC_MAP.get(normalized, f"control/{normalized}")
 
     def _get_or_create_channel(self, topic: str) -> queue.Queue:
         """Recupera ou cria um canal respeitando os limites documentados."""
@@ -242,6 +270,48 @@ class SiblingBus:
                 topic_stats = self._topic_operation_counts.setdefault(topic, {})
                 topic_stats[name] = topic_stats.get(name, 0) + 1
 
+    def add_observer(self, observer: Any) -> None:
+        """Registra callback para receber eventos do barramento."""
+        if not callable(observer):
+            raise TypeError("observer must be callable")
+        with self._observer_lock:
+            if observer not in self._observers:
+                self._observers.append(observer)
+
+    def remove_observer(self, observer: Any) -> None:
+        """Remove callback previamente registrado."""
+        with self._observer_lock:
+            self._observers = [item for item in self._observers if item is not observer]
+
+    def _notify_observers(
+        self,
+        operation: str,
+        *,
+        topic: str = "",
+        sender_id: int | None = None,
+        receiver_id: int | None = None,
+        payload: Any = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        with self._observer_lock:
+            observers = list(self._observers)
+        if not observers:
+            return
+        event = {
+            "operation": operation,
+            "topic": topic,
+            "sender_id": sender_id,
+            "receiver_id": receiver_id,
+            "payload": payload,
+            "metadata": dict(metadata or {}),
+            "stats": self.get_stats(),
+        }
+        for observer in observers:
+            try:
+                observer(event)
+            except Exception:
+                pass
+
     def _format_control_message(
         self, topic: str, channel: ControlChannel, msg: SiblingMessage
     ) -> dict[str, Any]:
@@ -255,7 +325,14 @@ class SiblingBus:
     # Core API
     # ------------------------------------------------------------------
 
-    def publish(self, topic: str, data: Any, sender_id: int | None = None) -> None:
+    def publish(
+        self,
+        topic: str,
+        data: Any,
+        sender_id: int | None = None,
+        *,
+        semantic_type: str = "data",
+    ) -> None:
         """Publica uma mensagem no tópico. Nunca bloqueia.
 
         Args:
@@ -275,17 +352,32 @@ class SiblingBus:
                 f"{_MAX_PAYLOAD_BYTES:,} bytes por mensagem."
             )
         q = self._get_or_create_channel(topic)
-        msg = SiblingMessage(topic=topic, data=data, sender_id=sender_id)
+        semantic_type = self._normalize_signal_type(semantic_type)
+        msg = SiblingMessage(topic=topic, data=data, sender_id=sender_id, semantic_type=semantic_type)
         try:
             q.put_nowait(msg)
             self._record_operation("publish", topic)
+            self._notify_observers(
+                "publish",
+                topic=topic,
+                sender_id=sender_id,
+                payload=data,
+                metadata={"semantic_type": semantic_type},
+            )
         except queue.Full as exc:
             raise SiblingBusError(
                 f"Canal '{topic}' está cheio ({_CHANNEL_MAXSIZE} mensagens pendentes). "
                 "Consuma mensagens com sibling_subscribe() ou sibling_peek()."
             ) from exc
 
-    def publish_control(self, topic: str, data: Any, sender_id: int | None = None) -> int:
+    def publish_control(
+        self,
+        topic: str,
+        data: Any,
+        sender_id: int | None = None,
+        *,
+        signal_type: str | None = None,
+    ) -> int:
         """Publica sinal broadcast por geração para coordenação entre irmãos.
 
         Diferente dos canais FIFO normais, todos os receivers podem observar a
@@ -297,14 +389,32 @@ class SiblingBus:
                 f"Payload de {sys.getsizeof(data):,} bytes excede o limite de "
                 f"{_MAX_PAYLOAD_BYTES:,} bytes por mensagem."
             )
+        normalized_signal = self._normalize_signal_type(signal_type or topic.rsplit("/", 1)[-1])
         channel = self._get_or_create_control_channel(topic)
         with channel.condition:
             channel.generation += 1
-            channel.latest = SiblingMessage(topic=topic, data=data, sender_id=sender_id)
+            channel.latest = SiblingMessage(
+                topic=topic,
+                data=data,
+                sender_id=sender_id,
+                semantic_type=normalized_signal,
+            )
             generation = channel.generation
             channel.condition.notify_all()
         self._record_operation("control_publish", topic)
+        self._notify_observers(
+            "control_publish",
+            topic=topic,
+            sender_id=sender_id,
+            payload=data,
+            metadata={"generation": generation, "semantic_type": normalized_signal},
+        )
         return generation
+
+    def publish_signal(self, signal_type: str, data: Any, sender_id: int | None = None) -> int:
+        normalized_signal = self._normalize_signal_type(signal_type)
+        topic = self.topic_for_signal(normalized_signal)
+        return self.publish_control(topic, data, sender_id=sender_id, signal_type=normalized_signal)
 
     def subscribe(self, topic: str, timeout_s: float = 5.0) -> Any | None:
         """Bloqueia até receber a próxima mensagem ou timeout.
@@ -332,9 +442,21 @@ class SiblingBus:
             block = timeout_s > 0
             msg: SiblingMessage = q.get(block=block, timeout=timeout_s if block else None)
             self._record_operation("subscribe_hit", topic)
+            self._notify_observers(
+                "subscribe_hit",
+                topic=topic,
+                sender_id=msg.sender_id,
+                payload=msg.data,
+                metadata={"semantic_type": msg.semantic_type},
+            )
             return msg
         except queue.Empty:
             self._record_operation("subscribe_timeout", topic)
+            self._notify_observers(
+                "subscribe_timeout",
+                topic=topic,
+                metadata={"timeout_s": timeout_s},
+            )
             return None
 
     def poll_control(self, topic: str, receiver_id: int | None = None) -> dict[str, Any] | None:
@@ -349,13 +471,24 @@ class SiblingBus:
         with channel.condition:
             if channel.latest is None:
                 self._record_operation("control_poll_miss", topic)
+                self._notify_observers("control_poll_miss", topic=topic, receiver_id=receiver_id)
                 return None
             if channel.seen_generations.get(receiver_key, 0) >= channel.generation:
                 self._record_operation("control_poll_miss", topic)
+                self._notify_observers("control_poll_miss", topic=topic, receiver_id=receiver_id)
                 return None
             channel.seen_generations[receiver_key] = channel.generation
             self._record_operation("control_poll_hit", topic)
-            return self._format_control_message(topic, channel, channel.latest)
+            payload = self._format_control_message(topic, channel, channel.latest)
+            self._notify_observers(
+                "control_poll_hit",
+                topic=topic,
+                sender_id=channel.latest.sender_id,
+                receiver_id=receiver_id,
+                payload=payload,
+                metadata={"generation": channel.generation, "semantic_type": channel.latest.semantic_type},
+            )
+            return payload
 
     def wait_control(
         self,
@@ -381,11 +514,26 @@ class SiblingBus:
                     channel.condition.wait_for(_has_new_generation, timeout=timeout_s)
             if not _has_new_generation():
                 self._record_operation("control_wait_timeout", topic)
+                self._notify_observers(
+                    "control_wait_timeout",
+                    topic=topic,
+                    receiver_id=receiver_id,
+                    metadata={"timeout_s": timeout_s},
+                )
                 return None
             channel.seen_generations[receiver_key] = channel.generation
             self._record_operation("control_wait_hit", topic)
             assert channel.latest is not None
-            return self._format_control_message(topic, channel, channel.latest)
+            payload = self._format_control_message(topic, channel, channel.latest)
+            self._notify_observers(
+                "control_wait_hit",
+                topic=topic,
+                sender_id=channel.latest.sender_id,
+                receiver_id=receiver_id,
+                payload=payload,
+                metadata={"generation": channel.generation, "semantic_type": channel.latest.semantic_type},
+            )
+            return payload
 
     def peek(self, topic: str) -> list[Any]:
         """Retorna todos os dados disponíveis sem bloquear (non-destructive).
@@ -398,8 +546,15 @@ class SiblingBus:
         Returns:
             Lista de ``data`` de todas as mensagens disponíveis (pode ser vazia).
         """
-        self._record_operation("peek", self._normalize_topic(topic))
-        return [m.data for m in self.peek_messages(topic)]
+        normalized_topic = self._normalize_topic(topic)
+        self._record_operation("peek", normalized_topic)
+        messages = self.peek_messages(normalized_topic)
+        self._notify_observers(
+            "peek",
+            topic=normalized_topic,
+            metadata={"message_count": len(messages)},
+        )
+        return [m.data for m in messages]
 
     def peek_messages(self, topic: str) -> list[SiblingMessage]:
         """Retorna snapshot não-destrutivo dos envelopes pendentes do tópico."""
@@ -434,6 +589,11 @@ class SiblingBus:
             except queue.Empty:
                 break
         self._record_operation("drain", topic)
+        self._notify_observers(
+            "drain",
+            topic=topic,
+            metadata={"message_count": len(items)},
+        )
         return [m.data for m in items]
 
     def peek_control(self, topic: str) -> dict[str, Any] | None:
@@ -491,8 +651,9 @@ class SiblingBus:
         with self._telemetry_lock:
             topic_counts = dict(self._topic_operation_counts.get(topic, {}))
         with self._lock:
-            queue_size = self._channels.get(topic).qsize() if topic in self._channels else 0
+            queue_obj = self._channels.get(topic)
             control_channel = self._control_channels.get(topic)
+        queue_size = queue_obj.qsize() if queue_obj is not None else 0
         control_generation = 0
         control_sender_id: int | None = None
         if control_channel is not None:
@@ -602,6 +763,10 @@ class SiblingBus:
             """Publica sinal broadcast por geração para todos os irmãos."""
             return bus.publish_control(topic, data, sender_id=_sid)
 
+        def sibling_signal_publish(signal_type: str, data: Any) -> int:
+            """Publica um sinal semântico padrão sem depender do nome do tópico."""
+            return bus.publish_signal(signal_type, data, sender_id=_sid)
+
         def sibling_control_poll(topic: str) -> dict[str, Any] | None:
             """Recebe o último sinal de controle ainda não visto por este branch."""
             return bus.poll_control(topic, receiver_id=_sid)
@@ -613,6 +778,10 @@ class SiblingBus:
         def sibling_control_peek(topic: str) -> dict[str, Any] | None:
             """Inspeciona o último sinal de controle sem marcá-lo como lido."""
             return bus.peek_control(topic)
+
+        def sibling_signal_peek(signal_type: str) -> dict[str, Any] | None:
+            """Inspeciona o último sinal de um tipo semântico padrão."""
+            return bus.peek_control(bus.topic_for_signal(signal_type))
 
         def sibling_bus_stats() -> dict[str, Any]:
             """Telemetria agregada do barramento para análise de coordenação."""
@@ -644,6 +813,8 @@ class SiblingBus:
             "sibling_control_poll": sibling_control_poll,
             "sibling_control_wait": sibling_control_wait,
             "sibling_control_peek": sibling_control_peek,
+            "sibling_signal_publish": sibling_signal_publish,
+            "sibling_signal_peek": sibling_signal_peek,
             "sibling_bus_stats": sibling_bus_stats,
             "sibling_topic_stats": sibling_topic_stats,
             "sibling_topics": sibling_topics,
