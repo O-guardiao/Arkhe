@@ -1,5 +1,7 @@
 # Runtime Workbench: Plano por Fases
 
+Leitura complementar recomendada: [Analise Real do Sistema RLM](rlm-runtime-reality-analysis.md)
+
 Este documento transforma o item 5 da análise arquitetural em execução incremental dentro do RLM. O foco não é trocar a recursão por UX. O foco é tornar a recursão rastreável, recuperável, coordenável e controlável sem reduzir o papel central do REPL e dos subagentes.
 
 Observabilidade aqui não significa apenas auditoria humana. Significa criar um tecido operacional que permita ao pai, aos filhos e aos irmãos paralelos saberem o que já foi tentado, o que foi produzido, qual branch está ativa e quando uma descoberta precisa ser propagada para evitar trabalho redundante.
@@ -25,6 +27,118 @@ Pendências relevantes:
 - Definir políticas de promoção de anexos e artefatos para a camada de contexto operacional.
 - Criar visualização externa da árvore de execução e do digest de coordenação em tempo real.
 - Adicionar heurísticas de loop e redundância baseadas em timeline, não apenas em sinal de solução.
+
+## Avaliação por fase
+
+### Avaliação da Fase 1
+
+Status: concluída no backend.
+
+Evidência:
+
+- APIs `task_*`, `attach_*` e `timeline_*` já estão injetadas no `LocalREPL`.
+- Checkpoint restaura ledger, anexos, timeline e digest de coordenação.
+- `/sessions/{session_id}/runtime` já expõe snapshot operacional da sessão.
+- O loop do `RLM` já registra eventos automáticos de execução, iteração, compaction e finalização.
+
+Lacunas para considerar a fase 100% fechada no produto, não só no runtime:
+
+- Nenhuma crítica para o backend.
+- Opcionalmente, documentar o contrato HTTP do endpoint de runtime em referência de API.
+
+Conclusão:
+
+- O critério de saída da fase 1 já foi atingido.
+
+### Avaliação da Fase 2
+
+Status: majoritariamente concluída, com uma lacuna funcional relevante.
+
+Evidência:
+
+- `sub_rlm`, `sub_rlm_async`, `sub_rlm_parallel` e `sub_rlm_parallel_detailed` já registram `task_id`, `branch_id`, profundidade, spawn e término.
+- O `SiblingBus` já alimenta um digest persistido por sessão com sinais semânticos e eventos observáveis.
+- O batch paralelo já é um nó pai na árvore operacional, e o detailed já devolve resumo com vencedor, cancelamentos e mapeamento de tasks por branch.
+- Handoff e retry orientado por evaluator já reaproveitam `task_id` em vez de abrir execução derivada órfã.
+
+O que ainda falta para fechar totalmente a fase 2:
+
+- Tornar visível no snapshot, de forma explícita, quais artefatos úteis foram produzidos por cada subagente ou branch, em vez de depender só de `return_artifacts=True` e inspeção manual.
+- Opcionalmente expor uma árvore de execução já materializada, em vez de apenas tasks e branch bindings separados.
+
+Conclusão:
+
+- A fase 2 está operacionalmente forte, mas ainda não fecha completamente a parte de artefatos úteis por branch.
+
+### Avaliação da Fase 3
+
+Status: parcialmente iniciada.
+
+Evidência:
+
+- Já existe uma camada separada de anexos de contexto no runtime.
+- Já existe pinagem de anexos e persistência separada do histórico textual.
+
+O que falta para concluir a fase 3:
+
+- Separar formalmente `task_context`, `workspace_context`, `session_context` e `memory_context` como objetos de primeira classe.
+- Fazer a compaction agir por tipo de contexto, não só no transcript.
+- Criar promoção explícita de anexos para artefatos reutilizáveis entre turnos.
+
+Conclusão:
+
+- Esta fase ainda não está concluída. Hoje existe infraestrutura base, mas não existe a separação tipada prometida.
+
+### Avaliação da Fase 4
+
+Status: parcialmente concluída no backend, aberta no produto.
+
+Evidência:
+
+- O snapshot por sessão já existe e já suporta filtros de coordenação.
+- O runtime já produz timeline suficiente para inspeção externa.
+
+O que falta para concluir a fase 4:
+
+- Feed incremental por WebSocket ou mecanismo equivalente de atualização contínua.
+- Visualização externa clara da árvore de execução, tasks, anexos e coordenação em tempo real.
+- Filtros adicionais por task ativa, anexos pinados e possivelmente por fase operacional.
+
+Conclusão:
+
+- O backend do cockpit existe. O cockpit como superfície operacional ainda não existe.
+
+### Avaliação da Fase 5
+
+Status: parcialmente concluída.
+
+Evidência:
+
+- Já existe política real de redução de custo com `stop_on_solution` para cortar branches redundantes.
+- O loop principal já respeita cancelamento disparado pela coordenação.
+
+O que falta para concluir a fase 5:
+
+- Heurísticas de loop e redundância baseadas em timeline e padrão operacional.
+- Política de promoção de artefatos e anexos com justificativa e governança.
+- Gatilhos de supervisão por saúde de branch, profundidade e custo acumulado.
+- Políticas além de `solution_found`, como `switch_strategy` e `consensus_reached`, influenciando execução de forma concreta.
+
+Conclusão:
+
+- A fase 5 começou pelo caso de maior retorno imediato, mas ainda está longe de concluída como camada de governança.
+
+## Fechamento real das etapas
+
+Se o objetivo for declarar as etapas documentadas como concluídas com rigor técnico, o estado real é este:
+
+- Fase 1: concluída.
+- Fase 2: quase concluída, faltando fechar artefatos por branch e opcionalmente árvore materializada.
+- Fase 3: não concluída.
+- Fase 4: não concluída como produto; parcialmente pronta no backend.
+- Fase 5: não concluída; existe apenas a primeira política forte de coordenação.
+
+Portanto, não faz sentido dizer que o plano inteiro foi executado. O que foi executado com solidez cobre a espinha dorsal das fases 1 e 2 e apenas a base técnica das fases 3 a 5.
 
 ## Fase 1: Ledger, anexos e timeline
 

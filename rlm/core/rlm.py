@@ -1,3 +1,4 @@
+import hashlib
 import time
 from contextlib import contextmanager
 from typing import Any
@@ -27,7 +28,7 @@ from rlm.utils.prompts import (
     build_multimodal_user_prompt,
 )
 from rlm.utils.rlm_utils import filter_sensitive_keys
-from rlm.core.mcts import MCTSOrchestrator, generate_branch_variants
+from rlm.core.mcts import MCTSOrchestrator, ProgramArchive, evolutionary_branch_search
 from rlm.core.compaction import ContextCompactor, CompactionConfig
 from rlm.core.loop_detector import LoopDetector, LoopDetectorConfig
 from rlm.utils.token_utils import get_context_limit
@@ -358,6 +359,88 @@ class RLM:
             except Exception:
                 pass
 
+    @staticmethod
+    def _build_mcts_evaluation_stages(environment: BaseEnv) -> list[Any]:
+        from rlm.core.mcts import EvaluationStage
+
+        evaluator_candidates: list[tuple[str, Any]] = []
+        env_globals = getattr(environment, "globals", {}) or {}
+        env_locals = getattr(environment, "locals", {}) or {}
+        for name in ("evaluate", "score_candidate", "evaluate_candidate"):
+            fn = env_locals.get(name) or env_globals.get(name)
+            if callable(fn):
+                evaluator_candidates.append((name, fn))
+
+        stages: list[EvaluationStage] = []
+        for evaluator_name, evaluator_fn in evaluator_candidates:
+            def _invoke(snapshot: dict[str, Any], fn=evaluator_fn, name=evaluator_name) -> float:
+                try:
+                    value = fn(snapshot)
+                except TypeError:
+                    value = fn(
+                        snapshot["code"],
+                        snapshot["stdout"],
+                        snapshot["stderr"],
+                        snapshot["locals"],
+                    )
+                if isinstance(value, dict):
+                    if name in value:
+                        return float(value[name])
+                    if len(value) == 1:
+                        return float(next(iter(value.values())))
+                    raise ValueError(
+                        f"Evaluator '{name}' returned multiple metrics; provide a wrapper that returns one scalar"
+                    )
+                return float(value)
+
+            stages.append(EvaluationStage(name=evaluator_name, evaluator=_invoke))
+        return stages
+
+    @staticmethod
+    def _attach_mcts_archive(
+        environment: BaseEnv,
+        archive_key: str,
+        archive: ProgramArchive,
+        round_history: list[dict[str, Any]],
+        best_branch: Any,
+    ) -> None:
+        attach_context = getattr(environment, "globals", {}).get("attach_context") if hasattr(environment, "globals") else None
+        if not callable(attach_context):
+            return
+        try:
+            attach_context(
+                f"mcts_archive_{archive_key}",
+                {
+                    "archive_key": archive_key,
+                    "archive_size": archive.size(),
+                    "best_branch": {
+                        "branch_id": best_branch.branch_id,
+                        "total_score": best_branch.total_score,
+                        "aggregated_metrics": dict(best_branch.aggregated_metrics),
+                        "final_code": best_branch.final_code,
+                        "strategy_name": best_branch.strategy_name,
+                        "strategy": dict(best_branch.strategy or {}),
+                    },
+                    "archive_entries": [
+                        {
+                            "branch_id": branch.branch_id,
+                            "total_score": branch.total_score,
+                            "aggregated_metrics": dict(branch.aggregated_metrics),
+                            "pruned_reason": branch.pruned_reason,
+                            "final_code": branch.final_code,
+                            "strategy_name": branch.strategy_name,
+                            "strategy": dict(branch.strategy or {}),
+                        }
+                        for branch in archive.sample(6)
+                    ],
+                    "round_history": round_history,
+                },
+                kind="mcts_archive",
+                metadata={"archive_key": archive_key, "rounds": len(round_history)},
+            )
+        except Exception:
+            pass
+
     def completion(
         self,
         prompt: str | dict[str, Any],
@@ -448,10 +531,17 @@ class RLM:
             # ── Evolution 6.3: MCTS Branching ─────────────────────────────────
             if mcts_branches > 0 and self.depth == 0:
                 _mcts_prompt = prompt if isinstance(prompt, str) else str(prompt)
+                archive_key = hashlib.sha1(_mcts_prompt.strip().encode("utf-8", errors="ignore")).hexdigest()[:16]
+                archive_store = getattr(self, "_mcts_archives", None)
+                if archive_store is None:
+                    archive_store = {}
+                    self._mcts_archives = archive_store
+                archive = archive_store.setdefault(archive_key, ProgramArchive())
                 orchestrator = MCTSOrchestrator(
                     lm_handler_address=lm_handler.address if hasattr(lm_handler, "address") else None,
                     branches=mcts_branches,
                     max_depth=2,
+                    evaluation_stages=self._build_mcts_evaluation_stages(environment),
                     event_bus=self.event_bus,
                 )
 
@@ -459,11 +549,18 @@ class RLM:
                     return lm_handler.completion(p)
 
                 try:
-                    variants = generate_branch_variants(
-                        _mcts_prompt, mcts_branches, _direct_llm
+                    search_result = evolutionary_branch_search(
+                        _mcts_prompt,
+                        mcts_branches,
+                        _direct_llm,
+                        orchestrator,
+                        rounds=2,
+                        elite_count=min(2, mcts_branches),
+                        archive=archive,
                     )
-                    branch_code_blocks = [[v] for v in variants]
-                    best_branch = orchestrator.run(branch_code_blocks)
+                    best_branch = search_result["best_branch"]
+                    round_history = search_result["history"]
+                    self._attach_mcts_archive(environment, archive_key, archive, round_history, best_branch)
 
                     # Seed winner's namespace into the main environment
                     if hasattr(environment, "locals") and best_branch.repl_locals:
@@ -476,12 +573,17 @@ class RLM:
                             "best_branch": best_branch.branch_id,
                             "best_score": best_branch.total_score,
                             "seeded_vars": list(best_branch.repl_locals.keys()),
+                            "rounds": len(round_history),
+                            "winner_metrics": best_branch.aggregated_metrics,
+                            "archive_key": archive_key,
+                            "archive_size": archive.size(),
                         })
 
                     # Inject a summary of what MCTS found into the first user message
+                    best_round = max(round_history, key=lambda item: item["best_score"])
                     mcts_note = (
-                        f"\n[MCTS PRE-EXPLORATION: Ran {mcts_branches} parallel branches. "
-                        f"Best branch (score={best_branch.total_score:.1f}) found: "
+                        f"\n[MCTS PRE-EXPLORATION: Ran {mcts_branches} parallel branches across {len(round_history)} rounds. "
+                        f"Best branch (score={best_branch.total_score:.1f}, round={best_round['round']}, strategy={best_branch.strategy_name or 'unknown'}) found: "
                         f"{best_branch.final_code[:200]}]"
                     )
                     message_history[-1]["content"] += mcts_note

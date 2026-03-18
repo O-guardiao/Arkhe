@@ -389,7 +389,7 @@ class SiblingBus:
                 f"Payload de {sys.getsizeof(data):,} bytes excede o limite de "
                 f"{_MAX_PAYLOAD_BYTES:,} bytes por mensagem."
             )
-        normalized_signal = self._normalize_signal_type(signal_type or topic.rsplit("/", 1)[-1])
+        normalized_signal = self._normalize_signal_type(signal_type or "custom")
         channel = self._get_or_create_control_channel(topic)
         with channel.condition:
             channel.generation += 1

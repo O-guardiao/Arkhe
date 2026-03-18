@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import io
 import json
 import os
@@ -247,6 +248,7 @@ class LocalREPL(NonIsolatedEnv):
         self._context_attachments = ContextAttachmentStore()
         self._execution_timeline = ExecutionTimeline(on_record=self._publish_timeline_event)
         self._coordination_digest = CoordinationDigest()
+        self._mcts_archives: dict[str, Any] = {}
 
         # Setup globals, locals, and modules in environment.
         self.setup()
@@ -615,6 +617,11 @@ class LocalREPL(NonIsolatedEnv):
             approaches: list[str],
             context: str = "",
             max_depth: int = 2,
+            rounds: int = 1,
+            archive_key: str | None = None,
+            evaluators: list[str] | None = None,
+            evaluator_weights: dict[str, float] | None = None,
+            evaluator_thresholds: dict[str, float] | None = None,
         ) -> dict:
             """Run parallel MCTS exploration over candidate code approaches.
 
@@ -622,6 +629,11 @@ class LocalREPL(NonIsolatedEnv):
                 approaches: List of Python code strings (one per branch).
                 context: Human-readable description of what the code tries to do.
                 max_depth: Steps per branch before scoring (default 2).
+                rounds: If > 1, refine candidates using elite feedback across rounds.
+                archive_key: Optional stable key to reuse elites across calls.
+                evaluators: Optional names of REPL callables used as problem-grounded evaluators.
+                evaluator_weights: Optional per-evaluator weights.
+                evaluator_thresholds: Optional per-evaluator prune thresholds.
 
             Returns:
                 Dict with keys: winner_branch, winner_score, final_code,
@@ -629,14 +641,77 @@ class LocalREPL(NonIsolatedEnv):
 
             Cost: 1 REPL execution per approach per depth step. No LLM calls.
             """
-            from rlm.core.mcts import MCTSOrchestrator
+            from rlm.core.mcts import EvaluationStage, MCTSOrchestrator, ProgramArchive, evolutionary_branch_search
+
+            resolved_evaluators = list(evaluators or [])
+            if not resolved_evaluators and callable(self.globals.get("evaluate")):
+                resolved_evaluators = ["evaluate"]
+
+            def _invoke_named_evaluator(name: str, snapshot: dict[str, Any]) -> float:
+                fn = self.locals.get(name) or self.globals.get(name)
+                if not callable(fn):
+                    raise ValueError(f"Evaluator '{name}' was not found as a callable in the REPL")
+                try:
+                    value = fn(snapshot)
+                except TypeError:
+                    value = fn(
+                        snapshot["code"],
+                        snapshot["stdout"],
+                        snapshot["stderr"],
+                        snapshot["locals"],
+                    )
+                if isinstance(value, dict):
+                    if name in value:
+                        return float(value[name])
+                    if len(value) == 1:
+                        return float(next(iter(value.values())))
+                    raise ValueError(
+                        f"Evaluator '{name}' returned multiple metrics; provide a wrapper that returns one scalar"
+                    )
+                return float(cast(Any, value))
+
+            stage_specs = []
+            for evaluator_name in resolved_evaluators:
+                stage_specs.append(
+                    EvaluationStage(
+                        name=evaluator_name,
+                        evaluator=lambda snapshot, stage_name=evaluator_name: _invoke_named_evaluator(stage_name, snapshot),
+                        weight=float((evaluator_weights or {}).get(evaluator_name, 1.0)),
+                        min_score=(evaluator_thresholds or {}).get(evaluator_name),
+                    )
+                )
 
             orchestrator = MCTSOrchestrator(
                 lm_handler_address=self.lm_handler_address,
                 max_depth=max_depth,
+                evaluation_stages=stage_specs,
             )
-            branch_code_blocks = [[code] for code in approaches]
-            best = orchestrator.run(branch_code_blocks)
+            archive_store = self._mcts_archives
+            resolved_archive_key = archive_key or hashlib.sha1(
+                (context or "|".join(approaches)).encode("utf-8", errors="ignore")
+            ).hexdigest()[:16]
+            archive = archive_store.setdefault(resolved_archive_key, ProgramArchive())
+
+            def _replay_llm(_: str) -> str:
+                return "\n---BRANCH---\n".join(approaches)
+
+            if rounds > 1:
+                search_result = evolutionary_branch_search(
+                    context or "MCTS REPL exploration",
+                    len(approaches),
+                    _replay_llm,
+                    orchestrator,
+                    rounds=rounds,
+                    elite_count=min(2, len(approaches)),
+                    archive=archive,
+                )
+                best = search_result["best_branch"]
+                history = search_result["history"]
+            else:
+                branch_code_blocks = [[code] for code in approaches]
+                best = orchestrator.run(branch_code_blocks)
+                archive.update(orchestrator.top_results(include_pruned=False))
+                history = []
 
             # Seed winner's variables into the current REPL namespace
             seeded = []
@@ -645,12 +720,29 @@ class LocalREPL(NonIsolatedEnv):
                     self.locals[k] = v
                     seeded.append(k)
 
+            self.record_runtime_event(
+                "mcts.archive.updated",
+                {
+                    "archive_key": resolved_archive_key,
+                    "archive_size": archive.size(),
+                    "evaluators": resolved_evaluators,
+                    "winner_branch": best.branch_id,
+                    "winner_score": best.total_score,
+                },
+                origin="mcts",
+            )
+
             return {
                 "winner_branch": best.branch_id,
                 "winner_score": best.total_score,
                 "final_code": best.final_code,
                 "seeded_vars": seeded,
-                "all_branch_scores": {r.branch_id: r.total_score for r in [best]},
+                "all_branch_scores": {r.branch_id: r.total_score for r in orchestrator.top_results(include_pruned=True)},
+                "history": history,
+                "archive_key": resolved_archive_key,
+                "archive_size": archive.size(),
+                "evaluators": resolved_evaluators,
+                "winner_metrics": best.aggregated_metrics,
             }
 
         self.globals["mcts_explore"] = _mcts_explore

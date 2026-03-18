@@ -21,11 +21,23 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rlm.core.mcts import (
+    apply_search_replace_blocks,
     BranchResult,
+    build_strategy_prompt,
+    default_recursive_strategies,
+    EvaluationStage,
+    generate_recursive_strategies,
     MCTSOrchestrator,
+    generate_diff_mutation_variants,
+    ProgramArchive,
+    parse_search_replace_blocks,
+    RecursiveStrategy,
     SandboxREPL,
     default_score_fn,
+    evolutionary_branch_search,
+    generate_refined_branch_variants,
     generate_branch_variants,
+    summarize_branch_feedback,
 )
 from rlm.core.types import REPLResult
 
@@ -211,6 +223,10 @@ class TestMCTSOrchestratorInit:
         fn = lambda s, e, c: 99.0
         orch = MCTSOrchestrator(score_fn=fn)
         assert orch.score_fn is fn
+
+    def test_evaluation_stages_defaults_to_empty(self):
+        orch = MCTSOrchestrator()
+        assert orch.evaluation_stages == []
 
 
 # ===========================================================================
@@ -437,6 +453,7 @@ class TestMCTSOrchestratorRun:
         orch = MCTSOrchestrator(branches=1, max_depth=1)
         result = orch.run([["x = 42"]])
         assert result.repl_locals.get("x") == 42
+        assert result.aggregated_metrics["heuristic"] > 0
 
     @patch("rlm.core.mcts.SandboxREPL")
     def test_steps_truncate_output(self, mock_cls):
@@ -470,6 +487,79 @@ class TestMCTSOrchestratorRun:
         # Cada step score = 4.0 (short code -0.5 se <30 chars) → 3.5 cada
         # c1, c2, c3 têm 2 chars → -0.5 cada → score per step = 3.5
         assert result.total_score == pytest.approx(3.5 * 3)
+
+    @patch("rlm.core.mcts.SandboxREPL")
+    def test_top_results_returns_sorted_branches(self, mock_cls):
+        mock_cls.side_effect = _make_mock_repl(
+            results_by_code={
+                "bad": {"stdout": "", "stderr": "Traceback bad"},
+                "mid": {"stdout": "ok", "stderr": ""},
+                "good": {"stdout": "42", "stderr": ""},
+            }
+        )
+        orch = MCTSOrchestrator(branches=3, max_depth=1)
+        orch.run([["bad"], ["mid"], ["good"]])
+
+        ranked = orch.top_results(2, include_pruned=True)
+        assert [branch.branch_id for branch in ranked] == [2, 1]
+
+    @patch("rlm.core.mcts.SandboxREPL")
+    def test_evaluation_stage_contributes_to_score(self, mock_cls):
+        """Stages extras somam ao score e ficam registrados nas métricas."""
+        mock_cls.side_effect = _make_mock_repl(
+            results_by_code={"good": {"stdout": "42", "stderr": "", "_locals": {"x": 42}}}
+        )
+        stage = EvaluationStage(
+            name="has_x",
+            evaluator=lambda snapshot: 2.0 if snapshot["locals"].get("x") == 42 else -1.0,
+            weight=1.5,
+        )
+        orch = MCTSOrchestrator(branches=1, max_depth=1, evaluation_stages=[stage])
+        result = orch.run([["good"]])
+
+        assert result.total_score == pytest.approx(3.5 + 3.0)
+        assert result.aggregated_metrics["has_x"] == pytest.approx(2.0)
+        assert result.steps[0]["metrics"]["has_x"] == pytest.approx(2.0)
+
+    @patch("rlm.core.mcts.SandboxREPL")
+    def test_evaluation_stage_can_prune_branch(self, mock_cls):
+        """Stage com threshold falhando derruba a branch cedo."""
+        mock_cls.side_effect = _make_mock_repl(
+            results_by_code={"good": {"stdout": "42", "stderr": "", "_locals": {"x": 42}}}
+        )
+        reject_stage = EvaluationStage(
+            name="reject",
+            evaluator=lambda snapshot: -1.0,
+            min_score=0.0,
+        )
+        accept_stage = EvaluationStage(
+            name="accept",
+            evaluator=lambda snapshot: 1.0,
+        )
+        orch = MCTSOrchestrator(branches=2, max_depth=1, evaluation_stages=[reject_stage, accept_stage])
+        result = orch.run([["good"], ["good"]])
+
+        assert result.total_score == -999
+        assert result.pruned_reason == "stage:reject"
+
+    @patch("rlm.core.mcts.SandboxREPL")
+    def test_stage_events_emitted(self, mock_cls):
+        """Event bus recebe eventos de score e prune de stages."""
+        mock_cls.side_effect = _make_mock_repl(
+            results_by_code={"good": {"stdout": "42", "stderr": "", "_locals": {"x": 42}}}
+        )
+        bus = MagicMock()
+        stage = EvaluationStage(
+            name="reject",
+            evaluator=lambda snapshot: -1.0,
+            min_score=0.0,
+        )
+        orch = MCTSOrchestrator(branches=1, max_depth=1, event_bus=bus, evaluation_stages=[stage])
+        orch.run([["good"]])
+
+        events = [call[0][0] for call in bus.emit.call_args_list]
+        assert "mcts_stage_scored" in events
+        assert "mcts_stage_prune" in events
 
 
 # ===========================================================================
@@ -603,6 +693,172 @@ class TestGenerateBranchVariants:
         assert "x = 1" in result[0]
 
 
+class TestEvolutionaryHelpers:
+    def test_generate_recursive_strategies_parses_json(self):
+        result = generate_recursive_strategies(
+            "solve a novel problem",
+            1,
+            lambda prompt: '[{"name":"probe","recursion_prompt":"probe first","decomposition_plan":["probe","delegate"],"coordination_policy":"stop_on_solution","stop_condition":"stop when solved","repl_search_mode":"probe","meta_prompt":"be empirical"}]',
+        )
+        assert len(result) == 1
+        assert result[0].name == "probe"
+
+    def test_build_strategy_prompt_contains_recursive_fields(self):
+        strategy = RecursiveStrategy(
+            name="parallel",
+            recursion_prompt="decompose",
+            decomposition_plan=["step a", "step b"],
+            coordination_policy="stop_on_solution",
+            stop_condition="stop early",
+            repl_search_mode="parallel_branch_search",
+            meta_prompt="test",
+        )
+        prompt = build_strategy_prompt("solve task", strategy)
+        assert "Recursive strategy name: parallel" in prompt
+        assert "Coordination policy: stop_on_solution" in prompt
+
+    def test_parse_and_apply_search_replace_blocks(self):
+        raw = """<<<<<<< SEARCH
+print('old')
+=======
+print('new')
+>>>>>>> REPLACE"""
+        blocks = parse_search_replace_blocks(raw)
+        assert blocks == [("print('old')", "print('new')")]
+        updated = apply_search_replace_blocks("x = 1\nprint('old')\n", blocks)
+        assert "print('new')" in updated
+
+    def test_program_archive_keeps_best_per_niche(self):
+        archive = ProgramArchive(max_size=4, niche_fn=lambda branch: branch.final_code.split("(")[0])
+        worse = BranchResult(0, [], 2.0, "print('a')", {}, {"heuristic": 2.0})
+        better = BranchResult(1, [], 5.0, "print('a')", {}, {"heuristic": 5.0})
+        other = BranchResult(2, [], 4.0, "value = 1", {}, {"heuristic": 4.0})
+
+        archive.update([worse, better, other])
+        sampled = archive.sample()
+
+        assert [branch.total_score for branch in sampled] == [5.0, 4.0]
+
+    def test_summarize_branch_feedback_renders_metrics(self):
+        branch = BranchResult(
+            branch_id=1,
+            steps=[],
+            total_score=7.5,
+            final_code="print(42)",
+            repl_locals={},
+            aggregated_metrics={"heuristic": 3.5, "simplicity": 2.0},
+        )
+        summary = summarize_branch_feedback([branch])
+        assert "Branch 1" in summary
+        assert "heuristic=3.50" in summary
+        assert "simplicity=2.00" in summary
+
+    def test_generate_refined_branch_variants_includes_feedback(self):
+        branch = BranchResult(
+            branch_id=0,
+            steps=[],
+            total_score=5.0,
+            final_code="print('elite')",
+            repl_locals={},
+            aggregated_metrics={"heuristic": 5.0},
+        )
+        captured = {}
+
+        def mock_llm(prompt):
+            captured["prompt"] = prompt
+            return "```python\nprint('new idea')\n```"
+
+        result = generate_refined_branch_variants("solve task", [branch], 1, mock_llm)
+        assert "Current elite code" in captured["prompt"]
+        assert "print('elite')" in captured["prompt"]
+        assert result == ["print('new idea')"]
+
+    def test_generate_diff_mutation_variants_applies_search_replace(self):
+        elite = BranchResult(
+            branch_id=0,
+            steps=[],
+            total_score=5.0,
+            final_code="value = 1\nprint(value)",
+            repl_locals={},
+            aggregated_metrics={"heuristic": 5.0},
+        )
+
+        result = generate_diff_mutation_variants(
+            "improve candidate",
+            [elite],
+            1,
+            lambda prompt: """<<<<<<< SEARCH
+value = 1
+=======
+value = 2
+>>>>>>> REPLACE""",
+        )
+        assert result == ["value = 2\nprint(value)"]
+
+    @patch("rlm.core.mcts.SandboxREPL")
+    def test_evolutionary_branch_search_uses_second_round_feedback(self, mock_cls):
+        mock_cls.side_effect = _make_mock_repl(
+            results_by_code={
+                "print('draft')": {"stdout": "draft", "stderr": ""},
+                "print('improved 42')": {"stdout": "42", "stderr": "", "_locals": {"answer": 42}},
+            }
+        )
+        prompts = []
+
+        def mock_llm(prompt):
+            prompts.append(prompt)
+            if "Return a JSON array only." in prompt:
+                return '[{"name":"probe","recursion_prompt":"probe first","decomposition_plan":["probe"],"coordination_policy":"stop_on_solution","stop_condition":"stop when solved","repl_search_mode":"probe","meta_prompt":"empirical"}]'
+            if "Return 1 strategy JSON objects" in prompt:
+                return '[{"name":"refine","recursion_prompt":"refine strategy","decomposition_plan":["refine"],"coordination_policy":"switch_strategy","stop_condition":"switch when stalled","repl_search_mode":"serial","meta_prompt":"improve"}]'
+            if "Current elite code" in prompt:
+                return """<<<<<<< SEARCH
+print('draft')
+=======
+print('improved 42')
+>>>>>>> REPLACE"""
+            return "```python\nprint('draft')\n```"
+
+        orch = MCTSOrchestrator(branches=1, max_depth=1)
+        result = evolutionary_branch_search(
+            "find something novel",
+            1,
+            mock_llm,
+            orch,
+            rounds=2,
+            elite_count=1,
+        )
+
+        assert len(result["history"]) == 2
+        assert result["best_branch"].final_code == "print('improved 42')"
+        assert result["best_branch"].strategy_name == "refine"
+        assert any("Current elite code" in prompt for prompt in prompts)
+
+    @patch("rlm.core.mcts.SandboxREPL")
+    def test_evolutionary_branch_search_updates_archive(self, mock_cls):
+        mock_cls.side_effect = _make_mock_repl(
+            results_by_code={"print('42')": {"stdout": "42", "stderr": ""}}
+        )
+        archive = ProgramArchive(max_size=4)
+        orch = MCTSOrchestrator(branches=1, max_depth=1)
+
+        result = evolutionary_branch_search(
+            "find novelty",
+            1,
+            lambda prompt: (
+                '[{"name":"probe","recursion_prompt":"probe","decomposition_plan":["probe"],"coordination_policy":"stop_on_solution","stop_condition":"stop","repl_search_mode":"probe","meta_prompt":""}]'
+                if "Return a JSON array only." in prompt
+                else "```python\nprint('42')\n```"
+            ),
+            orch,
+            rounds=1,
+            elite_count=1,
+            archive=archive,
+        )
+
+        assert result["archive"].size() >= 1
+
+
 # ===========================================================================
 # Integração: SandboxREPL real (não mockado)
 # ===========================================================================
@@ -717,9 +973,9 @@ class TestMCTSOrchestratorIntegration:
 
 class TestKnownBugs:
     def test_empty_code_blocks_crashes(self):
-        """BUG DOCUMENTADO: run([]) causa ValueError em max()."""
+        """run([]) falha cedo com erro explícito."""
         orch = MCTSOrchestrator()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="at least one branch"):
             orch.run([])
 
     @patch("rlm.core.mcts.SandboxREPL")

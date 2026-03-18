@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from rlm.core.sibling_bus import SiblingBus
+from rlm.core.mcts import BranchResult, ProgramArchive
+from rlm.core.rlm import RLM
 from rlm.environments.local_repl import LocalREPL
 
 
@@ -365,4 +367,84 @@ timeline_mark("checkpoint.prepared", {"ok": True})
 
         assert response["runtime"]["coordination"]["filters"]["branch_id"] == 0
         assert response["runtime"]["coordination"]["events"][0]["topic"] == "control/stop"
+        repl.cleanup()
+
+
+class TestLocalREPLMCTSExplore:
+    def test_mcts_explore_uses_problem_evaluator(self):
+        repl = LocalREPL()
+        repl.execute_code(
+            '''
+def evaluate(snapshot):
+    return float(snapshot["locals"].get("score", -100))
+'''
+        )
+
+        result = repl.globals["mcts_explore"](
+            [
+                "score = 1\nprint(score)",
+                "score = 9\nprint(score)",
+            ],
+            context="maximize score",
+            evaluators=["evaluate"],
+        )
+
+        assert result["winner_score"] > 0
+        assert result["winner_metrics"]["evaluate"] == 9.0
+        assert repl.locals["score"] == 9
+        repl.cleanup()
+
+    def test_mcts_explore_reuses_archive_key_across_calls(self):
+        repl = LocalREPL()
+        first = repl.globals["mcts_explore"](
+            ["value = 1\nprint(value)"],
+            context="keep archive",
+            archive_key="shared-problem",
+        )
+        second = repl.globals["mcts_explore"](
+            ["value = 2\nprint(value)"],
+            context="keep archive",
+            archive_key="shared-problem",
+        )
+
+        assert first["archive_key"] == "shared-problem"
+        assert second["archive_key"] == "shared-problem"
+        assert second["archive_size"] >= first["archive_size"]
+        repl.cleanup()
+
+
+class TestRLMMCTSHelpers:
+    def test_build_mcts_evaluation_stages_from_environment(self):
+        repl = LocalREPL()
+        repl.execute_code(
+            '''
+def evaluate(snapshot):
+    return 3.0
+'''
+        )
+
+        stages = RLM._build_mcts_evaluation_stages(repl)
+        assert len(stages) == 1
+        score = stages[0].evaluate({"code": "", "stdout": "", "stderr": "", "locals": {}, "step_metrics": {}, "total_score": 0.0})
+        assert score == 3.0
+        repl.cleanup()
+
+    def test_attach_mcts_archive_creates_runtime_attachment(self):
+        repl = LocalREPL()
+        archive = ProgramArchive()
+        branch = BranchResult(
+            branch_id=1,
+            steps=[],
+            total_score=7.0,
+            final_code="print(42)",
+            repl_locals={},
+            aggregated_metrics={"heuristic": 4.0},
+        )
+        archive.update([branch])
+
+        RLM._attach_mcts_archive(repl, "abc123", archive, [{"round": 1, "best_score": 7.0}], branch)
+        attachments = repl.globals["attachment_list"](kind="mcts_archive")
+
+        assert len(attachments) == 1
+        assert attachments[0]["metadata"]["archive_key"] == "abc123"
         repl.cleanup()
