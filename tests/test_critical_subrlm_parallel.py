@@ -303,6 +303,217 @@ class TestIndividualFailureTolerance:
         )
         env.cleanup()
 
+    def test_parallel_inherits_active_strategy_policy_when_argument_is_omitted(self):
+        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+
+        env = LocalREPL()
+        env.set_active_recursive_strategy(
+            {
+                "strategy_name": "parallel_decompose",
+                "coordination_policy": "stop_on_solution",
+                "stop_condition": "stop on first viable path",
+                "repl_search_mode": "parallel_branch_search",
+            },
+            origin="test",
+        )
+        parent = SimpleNamespace(
+            depth=0,
+            max_depth=3,
+            backend="openai",
+            backend_kwargs={"model_name": "gpt-4o-mini"},
+            environment_type="local",
+            environment_kwargs={},
+            event_bus=None,
+            _persistent_env=env,
+            _async_bus=None,
+            _async_branch_counter=0,
+            _cancel_token=CancellationToken.NONE,
+            _shared_memory=None,
+            _active_recursive_strategy=env.get_active_recursive_strategy(),
+        )
+
+        def _side_effect(**kwargs):
+            branch_id = kwargs["environment_kwargs"]["_sibling_branch_id"]
+            cancel_event = kwargs["environment_kwargs"]["_cancel_event"]
+            instance = MagicMock()
+
+            def _completion(prompt):
+                completion = MagicMock()
+                if branch_id == 0:
+                    completion.response = "winner-result"
+                    return completion
+                while not cancel_event.is_set():
+                    time.sleep(0.01)
+                completion.response = "[CANCELLED] inherited strategy stop"
+                return completion
+
+            instance.completion.side_effect = _completion
+            return instance
+
+        mock_cls = MagicMock(side_effect=_side_effect)
+        par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
+        result = par(["winner task", "redundant task"], timeout_s=2.0)
+        snapshot = env.get_runtime_state_snapshot(coordination_limit=20)
+
+        assert result[0] == "winner-result"
+        assert result[1].startswith("[CANCELLED branch 1]")
+        assert snapshot["coordination"]["latest_parallel_summary"]["strategy"]["strategy_name"] == "parallel_decompose"
+        assert snapshot["coordination"]["latest_parallel_summary"]["strategy"]["coordination_policy"] == "stop_on_solution"
+        env.cleanup()
+
+    def test_consensus_policy_waits_for_second_success_before_cancelling(self):
+        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+
+        env = LocalREPL()
+        env.set_active_recursive_strategy(
+            {
+                "strategy_name": "probe_then_consensus",
+                "coordination_policy": "consensus_reached",
+                "stop_condition": "stop after two agreeing branches",
+                "repl_search_mode": "probe_and_delegate",
+            },
+            origin="test",
+        )
+        parent = SimpleNamespace(
+            depth=0,
+            max_depth=3,
+            backend="openai",
+            backend_kwargs={"model_name": "gpt-4o-mini"},
+            environment_type="local",
+            environment_kwargs={},
+            event_bus=None,
+            _persistent_env=env,
+            _async_bus=None,
+            _async_branch_counter=0,
+            _cancel_token=CancellationToken.NONE,
+            _shared_memory=None,
+            _active_recursive_strategy=env.get_active_recursive_strategy(),
+        )
+
+        def _side_effect(**kwargs):
+            branch_id = kwargs["environment_kwargs"]["_sibling_branch_id"]
+            cancel_event = kwargs["environment_kwargs"]["_cancel_event"]
+            instance = MagicMock()
+
+            def _completion(prompt):
+                completion = MagicMock()
+                if branch_id in {0, 1}:
+                    time.sleep(0.03 * branch_id)
+                    completion.response = f"consensus-{branch_id}"
+                    return completion
+                while not cancel_event.is_set():
+                    time.sleep(0.01)
+                completion.response = "[CANCELLED] consensus reached"
+                return completion
+
+            instance.completion.side_effect = _completion
+            return instance
+
+        mock_cls = MagicMock(side_effect=_side_effect)
+        par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
+        result = par(["task-0", "task-1", "task-2"], timeout_s=2.0)
+        snapshot = env.get_runtime_state_snapshot(coordination_limit=20)
+
+        assert result[0] == "consensus-0"
+        assert result[1] == "consensus-1"
+        assert result[2].startswith("[CANCELLED branch 2]")
+        assert snapshot["coordination"]["latest_parallel_summary"]["cancelled_count"] == 1
+        assert snapshot["coordination"]["latest_parallel_summary"]["strategy"]["coordination_policy"] == "consensus_reached"
+        assert any(
+            event["operation"] == "control_publish" and event["topic"] == "control/consensus_reached"
+            for event in snapshot["coordination"]["events"]
+        )
+        env.cleanup()
+
+    def test_switch_strategy_replans_failed_branch_in_second_phase(self):
+        from rlm.core.mcts import BranchResult, ProgramArchive
+        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+
+        env = LocalREPL()
+        archive = ProgramArchive()
+        archive.update(
+            [
+                BranchResult(
+                    branch_id=0,
+                    steps=[],
+                    total_score=9.0,
+                    final_code="sub_rlm_parallel(['probe', 'refine'])",
+                    repl_locals={},
+                    aggregated_metrics={"heuristic": 5.0},
+                    strategy_name="parallel_decompose",
+                    strategy={
+                        "name": "parallel_decompose",
+                        "coordination_policy": "switch_strategy",
+                        "stop_condition": "switch when stalled",
+                        "repl_search_mode": "parallel_branch_search",
+                    },
+                )
+            ]
+        )
+        env.set_active_recursive_strategy(
+            {
+                "strategy_name": "parallel_decompose",
+                "coordination_policy": "switch_strategy",
+                "stop_condition": "switch when stalled",
+                "repl_search_mode": "parallel_branch_search",
+                "archive_key": "switch-archive",
+            },
+            origin="test",
+        )
+        parent = SimpleNamespace(
+            depth=0,
+            max_depth=3,
+            backend="openai",
+            backend_kwargs={"model_name": "gpt-4o-mini"},
+            environment_type="local",
+            environment_kwargs={},
+            event_bus=None,
+            _persistent_env=env,
+            _async_bus=None,
+            _async_branch_counter=0,
+            _cancel_token=CancellationToken.NONE,
+            _shared_memory=None,
+            _active_recursive_strategy=env.get_active_recursive_strategy(),
+            _active_mcts_archive_key="switch-archive",
+            _mcts_archives={"switch-archive": archive},
+        )
+
+        branch_calls = {0: 0, 1: 0}
+
+        def _side_effect(**kwargs):
+            branch_id = kwargs["environment_kwargs"]["_sibling_branch_id"]
+            instance = MagicMock()
+
+            def _completion(prompt):
+                branch_calls[branch_id] += 1
+                completion = MagicMock()
+                if branch_id == 0:
+                    completion.response = "winner-phase-1"
+                    return completion
+                if "parallel_phase_2_replan" in prompt and "switch-archive" in prompt:
+                    completion.response = "phase-2 success"
+                    return completion
+                raise RuntimeError("stalled first-wave branch")
+
+            instance.completion.side_effect = _completion
+            return instance
+
+        mock_cls = MagicMock(side_effect=_side_effect)
+        par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
+        result = par(["winner task", "needs replan"], timeout_s=2.0)
+        snapshot = env.get_runtime_state_snapshot(coordination_limit=20)
+
+        assert result[0] == "winner-phase-1"
+        assert result[1] == "phase-2 success"
+        assert branch_calls[1] == 2
+        assert snapshot["coordination"]["latest_parallel_summary"]["strategy"]["coordination_policy"] == "switch_strategy"
+        assert snapshot["coordination"]["latest_parallel_summary"]["stop_evaluation"]["mode"] == "stagnation"
+        assert any(
+            event["operation"] == "control_publish" and event["topic"] == "control/switch_strategy"
+            for event in snapshot["coordination"]["events"]
+        )
+        env.cleanup()
+
     def test_failed_task_result_contains_erro_prefix(self):
         """Tarefa que falha retorna string começando com '[ERRO branch N]' entre as demais."""
         from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMError

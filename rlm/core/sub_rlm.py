@@ -36,6 +36,7 @@ from __future__ import annotations
 import queue as _queue_mod
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING, cast
 
@@ -82,22 +83,25 @@ def _register_parent_subagent_task(
     task_preview: str,
     task_id: int | None = None,
     parent_task_id: int | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> int | None:
     env = _get_parent_env(parent)
     if env is None:
         return task_id
 
-    metadata = {
+    task_metadata = {
         "mode": mode,
         "branch_id": branch_id,
         "child_depth": child_depth,
         "task_preview": task_preview,
     }
+    if metadata:
+        task_metadata.update(dict(metadata))
     if task_id is not None:
         update = getattr(env, "update_subagent_task", None)
         if callable(update):
             try:
-                update(task_id=task_id, branch_id=branch_id, metadata=metadata)
+                update(task_id=task_id, branch_id=branch_id, metadata=task_metadata)
                 return task_id
             except Exception:
                 return task_id
@@ -111,7 +115,7 @@ def _register_parent_subagent_task(
                 title=title,
                 branch_id=branch_id,
                 parent_task_id=parent_task_id,
-                metadata=metadata,
+                metadata=task_metadata,
             )
             if isinstance(task, dict) and "task_id" in task:
                 return int(task["task_id"])
@@ -189,6 +193,8 @@ def _set_parent_parallel_summary(
     cancelled_count: int,
     failed_count: int,
     total_tasks: int,
+    strategy: dict[str, Any] | None = None,
+    stop_evaluation: dict[str, Any] | None = None,
 ) -> None:
     env = _get_parent_env(parent)
     summary = getattr(env, "set_parallel_summary", None)
@@ -199,9 +205,233 @@ def _set_parent_parallel_summary(
                 cancelled_count=cancelled_count,
                 failed_count=failed_count,
                 total_tasks=total_tasks,
+                strategy=strategy,
+                stop_evaluation=stop_evaluation,
             )
         except Exception:
             pass
+
+
+def _get_parent_active_recursive_strategy(parent: "RLM") -> dict[str, Any] | None:
+    strategy = getattr(parent, "_active_recursive_strategy", None)
+    if isinstance(strategy, dict) and strategy:
+        return dict(strategy)
+    env = _get_parent_env(parent)
+    getter = getattr(env, "get_active_recursive_strategy", None)
+    if callable(getter):
+        try:
+            value = getter()
+        except Exception:
+            return None
+        if isinstance(value, dict) and value:
+            return dict(value)
+    return None
+
+
+def _resolve_parallel_strategy(
+    parent: "RLM",
+    *,
+    coordination_policy: str | None,
+) -> dict[str, Any]:
+    active_strategy = _get_parent_active_recursive_strategy(parent) or {}
+    resolved_policy = str(
+        coordination_policy
+        or active_strategy.get("coordination_policy")
+        or "stop_on_solution"
+    ).strip() or "stop_on_solution"
+    return {
+        "strategy_name": active_strategy.get("strategy_name") or active_strategy.get("name"),
+        "coordination_policy": resolved_policy,
+        "stop_condition": active_strategy.get("stop_condition", ""),
+        "repl_search_mode": active_strategy.get("repl_search_mode", ""),
+        "meta_prompt": active_strategy.get("meta_prompt", ""),
+        "archive_key": active_strategy.get("archive_key") or getattr(parent, "_active_mcts_archive_key", None),
+        "source": "explicit" if coordination_policy else ("active_strategy" if active_strategy else "default"),
+    }
+
+
+def _string_preview(value: Any, *, limit: int = 180) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _extract_answer_text(answer: Any) -> str:
+    if isinstance(answer, SubRLMArtifactResult):
+        return str(answer.answer)
+    return str(answer)
+
+
+def _merge_context_fragments(*parts: str) -> str:
+    chunks = [str(part).strip() for part in parts if str(part).strip()]
+    return "\n\n".join(chunks)
+
+
+def _get_parent_archive_snapshot(parent: "RLM", *, limit: int = 3) -> dict[str, Any] | None:
+    strategy = _get_parent_active_recursive_strategy(parent) or {}
+    archive_key = strategy.get("archive_key") or getattr(parent, "_active_mcts_archive_key", None)
+    stores = [
+        getattr(parent, "_mcts_archives", None),
+        getattr(_get_parent_env(parent), "_mcts_archives", None),
+    ]
+
+    archive = None
+    resolved_archive_key = archive_key
+    for store in stores:
+        if not isinstance(store, dict) or not store:
+            continue
+        if resolved_archive_key and resolved_archive_key in store:
+            archive = store[resolved_archive_key]
+            break
+        if resolved_archive_key is None and len(store) == 1:
+            resolved_archive_key, archive = next(iter(store.items()))
+            break
+
+    if archive is None:
+        return None
+
+    sample = getattr(archive, "sample", None)
+    if not callable(sample):
+        return None
+
+    entries: list[dict[str, Any]] = []
+    try:
+        sampled = cast(list[Any], sample(limit))
+    except Exception:
+        return None
+
+    for branch in sampled:
+        entries.append(
+            {
+                "branch_id": getattr(branch, "branch_id", None),
+                "strategy_name": getattr(branch, "strategy_name", None),
+                "total_score": getattr(branch, "total_score", None),
+                "final_code": _string_preview(getattr(branch, "final_code", ""), limit=140),
+                "aggregated_metrics": dict(getattr(branch, "aggregated_metrics", {}) or {}),
+            }
+        )
+    return {
+        "archive_key": resolved_archive_key,
+        "entries": entries,
+    }
+
+
+def _format_archive_guidance(archive_snapshot: dict[str, Any] | None) -> str:
+    if not archive_snapshot or not archive_snapshot.get("entries"):
+        return ""
+    lines = [f"MCTS archive key: {archive_snapshot.get('archive_key')}"]
+    for idx, entry in enumerate(archive_snapshot["entries"], start=1):
+        lines.append(
+            f"- Archive elite {idx}: strategy={entry.get('strategy_name') or 'unknown'}, "
+            f"score={entry.get('total_score')}, hint={entry.get('final_code')}"
+        )
+    return "\n".join(lines)
+
+
+def _compute_parallel_heuristics(
+    *,
+    total_tasks: int,
+    answers: list[Any],
+    errors: list[str | None],
+) -> dict[str, Any]:
+    success_texts = [
+        _string_preview(_extract_answer_text(answer), limit=120).lower()
+        for answer in answers
+        if answer is not None
+    ]
+    success_count = len(success_texts)
+    failed_count = sum(1 for err in errors if err is not None and not str(err).startswith("[CANCELLED branch"))
+    cancelled_count = sum(1 for err in errors if err is not None and str(err).startswith("[CANCELLED branch"))
+    unresolved_count = max(0, total_tasks - success_count - failed_count - cancelled_count)
+    dominant_answer_ratio = 0.0
+    if success_texts:
+        dominant_answer_ratio = max(Counter(success_texts).values()) / max(1, success_count)
+    completion_ratio = (success_count + failed_count + cancelled_count) / max(1, total_tasks)
+    failure_ratio = failed_count / max(1, total_tasks)
+    cancelled_ratio = cancelled_count / max(1, total_tasks)
+    convergence_target = min(total_tasks, 2)
+    converged = success_count >= convergence_target or dominant_answer_ratio >= 0.66
+    stalled = success_count <= 1 and (failed_count + cancelled_count) >= max(1, total_tasks - success_count)
+    return {
+        "total_tasks": total_tasks,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "cancelled_count": cancelled_count,
+        "unresolved_count": unresolved_count,
+        "completion_ratio": completion_ratio,
+        "failure_ratio": failure_ratio,
+        "cancelled_ratio": cancelled_ratio,
+        "dominant_answer_ratio": dominant_answer_ratio,
+        "convergence_target": convergence_target,
+        "converged": converged,
+        "stalled": stalled,
+    }
+
+
+def _infer_stop_condition_mode(stop_condition: str, coordination_policy: str) -> str:
+    normalized = str(stop_condition or "").strip().lower()
+    if coordination_policy == "switch_strategy" or any(token in normalized for token in ("stall", "stagn", "switch", "improv")):
+        return "stagnation"
+    if coordination_policy == "consensus_reached" or any(token in normalized for token in ("converg", "consensus", "agree")):
+        return "convergence"
+    return "first_success"
+
+
+def _evaluate_stop_condition(
+    *,
+    stop_condition: str,
+    coordination_policy: str,
+    heuristics: dict[str, Any],
+) -> dict[str, Any]:
+    mode = _infer_stop_condition_mode(stop_condition, coordination_policy)
+    if mode == "stagnation":
+        reached = bool(heuristics.get("stalled"))
+    elif mode == "convergence":
+        reached = bool(heuristics.get("converged"))
+    else:
+        reached = int(heuristics.get("success_count", 0)) >= 1
+    return {
+        "mode": mode,
+        "reached": reached,
+        "heuristics": dict(heuristics),
+    }
+
+
+def _build_recursive_guidance_context(
+    parent: "RLM",
+    *,
+    strategy_context: dict[str, Any] | None,
+    branch_id: int | None,
+    phase_label: str,
+    winner_text: str | None = None,
+    stop_evaluation: dict[str, Any] | None = None,
+) -> str:
+    archive_snapshot = _get_parent_archive_snapshot(parent)
+    fragments: list[str] = []
+    if strategy_context and any(strategy_context.get(key) for key in ("strategy_name", "coordination_policy", "stop_condition", "repl_search_mode")):
+        fragments.append(
+            "[RECURSIVE STRATEGY GUIDANCE]\n"
+            f"Phase: {phase_label}\n"
+            f"Branch: {branch_id if branch_id is not None else 'serial'}\n"
+            f"Strategy: {strategy_context.get('strategy_name') or 'unknown'}\n"
+            f"Coordination policy: {strategy_context.get('coordination_policy') or 'unknown'}\n"
+            f"Stop condition: {strategy_context.get('stop_condition') or 'n/a'}\n"
+            f"REPL search mode: {strategy_context.get('repl_search_mode') or 'n/a'}"
+        )
+    archive_guidance = _format_archive_guidance(archive_snapshot)
+    if archive_guidance:
+        fragments.append("[MCTS ARCHIVE GUIDANCE]\n" + archive_guidance)
+    if winner_text:
+        fragments.append("[WINNING EVIDENCE]\n" + _string_preview(winner_text, limit=220))
+    if stop_evaluation:
+        fragments.append(
+            "[STOP HEURISTICS]\n"
+            f"Mode: {stop_evaluation.get('mode')}\n"
+            f"Reached: {stop_evaluation.get('reached')}\n"
+            f"Heuristics: {_string_preview(stop_evaluation.get('heuristics', {}), limit=240)}"
+        )
+    return "\n\n".join(fragment for fragment in fragments if fragment)
 
 
 # ---------------------------------------------------------------------------
@@ -383,10 +613,14 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
             )
 
         # ── Build prompt ─────────────────────────────────────────────────────
-        if context:
-            full_prompt = f"{context.rstrip()}\n\n{task.strip()}"
-        else:
-            full_prompt = task.strip()
+        strategy_context = _get_parent_active_recursive_strategy(parent) or {}
+        recursive_guidance = _build_recursive_guidance_context(
+            parent,
+            strategy_context=strategy_context,
+            branch_id=_sibling_branch_id,
+            phase_label="serial_recursive_call",
+        )
+        full_prompt = _merge_context_fragments(context, recursive_guidance, task)
 
         subagent_mode = "parallel" if _sibling_branch_id is not None else "serial"
         task_preview = task[:160]
@@ -451,6 +685,12 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
             verbose=False,   # filho silencioso por padrão
             event_bus=parent.event_bus,  # Lacuna 4: EventBus propaga
         )
+        if strategy_context:
+            child._active_recursive_strategy = dict(strategy_context)
+            child._active_mcts_archive_key = strategy_context.get("archive_key")
+        parent_archive_store = getattr(parent, "_mcts_archives", None)
+        if isinstance(parent_archive_store, dict):
+            child._mcts_archives = parent_archive_store
 
         # Lacuna 2: Propagar CancelToken do pai para filho serial
         _parent_token = getattr(parent, "_cancel_token", None)
@@ -1098,7 +1338,7 @@ def make_sub_rlm_parallel_fn(
         timeout_s: float = 300.0,
         max_workers: int = 5,
         return_artifacts: bool = False,
-        coordination_policy: str = "stop_on_solution",
+        coordination_policy: str | None = None,
     ) -> "list[str] | list[SubRLMArtifactResult]":
         """
         Executa N tarefas independentes em paralelo, retorna lista de respostas.
@@ -1150,10 +1390,17 @@ def make_sub_rlm_parallel_fn(
         if not tasks:
             return []
 
+        strategy_context = _resolve_parallel_strategy(
+            parent,
+            coordination_policy=coordination_policy,
+        )
+        resolved_policy = str(strategy_context["coordination_policy"])
+        consensus_target = min(len(tasks), 2)
+
         batch_task_id = _ensure_parallel_batch_root(
             parent,
             task_count=len(tasks),
-            coordination_policy=coordination_policy,
+            coordination_policy=resolved_policy,
         )
 
         _record_parent_runtime_event(
@@ -1164,7 +1411,8 @@ def make_sub_rlm_parallel_fn(
                 "max_workers": max_workers,
                 "child_depth": parent.depth + 1,
                 "batch_task_id": batch_task_id,
-                "coordination_policy": coordination_policy,
+                "coordination_policy": resolved_policy,
+                "strategy": strategy_context,
             },
         )
 
@@ -1184,6 +1432,9 @@ def make_sub_rlm_parallel_fn(
         branch_task_ids: dict[int, int | None] = {}
         winner_branch_id: int | None = None
         winner_lock = threading.Lock()
+        successful_branch_ids: set[int] = set()
+        switch_signal_published = False
+        consensus_signal_published = False
 
         for branch_id, task in enumerate(tasks):
             task_preview = task[:160]
@@ -1195,6 +1446,12 @@ def make_sub_rlm_parallel_fn(
                 child_depth=child_depth,
                 task_preview=task_preview,
                 parent_task_id=batch_task_id,
+                metadata={
+                    "coordination_policy": resolved_policy,
+                    "strategy_name": strategy_context.get("strategy_name"),
+                    "stop_condition": strategy_context.get("stop_condition"),
+                    "repl_search_mode": strategy_context.get("repl_search_mode"),
+                },
             )
 
         def _apply_stop_signal(source_branch_id: int | None, reason: str) -> None:
@@ -1215,23 +1472,89 @@ def make_sub_rlm_parallel_fn(
             if event.get("operation") != "control_publish":
                 return
             signal_type = str(event.get("metadata", {}).get("semantic_type", "")).strip()
-            if signal_type not in {"stop", "solution_found"}:
+            if signal_type == "switch_strategy":
+                return
+            if signal_type not in {"stop", "solution_found", "consensus_reached"}:
+                return
+            if signal_type == "solution_found" and resolved_policy != "stop_on_solution":
+                return
+            if signal_type == "consensus_reached" and resolved_policy != "consensus_reached":
                 return
             sender_id = event.get("sender_id")
             payload = event.get("payload")
             _apply_stop_signal(sender_id if isinstance(sender_id, int) else None, str(payload))
+
+        def _publish_control_signal(signal_type: str, payload: dict[str, Any], *, sender_id: int) -> None:
+            publish_control = getattr(_sibling_bus_instance, "publish_control", None)
+            if callable(publish_control):
+                publish_control(
+                    f"control/{signal_type}",
+                    payload,
+                    sender_id=sender_id,
+                    signal_type=signal_type,
+                )
+
+        def _register_success(branch_id: int) -> None:
+            nonlocal winner_branch_id, consensus_signal_published
+            with winner_lock:
+                successful_branch_ids.add(branch_id)
+                if winner_branch_id is None:
+                    winner_branch_id = branch_id
+
+                heuristics = _compute_parallel_heuristics(
+                    total_tasks=len(tasks),
+                    answers=answers,
+                    errors=errors,
+                )
+                stop_state = _evaluate_stop_condition(
+                    stop_condition=str(strategy_context.get("stop_condition", "")),
+                    coordination_policy=resolved_policy,
+                    heuristics=heuristics,
+                )
+
+                if resolved_policy == "stop_on_solution" and stop_state["reached"]:
+                    if winner_branch_id == branch_id:
+                        _publish_control_signal(
+                            "solution_found",
+                            {
+                                "winning_branch_id": branch_id,
+                                "winning_task_id": branch_task_ids.get(branch_id),
+                                "policy": resolved_policy,
+                                "strategy_name": strategy_context.get("strategy_name"),
+                                "stop_evaluation": stop_state,
+                            },
+                            sender_id=branch_id,
+                        )
+                elif (
+                    resolved_policy == "consensus_reached"
+                    and not consensus_signal_published
+                    and stop_state["reached"]
+                ):
+                    consensus_signal_published = True
+                    _publish_control_signal(
+                        "consensus_reached",
+                        {
+                            "winning_branch_id": winner_branch_id,
+                            "consensus_branch_ids": sorted(successful_branch_ids),
+                            "consensus_target": consensus_target,
+                            "policy": resolved_policy,
+                            "strategy_name": strategy_context.get("strategy_name"),
+                            "stop_evaluation": stop_state,
+                        },
+                        sender_id=branch_id,
+                    )
 
         add_observer = getattr(_sibling_bus_instance, "add_observer", None)
         remove_observer = getattr(_sibling_bus_instance, "remove_observer", None)
         if callable(add_observer):
             add_observer(_coordination_observer)
 
-        def _run_one(branch_id: int, task: str) -> tuple[int, Any, str | None]:
+        def _run_one(branch_id: int, task: str, extra_context: str = "") -> tuple[int, Any, str | None]:
             """Executa uma tarefa, retorna (branch_id, answer, error)."""
             try:
                 answer = _serial_fn(
                     task,
-                    context=context,
+                    context=_merge_context_fragments(context, extra_context),
                     max_iterations=max_iterations,
                     timeout_s=timeout_s,
                     return_artifacts=return_artifacts,
@@ -1266,22 +1589,8 @@ def make_sub_rlm_parallel_fn(
                         bid, answer, err = future.result()
                         answers[bid] = answer
                         errors[bid]  = err
-                        if err is None and answer is not None and coordination_policy == "stop_on_solution":
-                            with winner_lock:
-                                if winner_branch_id is None:
-                                    winner_branch_id = bid
-                                    publish_control = getattr(_sibling_bus_instance, "publish_control", None)
-                                    if callable(publish_control):
-                                        publish_control(
-                                            "control/solution_found",
-                                            {
-                                                "winning_branch_id": bid,
-                                                "winning_task_id": branch_task_ids.get(bid),
-                                                "policy": coordination_policy,
-                                            },
-                                            sender_id=bid,
-                                            signal_type="solution_found",
-                                        )
+                        if err is None and answer is not None:
+                            _register_success(bid)
                     except SubRLMDepthError:
                         for f in futures:
                             f.cancel()
@@ -1306,6 +1615,101 @@ def make_sub_rlm_parallel_fn(
             if callable(remove_observer):
                 remove_observer(_coordination_observer)
             executor.shutdown(wait=False, cancel_futures=True)
+
+        phase_one_stop_evaluation = _evaluate_stop_condition(
+            stop_condition=str(strategy_context.get("stop_condition", "")),
+            coordination_policy=resolved_policy,
+            heuristics=_compute_parallel_heuristics(
+                total_tasks=len(tasks),
+                answers=answers,
+                errors=errors,
+            ),
+        )
+
+        if resolved_policy == "switch_strategy" and phase_one_stop_evaluation["reached"]:
+            replan_targets = [
+                branch_id
+                for branch_id, (answer, err) in enumerate(zip(answers, errors))
+                if branch_id != winner_branch_id and (answer is None or err is not None)
+            ]
+            if replan_targets:
+                switch_signal_published = True
+                winner_text = None
+                if winner_branch_id is not None and answers[winner_branch_id] is not None:
+                    winner_text = _extract_answer_text(answers[winner_branch_id])
+                _publish_control_signal(
+                    "switch_strategy",
+                    {
+                        "winning_branch_id": winner_branch_id,
+                        "target_branch_ids": replan_targets,
+                        "policy": resolved_policy,
+                        "strategy_name": strategy_context.get("strategy_name"),
+                        "stop_condition": strategy_context.get("stop_condition"),
+                        "repl_search_mode": strategy_context.get("repl_search_mode"),
+                        "stop_evaluation": phase_one_stop_evaluation,
+                    },
+                    sender_id=winner_branch_id or 0,
+                )
+                _record_parent_runtime_event(
+                    parent,
+                    "subagent.parallel_replanned",
+                    {
+                        "phase": 2,
+                        "winner_branch_id": winner_branch_id,
+                        "target_branch_ids": replan_targets,
+                        "coordination_policy": resolved_policy,
+                        "strategy": strategy_context,
+                        "stop_evaluation": phase_one_stop_evaluation,
+                    },
+                )
+                for branch_id in replan_targets:
+                    cancel_events[branch_id] = threading.Event()
+                    _update_parent_subagent_task(
+                        parent,
+                        task_id=branch_task_ids.get(branch_id),
+                        branch_id=branch_id,
+                        status="in-progress",
+                        note="phase 2 replan",
+                        metadata={
+                            "phase": 2,
+                            "coordination_policy": resolved_policy,
+                            "strategy_name": strategy_context.get("strategy_name"),
+                        },
+                    )
+
+                replan_contexts = {
+                    branch_id: _build_recursive_guidance_context(
+                        parent,
+                        strategy_context=strategy_context,
+                        branch_id=branch_id,
+                        phase_label="parallel_phase_2_replan",
+                        winner_text=winner_text,
+                        stop_evaluation=phase_one_stop_evaluation,
+                    )
+                    for branch_id in replan_targets
+                }
+
+                replan_executor = _cf.ThreadPoolExecutor(
+                    max_workers=max(1, min(_n, len(replan_targets))),
+                    thread_name_prefix="sub-rlm-parallel-phase2",
+                )
+                try:
+                    replan_futures = {
+                        replan_executor.submit(_run_one, branch_id, tasks[branch_id], replan_contexts[branch_id]): branch_id
+                        for branch_id in replan_targets
+                    }
+                    for future in _cf.as_completed(replan_futures, timeout=_total_timeout):
+                        branch_id = replan_futures[future]
+                        try:
+                            bid, answer, err = future.result()
+                            answers[bid] = answer
+                            errors[bid] = err
+                            if err is None and answer is not None:
+                                _register_success(bid)
+                        except Exception as exc:
+                            errors[branch_id] = f"[ERRO branch {branch_id}] replan interno: {exc}"
+                finally:
+                    replan_executor.shutdown(wait=False, cancel_futures=True)
 
         # Montar resultado final
         if return_artifacts:
@@ -1349,6 +1753,16 @@ def make_sub_rlm_parallel_fn(
                 f"Verifique erros: {[r for r in result]}"
             )
 
+        stop_evaluation = _evaluate_stop_condition(
+            stop_condition=str(strategy_context.get("stop_condition", "")),
+            coordination_policy=resolved_policy,
+            heuristics=_compute_parallel_heuristics(
+                total_tasks=len(tasks),
+                answers=answers,
+                errors=errors,
+            ),
+        )
+
         _record_parent_runtime_event(
             parent,
             "subagent.parallel_finished",
@@ -1359,6 +1773,9 @@ def make_sub_rlm_parallel_fn(
                 "child_depth": parent.depth + 1,
                 "winner_branch_id": winner_branch_id,
                 "batch_task_id": batch_task_id,
+                "coordination_policy": resolved_policy,
+                "strategy": strategy_context,
+                "stop_evaluation": stop_evaluation,
             },
         )
 
@@ -1368,6 +1785,8 @@ def make_sub_rlm_parallel_fn(
             cancelled_count=cancelled_count,
             failed_count=failed_count,
             total_tasks=len(tasks),
+            strategy=strategy_context,
+            stop_evaluation=stop_evaluation,
         )
         _update_parent_subagent_task(
             parent,
@@ -1379,6 +1798,9 @@ def make_sub_rlm_parallel_fn(
                 "winner_branch_id": winner_branch_id,
                 "cancelled_count": cancelled_count,
                 "failed_count": failed_count,
+                "coordination_policy": resolved_policy,
+                "strategy_name": strategy_context.get("strategy_name"),
+                "stop_evaluation": stop_evaluation,
             },
         )
 
@@ -1390,7 +1812,7 @@ def make_sub_rlm_parallel_fn(
         max_iterations: int = 15,
         timeout_s: float = 60.0,
         max_workers: int = 5,
-        coordination_policy: str = "stop_on_solution",
+        coordination_policy: str | None = None,
     ) -> "SubRLMParallelDetailedResults":
         """
         Igual a sub_rlm_parallel(), mas retorna SubRLMParallelTaskResult por tarefa.
@@ -1415,10 +1837,17 @@ def make_sub_rlm_parallel_fn(
                 f"(depth={parent.depth}, max_depth={parent.max_depth})."
             )
 
+        strategy_context = _resolve_parallel_strategy(
+            parent,
+            coordination_policy=coordination_policy,
+        )
+        resolved_policy = str(strategy_context["coordination_policy"])
+        consensus_target = min(len(tasks), 2)
+
         batch_task_id = _ensure_parallel_batch_root(
             parent,
             task_count=len(tasks),
-            coordination_policy=coordination_policy,
+            coordination_policy=resolved_policy,
         )
 
         _n = min(len(tasks), max(1, max_workers))
@@ -1427,6 +1856,9 @@ def make_sub_rlm_parallel_fn(
         branch_task_ids: dict[int, int | None] = {}
         winner_branch_id: int | None = None
         winner_lock = threading.Lock()
+        successful_branch_ids: set[int] = set()
+        switch_signal_published = False
+        consensus_signal_published = False
 
         for branch_id, task in enumerate(tasks):
             task_preview = task[:160]
@@ -1438,6 +1870,12 @@ def make_sub_rlm_parallel_fn(
                 child_depth=child_depth,
                 task_preview=task_preview,
                 parent_task_id=batch_task_id,
+                metadata={
+                    "coordination_policy": resolved_policy,
+                    "strategy_name": strategy_context.get("strategy_name"),
+                    "stop_condition": strategy_context.get("stop_condition"),
+                    "repl_search_mode": strategy_context.get("repl_search_mode"),
+                },
             )
 
         def _apply_stop_signal(source_branch_id: int | None, reason: str) -> None:
@@ -1458,24 +1896,89 @@ def make_sub_rlm_parallel_fn(
             if event.get("operation") != "control_publish":
                 return
             signal_type = str(event.get("metadata", {}).get("semantic_type", "")).strip()
-            if signal_type not in {"stop", "solution_found"}:
+            if signal_type == "switch_strategy":
+                return
+            if signal_type not in {"stop", "solution_found", "consensus_reached"}:
+                return
+            if signal_type == "solution_found" and resolved_policy != "stop_on_solution":
+                return
+            if signal_type == "consensus_reached" and resolved_policy != "consensus_reached":
                 return
             sender_id = event.get("sender_id")
             payload = event.get("payload")
             _apply_stop_signal(sender_id if isinstance(sender_id, int) else None, str(payload))
+
+        def _publish_control_signal(signal_type: str, payload: dict[str, Any], *, sender_id: int) -> None:
+            publish_control = getattr(_sibling_bus_instance, "publish_control", None)
+            if callable(publish_control):
+                publish_control(
+                    f"control/{signal_type}",
+                    payload,
+                    sender_id=sender_id,
+                    signal_type=signal_type,
+                )
+
+        def _register_success(branch_id: int) -> None:
+            nonlocal winner_branch_id, consensus_signal_published
+            with winner_lock:
+                successful_branch_ids.add(branch_id)
+                if winner_branch_id is None:
+                    winner_branch_id = branch_id
+                current_answers = [item.answer if item is not None and item.ok else None for item in detail_results]
+                current_errors = [item.error if item is not None else None for item in detail_results]
+                stop_state = _evaluate_stop_condition(
+                    stop_condition=str(strategy_context.get("stop_condition", "")),
+                    coordination_policy=resolved_policy,
+                    heuristics=_compute_parallel_heuristics(
+                        total_tasks=len(tasks),
+                        answers=current_answers,
+                        errors=current_errors,
+                    ),
+                )
+                if resolved_policy == "stop_on_solution" and stop_state["reached"]:
+                    if winner_branch_id == branch_id:
+                        _publish_control_signal(
+                            "solution_found",
+                            {
+                                "winning_branch_id": branch_id,
+                                "winning_task_id": branch_task_ids.get(branch_id),
+                                "policy": resolved_policy,
+                                "strategy_name": strategy_context.get("strategy_name"),
+                                "stop_evaluation": stop_state,
+                            },
+                            sender_id=branch_id,
+                        )
+                elif (
+                    resolved_policy == "consensus_reached"
+                    and not consensus_signal_published
+                    and stop_state["reached"]
+                ):
+                    consensus_signal_published = True
+                    _publish_control_signal(
+                        "consensus_reached",
+                        {
+                            "winning_branch_id": winner_branch_id,
+                            "consensus_branch_ids": sorted(successful_branch_ids),
+                            "consensus_target": consensus_target,
+                            "policy": resolved_policy,
+                            "strategy_name": strategy_context.get("strategy_name"),
+                            "stop_evaluation": stop_state,
+                        },
+                        sender_id=branch_id,
+                    )
 
         add_observer = getattr(_sibling_bus_instance, "add_observer", None)
         remove_observer = getattr(_sibling_bus_instance, "remove_observer", None)
         if callable(add_observer):
             add_observer(_coordination_observer)
 
-        def _run_one_detailed(branch_id: int, task: str) -> SubRLMParallelTaskResult:
+        def _run_one_detailed(branch_id: int, task: str, extra_context: str = "") -> SubRLMParallelTaskResult:
             import time as _t
             t0 = _t.perf_counter()
             try:
                 answer = _serial_fn(
                     task,
-                    context=context,
+                    context=_merge_context_fragments(context, extra_context),
                     max_iterations=max_iterations,
                     timeout_s=timeout_s,
                     _task_id=branch_task_ids.get(branch_id),
@@ -1485,24 +1988,7 @@ def make_sub_rlm_parallel_fn(
                 )
                 answer_text = answer.answer if isinstance(answer, SubRLMArtifactResult) else str(answer)
                 status = "cancelled" if answer_text.startswith("[CANCELLED]") else "completed"
-                if status == "completed" and coordination_policy == "stop_on_solution":
-                    nonlocal winner_branch_id
-                    with winner_lock:
-                        if winner_branch_id is None:
-                            winner_branch_id = branch_id
-                            publish_control = getattr(_sibling_bus_instance, "publish_control", None)
-                            if callable(publish_control):
-                                publish_control(
-                                    "control/solution_found",
-                                    {
-                                        "winning_branch_id": branch_id,
-                                        "winning_task_id": branch_task_ids.get(branch_id),
-                                        "policy": coordination_policy,
-                                    },
-                                    sender_id=branch_id,
-                                    signal_type="solution_found",
-                                )
-                return SubRLMParallelTaskResult(
+                result = SubRLMParallelTaskResult(
                     task=task, branch_id=branch_id, ok=True,
                     answer=answer_text, error=None,
                     elapsed_s=_t.perf_counter() - t0,
@@ -1510,6 +1996,10 @@ def make_sub_rlm_parallel_fn(
                     parent_task_id=batch_task_id,
                     status=status,
                 )
+                detail_results[branch_id] = result
+                if status == "completed":
+                    _register_success(branch_id)
+                return result
             except Exception as exc:
                 error_text = str(exc)
                 status = "cancelled" if error_text.startswith("[CANCELLED]") else "blocked"
@@ -1565,9 +2055,105 @@ def make_sub_rlm_parallel_fn(
                 remove_observer(_coordination_observer)
             executor.shutdown(wait=False, cancel_futures=True)
 
+        phase_one_stop_evaluation = _evaluate_stop_condition(
+            stop_condition=str(strategy_context.get("stop_condition", "")),
+            coordination_policy=resolved_policy,
+            heuristics=_compute_parallel_heuristics(
+                total_tasks=len(tasks),
+                answers=[item.answer if item is not None and item.ok else None for item in detail_results],
+                errors=[item.error if item is not None else None for item in detail_results],
+            ),
+        )
+
+        if resolved_policy == "switch_strategy" and phase_one_stop_evaluation["reached"]:
+            replan_targets = [
+                branch_id
+                for branch_id, item in enumerate(detail_results)
+                if branch_id != winner_branch_id and (item is None or not item.ok)
+            ]
+            if replan_targets:
+                switch_signal_published = True
+                winner_text = None
+                if winner_branch_id is not None and detail_results[winner_branch_id] is not None:
+                    winner_text = detail_results[winner_branch_id].answer
+                _publish_control_signal(
+                    "switch_strategy",
+                    {
+                        "winning_branch_id": winner_branch_id,
+                        "target_branch_ids": replan_targets,
+                        "policy": resolved_policy,
+                        "strategy_name": strategy_context.get("strategy_name"),
+                        "stop_condition": strategy_context.get("stop_condition"),
+                        "repl_search_mode": strategy_context.get("repl_search_mode"),
+                        "stop_evaluation": phase_one_stop_evaluation,
+                    },
+                    sender_id=winner_branch_id or 0,
+                )
+                for branch_id in replan_targets:
+                    cancel_events[branch_id] = threading.Event()
+                    _update_parent_subagent_task(
+                        parent,
+                        task_id=branch_task_ids.get(branch_id),
+                        branch_id=branch_id,
+                        status="in-progress",
+                        note="phase 2 replan",
+                        metadata={
+                            "phase": 2,
+                            "coordination_policy": resolved_policy,
+                            "strategy_name": strategy_context.get("strategy_name"),
+                        },
+                    )
+                replan_contexts = {
+                    branch_id: _build_recursive_guidance_context(
+                        parent,
+                        strategy_context=strategy_context,
+                        branch_id=branch_id,
+                        phase_label="parallel_detailed_phase_2_replan",
+                        winner_text=winner_text,
+                        stop_evaluation=phase_one_stop_evaluation,
+                    )
+                    for branch_id in replan_targets
+                }
+                replan_executor = _cf.ThreadPoolExecutor(
+                    max_workers=max(1, min(_n, len(replan_targets))),
+                    thread_name_prefix="sub-rlm-parallel-det-phase2",
+                )
+                try:
+                    replan_futures = {
+                        replan_executor.submit(_run_one_detailed, branch_id, tasks[branch_id], replan_contexts[branch_id]): branch_id
+                        for branch_id in replan_targets
+                    }
+                    for future in _cf.as_completed(replan_futures, timeout=_total_timeout):
+                        bid = replan_futures[future]
+                        try:
+                            replanned_result = future.result()
+                            detail_results[bid] = replanned_result
+                            if replanned_result.ok:
+                                _register_success(bid)
+                        except Exception as exc:
+                            detail_results[bid] = SubRLMParallelTaskResult(
+                                task=tasks[bid], branch_id=bid, ok=False,
+                                answer=None, error=f"replan interno: {exc}",
+                                elapsed_s=0.0,
+                                task_id=branch_task_ids.get(bid),
+                                parent_task_id=batch_task_id,
+                                status="blocked",
+                            )
+                finally:
+                    replan_executor.shutdown(wait=False, cancel_futures=True)
+
         final_results = [r for r in detail_results if r is not None]
         cancelled_count = sum(1 for r in final_results if r.status == "cancelled")
         failed_count = sum(1 for r in final_results if r.status == "blocked")
+        stop_evaluation = _evaluate_stop_condition(
+            stop_condition=str(strategy_context.get("stop_condition", "")),
+            coordination_policy=resolved_policy,
+            heuristics=_compute_parallel_heuristics(
+                total_tasks=len(tasks),
+                answers=[item.answer if item is not None and item.ok else None for item in detail_results],
+                errors=[item.error if item is not None else None for item in detail_results],
+            ),
+        )
 
         _set_parent_parallel_summary(
             parent,
@@ -1575,6 +2161,8 @@ def make_sub_rlm_parallel_fn(
             cancelled_count=cancelled_count,
             failed_count=failed_count,
             total_tasks=len(tasks),
+            strategy=strategy_context,
+            stop_evaluation=stop_evaluation,
         )
         _update_parent_subagent_task(
             parent,
@@ -1586,6 +2174,9 @@ def make_sub_rlm_parallel_fn(
                 "winner_branch_id": winner_branch_id,
                 "cancelled_count": cancelled_count,
                 "failed_count": failed_count,
+                "coordination_policy": resolved_policy,
+                "strategy_name": strategy_context.get("strategy_name"),
+                "stop_evaluation": stop_evaluation,
             },
         )
 
@@ -1600,6 +2191,8 @@ def make_sub_rlm_parallel_fn(
                     for branch_id, task_id in sorted(branch_task_ids.items())
                 },
                 "batch_task_id": batch_task_id,
+                "strategy": strategy_context,
+                "stop_evaluation": stop_evaluation,
             },
         )
 

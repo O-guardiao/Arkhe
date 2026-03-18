@@ -254,6 +254,63 @@ class TestSuccessfulExecution:
         # context deve aparecer antes da task
         assert received_prompts[0].index("Dados") < received_prompts[0].index("calcula")
 
+    def test_serial_sub_rlm_injects_active_strategy_and_archive_guidance(self):
+        from rlm.core.mcts import BranchResult, ProgramArchive
+        from rlm.core.sub_rlm import make_sub_rlm_fn
+
+        parent = _make_parent_mock(depth=0, max_depth=2)
+        archive = ProgramArchive()
+        archive.update(
+            [
+                BranchResult(
+                    branch_id=0,
+                    steps=[],
+                    total_score=8.5,
+                    final_code="result = sub_rlm_parallel(['probe a', 'probe b'])",
+                    repl_locals={},
+                    aggregated_metrics={"heuristic": 4.0},
+                    strategy_name="parallel_decompose",
+                    strategy={
+                        "name": "parallel_decompose",
+                        "coordination_policy": "switch_strategy",
+                        "stop_condition": "switch when stalled",
+                        "repl_search_mode": "parallel_branch_search",
+                    },
+                )
+            ]
+        )
+        parent._active_recursive_strategy = {
+            "strategy_name": "parallel_decompose",
+            "coordination_policy": "switch_strategy",
+            "stop_condition": "switch when stalled",
+            "repl_search_mode": "parallel_branch_search",
+            "archive_key": "problem-archive",
+        }
+        parent._active_mcts_archive_key = "problem-archive"
+        parent._mcts_archives = {"problem-archive": archive}
+
+        received_prompts = []
+        mock_completion = MagicMock()
+        mock_completion.response = "ok"
+        mock_instance = MagicMock()
+
+        def _capture(prompt):
+            received_prompts.append(prompt)
+            return mock_completion
+
+        mock_instance.completion.side_effect = _capture
+        mock_cls = MagicMock(return_value=mock_instance)
+
+        fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
+        fn("refine the branch", context="user context")
+
+        assert len(received_prompts) == 1
+        assert "[RECURSIVE STRATEGY GUIDANCE]" in received_prompts[0]
+        assert "[MCTS ARCHIVE GUIDANCE]" in received_prompts[0]
+        assert "problem-archive" in received_prompts[0]
+        assert "parallel_decompose" in received_prompts[0]
+        assert "refine the branch" in received_prompts[0]
+
     def test_max_iterations_clamped_to_50(self):
         """max_iterations acima de 50 é reduzido a 50."""
         from rlm.core.sub_rlm import make_sub_rlm_fn

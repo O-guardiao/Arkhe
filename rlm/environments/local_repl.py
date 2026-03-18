@@ -249,6 +249,7 @@ class LocalREPL(NonIsolatedEnv):
         self._execution_timeline = ExecutionTimeline(on_record=self._publish_timeline_event)
         self._coordination_digest = CoordinationDigest()
         self._mcts_archives: dict[str, Any] = {}
+        self._active_recursive_strategy: dict[str, Any] | None = None
 
         # Setup globals, locals, and modules in environment.
         self.setup()
@@ -493,6 +494,10 @@ class LocalREPL(NonIsolatedEnv):
         ) -> dict[str, Any]:
             return self.record_runtime_event(event_type, data, origin=origin)
 
+        def active_recursive_strategy() -> dict[str, Any] | None:
+            current = self.get_active_recursive_strategy()
+            return dict(current) if current is not None else None
+
         self._runtime_scaffold_refs = {
             "task_create": task_create,
             "task_start": task_start,
@@ -508,6 +513,7 @@ class LocalREPL(NonIsolatedEnv):
             "attachment_pin": attachment_pin,
             "timeline_recent": timeline_recent,
             "timeline_mark": timeline_mark,
+            "active_recursive_strategy": active_recursive_strategy,
         }
         self.globals.update(self._runtime_scaffold_refs)
 
@@ -873,13 +879,54 @@ class LocalREPL(NonIsolatedEnv):
         cancelled_count: int,
         failed_count: int,
         total_tasks: int,
+        strategy: dict[str, Any] | None = None,
+        stop_evaluation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._coordination_digest.set_parallel_summary(
             winner_branch_id=winner_branch_id,
             cancelled_count=cancelled_count,
             failed_count=failed_count,
             total_tasks=total_tasks,
+            strategy=strategy,
+            stop_evaluation=stop_evaluation,
         )
+
+    def set_active_recursive_strategy(
+        self,
+        strategy: dict[str, Any] | None,
+        *,
+        origin: str = "runtime",
+    ) -> dict[str, Any] | None:
+        if strategy is None:
+            self._active_recursive_strategy = None
+            self.record_runtime_event(
+                "strategy.cleared",
+                {"origin": origin},
+                origin="strategy",
+            )
+            return None
+        self._active_recursive_strategy = dict(strategy)
+        self.record_runtime_event(
+            "strategy.activated",
+            {
+                "origin": origin,
+                "strategy_name": self._active_recursive_strategy.get("strategy_name")
+                or self._active_recursive_strategy.get("name"),
+                "coordination_policy": self._active_recursive_strategy.get("coordination_policy"),
+                "stop_condition": self._active_recursive_strategy.get("stop_condition"),
+                "repl_search_mode": self._active_recursive_strategy.get("repl_search_mode"),
+            },
+            origin="strategy",
+        )
+        return dict(self._active_recursive_strategy)
+
+    def get_active_recursive_strategy(self) -> dict[str, Any] | None:
+        if self._active_recursive_strategy is None:
+            return None
+        return dict(self._active_recursive_strategy)
+
+    def clear_active_recursive_strategy(self, *, origin: str = "runtime") -> None:
+        self.set_active_recursive_strategy(None, origin=origin)
 
     def get_runtime_state_snapshot(
         self,
@@ -906,6 +953,9 @@ class LocalREPL(NonIsolatedEnv):
                 topic=coordination_topic,
                 branch_id=coordination_branch_id,
             ),
+            "strategy": {
+                "active_recursive_strategy": self.get_active_recursive_strategy(),
+            },
         }
 
     def attach_sibling_bus(self, sibling_bus: Any, *, branch_id: int | None = None) -> None:

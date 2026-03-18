@@ -480,6 +480,8 @@ class CoordinationDigest:
         cancelled_count: int,
         failed_count: int,
         total_tasks: int,
+        strategy: dict[str, Any] | None = None,
+        stop_evaluation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             task_ids_by_branch = {
@@ -492,6 +494,8 @@ class CoordinationDigest:
                 "failed_count": int(failed_count),
                 "total_tasks": int(total_tasks),
                 "task_ids_by_branch": task_ids_by_branch,
+                "strategy": dict(strategy or {}),
+                "stop_evaluation": dict(stop_evaluation or {}),
             }
             return dict(self._latest_parallel_summary)
 

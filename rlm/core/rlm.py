@@ -441,6 +441,39 @@ class RLM:
         except Exception:
             pass
 
+    def _set_active_mcts_strategy(
+        self,
+        environment: BaseEnv,
+        best_branch: Any,
+        *,
+        archive_key: str | None = None,
+    ) -> None:
+        strategy_payload = dict(best_branch.strategy or {})
+        strategy_name = best_branch.strategy_name or strategy_payload.get("name")
+        if strategy_name:
+            strategy_payload.setdefault("strategy_name", strategy_name)
+            strategy_payload.setdefault("name", strategy_name)
+        if archive_key:
+            strategy_payload.setdefault("archive_key", archive_key)
+            self._active_mcts_archive_key = archive_key
+        self._active_recursive_strategy = dict(strategy_payload) if strategy_payload else None
+        setter = getattr(environment, "set_active_recursive_strategy", None)
+        if callable(setter):
+            try:
+                setter(self._active_recursive_strategy, origin="mcts_winner")
+            except Exception:
+                pass
+
+    def _clear_active_mcts_strategy(self, environment: BaseEnv) -> None:
+        self._active_recursive_strategy = None
+        self._active_mcts_archive_key = None
+        clearer = getattr(environment, "clear_active_recursive_strategy", None)
+        if callable(clearer):
+            try:
+                clearer(origin="completion")
+            except Exception:
+                pass
+
     def completion(
         self,
         prompt: str | dict[str, Any],
@@ -471,6 +504,7 @@ class RLM:
             return self._fallback_answer(prompt)
 
         with self._spawn_completion_context(prompt) as (lm_handler, environment):
+            self._clear_active_mcts_strategy(environment)
             self._record_environment_event(
                 environment,
                 "completion.started",
@@ -561,6 +595,7 @@ class RLM:
                     best_branch = search_result["best_branch"]
                     round_history = search_result["history"]
                     self._attach_mcts_archive(environment, archive_key, archive, round_history, best_branch)
+                    self._set_active_mcts_strategy(environment, best_branch, archive_key=archive_key)
 
                     # Seed winner's namespace into the main environment
                     if hasattr(environment, "locals") and best_branch.repl_locals:
@@ -774,6 +809,7 @@ class RLM:
                         if capture_artifacts and hasattr(environment, "extract_artifacts")
                         else None
                     )
+                    self._clear_active_mcts_strategy(environment)
                     return RLMChatCompletion(
                         root_model=self.backend_kwargs.get("model_name", "unknown")
                         if self.backend_kwargs
@@ -795,6 +831,7 @@ class RLM:
                 time_end = time.perf_counter()
                 usage = lm_handler.get_usage_summary()
                 cancelled_answer = "[CANCELLED] coordination stop requested"
+                self._clear_active_mcts_strategy(environment)
                 return RLMChatCompletion(
                     root_model=self.backend_kwargs.get("model_name", "unknown")
                     if self.backend_kwargs
@@ -833,6 +870,7 @@ class RLM:
                 if capture_artifacts and hasattr(environment, "extract_artifacts")
                 else None
             )
+            self._clear_active_mcts_strategy(environment)
             return RLMChatCompletion(
                 root_model=self.backend_kwargs.get("model_name", "unknown")
                 if self.backend_kwargs

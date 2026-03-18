@@ -448,3 +448,24 @@ def evaluate(snapshot):
         assert len(attachments) == 1
         assert attachments[0]["metadata"]["archive_key"] == "abc123"
         repl.cleanup()
+
+    def test_active_recursive_strategy_is_visible_in_runtime_snapshot(self):
+        repl = LocalREPL()
+
+        repl.set_active_recursive_strategy(
+            {
+                "strategy_name": "parallel_decompose",
+                "coordination_policy": "stop_on_solution",
+                "stop_condition": "stop when solved",
+                "repl_search_mode": "parallel_branch_search",
+            },
+            origin="test",
+        )
+        snapshot = repl.get_runtime_state_snapshot()
+
+        assert snapshot["strategy"]["active_recursive_strategy"]["strategy_name"] == "parallel_decompose"
+        assert snapshot["strategy"]["active_recursive_strategy"]["coordination_policy"] == "stop_on_solution"
+
+        repl.clear_active_recursive_strategy(origin="test")
+        assert repl.get_runtime_state_snapshot()["strategy"]["active_recursive_strategy"] is None
+        repl.cleanup()
