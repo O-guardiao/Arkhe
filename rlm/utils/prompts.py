@@ -337,6 +337,18 @@ def build_rlm_system_prompt(
 
 USER_PROMPT = """Think step-by-step on what to do using the REPL environment (which contains the context) to answer the prompt.\n\nContinue using the REPL environment, which has the `context` variable, and querying sub-LLMs by writing to ```repl``` tags, and determine your answer. Your next action:"""
 
+TEXT_USER_PROMPT = """Think step-by-step to answer the prompt.\n\nYou do NOT need to use the REPL environment unless the system prompt explicitly asks for it. You may answer in plain text. When your analysis is complete, wrap your final answer with FINAL(...). Your next action:"""
+
+
+def _normalize_interaction_mode(interaction_mode: str | None) -> str:
+    if interaction_mode in (None, "repl"):
+        return "repl"
+    if interaction_mode == "text":
+        return "text"
+    raise ValueError(
+        f"Unsupported interaction_mode={interaction_mode!r}. Expected 'repl' or 'text'."
+    )
+
 def _format_user_prompt_with_root(root_prompt: str | list | dict) -> str:
     # Safely format the root_prompt into the template
     import json
@@ -347,11 +359,21 @@ def _format_user_prompt_with_root(root_prompt: str | list | dict) -> str:
     return f"""Think step-by-step on what to do using the REPL environment (which contains the context) to answer the original prompt: \"{prompt_str}\".\n\nContinue using the REPL environment, which has the `context` variable, and querying sub-LLMs by writing to ```repl``` tags, and determine your answer. Your next action:"""
 
 
+def _format_text_user_prompt_with_root(root_prompt: str | list | dict) -> str:
+    import json
+    if not isinstance(root_prompt, str):
+        prompt_str = json.dumps(root_prompt, ensure_ascii=False)
+    else:
+        prompt_str = root_prompt
+    return f"""Think step-by-step to answer the original prompt: \"{prompt_str}\".\n\nYou do NOT need to use the REPL environment unless the system prompt explicitly asks for it. You may answer in plain text. When your analysis is complete, wrap your final answer with FINAL(...). Your next action:"""
+
+
 def build_multimodal_user_prompt(
     content_parts: list[dict],
     root_prompt: str | None = None,
     context_count: int = 1,
     history_count: int = 0,
+    interaction_mode: str = "repl",
 ) -> dict:
     """
     Constrói a primeira mensagem de usuário para prompts multimodais (visão/áudio).
@@ -377,6 +399,7 @@ def build_multimodal_user_prompt(
         iteration=0,
         context_count=context_count,
         history_count=history_count,
+        interaction_mode=interaction_mode,
     )
     action_text = action_msg["content"]
 
@@ -390,16 +413,30 @@ def build_user_prompt(
     iteration: int = 0,
     context_count: int = 1,
     history_count: int = 0,
+    interaction_mode: str = "repl",
 ) -> dict[str, str]:
-    if iteration == 0:
-        safeguard = "You have not interacted with the REPL environment or seen your prompt / context yet. Your next action should be to look through and figure out how to answer the prompt, so don't just provide a final answer yet.\n\n"
-        prompt = safeguard + (
-            _format_user_prompt_with_root(root_prompt) if root_prompt else USER_PROMPT
-        )
+    mode = _normalize_interaction_mode(interaction_mode)
+    if mode == "text":
+        if iteration == 0:
+            prompt = (
+                _format_text_user_prompt_with_root(root_prompt)
+                if root_prompt else TEXT_USER_PROMPT
+            )
+        else:
+            prompt = "The history before contains your previous reasoning. Continue the analysis in plain text and finish with FINAL(...) when ready. " + (
+                _format_text_user_prompt_with_root(root_prompt)
+                if root_prompt else TEXT_USER_PROMPT
+            )
     else:
-        prompt = "The history before is your previous interactions with the REPL environment. " + (
-            _format_user_prompt_with_root(root_prompt) if root_prompt else USER_PROMPT
-        )
+        if iteration == 0:
+            safeguard = "You have not interacted with the REPL environment or seen your prompt / context yet. Your next action should be to look through and figure out how to answer the prompt, so don't just provide a final answer yet.\n\n"
+            prompt = safeguard + (
+                _format_user_prompt_with_root(root_prompt) if root_prompt else USER_PROMPT
+            )
+        else:
+            prompt = "The history before is your previous interactions with the REPL environment. " + (
+                _format_user_prompt_with_root(root_prompt) if root_prompt else USER_PROMPT
+            )
 
     # Inform model about multiple contexts if present
     if context_count > 1:

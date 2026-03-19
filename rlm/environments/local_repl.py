@@ -1239,15 +1239,15 @@ class LocalREPL(NonIsolatedEnv):
 
         if isinstance(context_payload, str):
             context_path = os.path.join(self.temp_dir, f"context_{context_index}.txt")
-            with open(context_path, "w") as f:
+            with open(context_path, "w", encoding="utf-8") as f:
                 f.write(context_payload)
-            self.execute_code(f"with open(r'{context_path}', 'r') as f:\n    {var_name} = f.read()")
+            self.execute_code(f"with open(r'{context_path}', 'r', encoding='utf-8') as f:\n    {var_name} = f.read()")
         else:
             context_path = os.path.join(self.temp_dir, f"context_{context_index}.json")
-            with open(context_path, "w") as f:
+            with open(context_path, "w", encoding="utf-8") as f:
                 json.dump(context_payload, f)
             self.execute_code(
-                f"import json\nwith open(r'{context_path}', 'r') as f:\n    {var_name} = json.load(f)"
+                f"import json\nwith open(r'{context_path}', 'r', encoding='utf-8') as f:\n    {var_name} = json.load(f)"
             )
 
         # Always update 'context' to point to the latest context.

@@ -59,6 +59,7 @@ class RLM:
         max_depth: int = 1,
         max_iterations: int = 30,
         custom_system_prompt: str | None = None,
+        interaction_mode: str = "repl",
         other_backends: list[ClientBackend] | None = None,
         other_backend_kwargs: list[dict[str, Any]] | None = None,
         logger: RLMLogger | None = None,
@@ -80,6 +81,9 @@ class RLM:
                 up to max_depth. Set RLM_MAX_DEPTH env var to override the default.
             max_iterations: The maximum number of iterations of the RLM.
             custom_system_prompt: The custom system prompt to use for the RLM.
+            interaction_mode: Interaction contract for the loop. 'repl' preserves the
+                original behavior. 'text' allows direct plain-text reasoning terminated
+                with FINAL(...), without REPL-specific user nudges.
             other_backends: A list of other client backends that the environments can use to make sub-calls.
             other_backend_kwargs: The kwargs to pass to the other client backends (ordered to match other_backends).
             logger: The logger to use for the RLM.
@@ -121,6 +125,11 @@ class RLM:
         self.depth = depth
         self.max_depth = max_depth
         self.max_iterations = max_iterations
+        if interaction_mode not in ("repl", "text"):
+            raise ValueError(
+                f"Unsupported interaction_mode={interaction_mode!r}. Expected 'repl' or 'text'."
+            )
+        self.interaction_mode = interaction_mode
         self.system_prompt = custom_system_prompt if custom_system_prompt else RLM_SYSTEM_PROMPT
         # skills_context: SIF table injected per-request by api.py to advertise active skills
         # in the system prompt itself. None = standalone mode (no skills).
@@ -474,6 +483,27 @@ class RLM:
             except Exception:
                 pass
 
+    def _build_recovery_nudge(self, *, has_code_blocks: bool, has_final: bool) -> dict[str, str] | None:
+        if has_code_blocks or has_final:
+            return None
+        if self.interaction_mode == "text":
+            return {
+                "role": "user",
+                "content": (
+                    "Your previous response did not finish the task. Continue the analysis in plain text "
+                    "and wrap your complete final answer inside FINAL(...)."
+                ),
+            }
+        return {
+            "role": "user",
+            "content": (
+                "Your previous response contained no ```repl``` code block. "
+                "You MUST write executable Python code inside a ```repl``` block "
+                "to make progress. Inspect context, run computations, or call "
+                "FINAL_VAR(variable_name) to finish."
+            ),
+        }
+
     def completion(
         self,
         prompt: str | dict[str, Any],
@@ -571,12 +601,25 @@ class RLM:
                     archive_store = {}
                     self._mcts_archives = archive_store
                 archive = archive_store.setdefault(archive_key, ProgramArchive())
+                # Collect runtime tools so MCTS branches can execute code
+                # that references sub_rlm_parallel, llm_query, etc.
+                _mcts_extra = {}
+                if hasattr(environment, "globals"):
+                    for _tool_name in (
+                        "sub_rlm", "rlm_query", "sub_rlm_parallel",
+                        "sub_rlm_parallel_detailed", "rlm_query_batched",
+                        "sub_rlm_async", "async_bus", "AsyncHandle",
+                        "SubRLMParallelTaskResult",
+                    ):
+                        if _tool_name in environment.globals:
+                            _mcts_extra[_tool_name] = environment.globals[_tool_name]
                 orchestrator = MCTSOrchestrator(
                     lm_handler_address=lm_handler.address if hasattr(lm_handler, "address") else None,
                     branches=mcts_branches,
                     max_depth=2,
                     evaluation_stages=self._build_mcts_evaluation_stages(environment),
                     event_bus=self.event_bus,
+                    extra_globals=_mcts_extra,
                 )
 
                 def _direct_llm(p: str) -> str:
@@ -720,12 +763,22 @@ class RLM:
                 if i == 0 and _mm is not None:
                     current_prompt = message_history + [
                         build_multimodal_user_prompt(
-                            _mm, root_prompt, context_count, history_count
+                            _mm,
+                            root_prompt,
+                            context_count,
+                            history_count,
+                            interaction_mode=self.interaction_mode,
                         )
                     ]
                 else:
                     current_prompt = message_history + [
-                        build_user_prompt(root_prompt, i, context_count, history_count)
+                        build_user_prompt(
+                            root_prompt,
+                            i,
+                            context_count,
+                            history_count,
+                            interaction_mode=self.interaction_mode,
+                        )
                     ]
 
                 # Evolution 6.1: Swap system message when in Foraging Mode
@@ -823,6 +876,15 @@ class RLM:
 
                 # Format the iteration for the next prompt.
                 new_messages = format_iteration(iteration)
+
+                # Nudge: if model returned 0 code blocks and no final answer,
+                # inject a recovery hint so it doesn't waste further iterations.
+                nudge = self._build_recovery_nudge(
+                    has_code_blocks=bool(iteration.code_blocks),
+                    has_final=final_answer is not None,
+                )
+                if nudge is not None:
+                    new_messages.append(nudge)
 
                 # Update message history with the new messages.
                 message_history.extend(new_messages)

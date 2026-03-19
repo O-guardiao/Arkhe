@@ -171,6 +171,19 @@ class TestDepthGuard:
         )
         assert passed_depth == 1
 
+    def test_child_receives_custom_prompt_and_text_mode(self):
+        from rlm.core.sub_rlm import make_sub_rlm_fn
+        parent = _make_parent_mock(depth=0, max_depth=3)
+        mock_cls, _ = _make_mock_rlm_cls("ok")
+        fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
+
+        fn("tarefa", system_prompt="custom text prompt", interaction_mode="text")
+
+        call_kwargs = mock_cls.call_args
+        passed_kwargs = call_kwargs.kwargs if call_kwargs.kwargs else call_kwargs[1]
+        assert passed_kwargs.get("custom_system_prompt") == "custom text prompt"
+        assert passed_kwargs.get("interaction_mode") == "text"
+
 
 # ===========================================================================
 # Timeout Mechanism

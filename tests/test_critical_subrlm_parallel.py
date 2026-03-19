@@ -140,6 +140,42 @@ class TestSubRLMParallelBasic:
         result = par(["A", "B", "C"])
         assert len(result) == 3
 
+    def test_interaction_modes_are_propagated_per_branch(self):
+        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+
+        parent = _make_parent_mock()
+        created_kwargs = []
+
+        def _side_effect(**kwargs):
+            created_kwargs.append(kwargs)
+            mock_completion = MagicMock()
+            mock_completion.response = "ok"
+            mock_instance = MagicMock()
+            mock_instance.completion.return_value = mock_completion
+            return mock_instance
+
+        mock_cls = MagicMock(side_effect=_side_effect)
+        par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
+        result = par(
+            ["A", "B", "C"],
+            system_prompts=[None, "text prompt", "other text prompt"],
+            interaction_modes=["repl", "text", "text"],
+        )
+
+        assert len(result) == 3
+        observed = sorted([
+            (
+                kwargs.get("custom_system_prompt"),
+                kwargs.get("interaction_mode"),
+            )
+            for kwargs in created_kwargs
+        ], key=lambda item: ((item[0] or ""), item[1] or ""))
+        assert observed == sorted([
+            (None, "repl"),
+            ("text prompt", "text"),
+            ("other text prompt", "text"),
+        ], key=lambda item: ((item[0] or ""), item[1] or ""))
+
     def test_results_are_strings(self):
         from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()

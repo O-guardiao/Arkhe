@@ -559,6 +559,8 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
         max_iterations: int = 8,
         timeout_s: float = 300.0,
         return_artifacts: bool = False,
+        system_prompt: "str | None" = None,
+        interaction_mode: str = "repl",
         _task_id: int | None = None,
         _cancel_event: "threading.Event | None" = None,
         _sibling_bus: "Any | None" = None,
@@ -682,6 +684,8 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
             depth=child_depth,
             max_depth=parent.max_depth,
             max_iterations=max(1, min(max_iterations, 50)),  # clamp 1-50
+            custom_system_prompt=system_prompt,  # Fix B: permite text-only agents
+            interaction_mode=interaction_mode,
             verbose=False,   # filho silencioso por padrão
             event_bus=parent.event_bus,  # Lacuna 4: EventBus propaga
         )
@@ -1335,10 +1339,12 @@ def make_sub_rlm_parallel_fn(
         tasks: "list[str]",
         context: str = "",
         max_iterations: int = 8,
-        timeout_s: float = 300.0,
+        timeout_s: float = 60.0,
         max_workers: int = 5,
         return_artifacts: bool = False,
         coordination_policy: str | None = None,
+        system_prompts: "list[str | None] | None" = None,
+        interaction_modes: "list[str | None] | None" = None,
     ) -> "list[str] | list[SubRLMArtifactResult]":
         """
         Executa N tarefas independentes em paralelo, retorna lista de respostas.
@@ -1549,7 +1555,13 @@ def make_sub_rlm_parallel_fn(
         if callable(add_observer):
             add_observer(_coordination_observer)
 
-        def _run_one(branch_id: int, task: str, extra_context: str = "") -> tuple[int, Any, str | None]:
+        def _run_one(
+            branch_id: int,
+            task: str,
+            extra_context: str = "",
+            system_prompt: "str | None" = None,
+            interaction_mode: str = "repl",
+        ) -> tuple[int, Any, str | None]:
             """Executa uma tarefa, retorna (branch_id, answer, error)."""
             try:
                 answer = _serial_fn(
@@ -1558,6 +1570,8 @@ def make_sub_rlm_parallel_fn(
                     max_iterations=max_iterations,
                     timeout_s=timeout_s,
                     return_artifacts=return_artifacts,
+                    system_prompt=system_prompt,
+                    interaction_mode=interaction_mode,
                     _task_id=branch_task_ids.get(branch_id),
                     _cancel_event=cancel_events[branch_id],
                     _sibling_bus=_sibling_bus_instance,
@@ -1573,13 +1587,24 @@ def make_sub_rlm_parallel_fn(
                 return branch_id, None, f"[ERRO branch {branch_id}] {exc}"
 
         _total_timeout = timeout_s * _n + 60.0
+        # Normalizar system_prompts: lista com 1 prompt por branch (ou None)
+        _sys_prompts: list[str | None] = [None] * _n
+        if system_prompts is not None:
+            for _sp_idx in range(min(len(system_prompts), _n)):
+                _sys_prompts[_sp_idx] = system_prompts[_sp_idx]
+        _interaction_modes: list[str] = ["repl"] * _n
+        if interaction_modes is not None:
+            for _mode_idx in range(min(len(interaction_modes), _n)):
+                _mode = interaction_modes[_mode_idx]
+                if _mode is not None:
+                    _interaction_modes[_mode_idx] = _mode
         executor = _cf.ThreadPoolExecutor(
             max_workers=_n,
             thread_name_prefix="sub-rlm-parallel",
         )
         try:
             futures = {
-                executor.submit(_run_one, i, task): i
+                executor.submit(_run_one, i, task, "", _sys_prompts[i], _interaction_modes[i]): i
                 for i, task in enumerate(tasks)
             }
             try:
@@ -1695,7 +1720,14 @@ def make_sub_rlm_parallel_fn(
                 )
                 try:
                     replan_futures = {
-                        replan_executor.submit(_run_one, branch_id, tasks[branch_id], replan_contexts[branch_id]): branch_id
+                        replan_executor.submit(
+                            _run_one,
+                            branch_id,
+                            tasks[branch_id],
+                            replan_contexts[branch_id],
+                            _sys_prompts[branch_id],
+                            _interaction_modes[branch_id],
+                        ): branch_id
                         for branch_id in replan_targets
                     }
                     for future in _cf.as_completed(replan_futures, timeout=_total_timeout):

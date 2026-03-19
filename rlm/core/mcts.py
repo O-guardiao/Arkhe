@@ -452,6 +452,7 @@ class MCTSOrchestrator:
         score_fn: Callable[[str, str | None, str], float] | None = None,
         evaluation_stages: list[EvaluationStage] | None = None,
         event_bus: Any | None = None,
+        extra_globals: dict[str, Any] | None = None,
     ):
         self.lm_handler_address = lm_handler_address
         self.context_payload = context_payload
@@ -460,6 +461,7 @@ class MCTSOrchestrator:
         self.score_fn = score_fn or default_score_fn
         self.evaluation_stages = list(evaluation_stages or [])
         self.event_bus = event_bus
+        self.extra_globals = extra_globals or {}
         self._lock = threading.Lock()
         self.last_results: list[BranchResult] = []
 
@@ -500,6 +502,9 @@ class MCTSOrchestrator:
                 lm_handler_address=self.lm_handler_address,
                 context_payload=self.context_payload,
             ) as sandbox:
+                # Inject runtime tools (sub_rlm_parallel, etc.) into branch sandbox
+                if self.extra_globals:
+                    sandbox.globals.update(self.extra_globals)
                 pruned = False
                 for depth_idx, code in enumerate(code_steps[: self.max_depth]):
                     result = sandbox.execute_code(code)
@@ -600,6 +605,8 @@ class MCTSOrchestrator:
             )
 
         # Run all branches in parallel (thread pool)
+        # Early termination: if a branch scores >= 1.0, cancel remaining.
+        _early_winner: BranchResult | None = None
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.branches) as executor:
             futures = {
                 executor.submit(_run_branch, i, codes): i
@@ -618,6 +625,21 @@ class MCTSOrchestrator:
                             "pruned_reason": result.pruned_reason,
                             "metrics": result.aggregated_metrics,
                         })
+                    # Early termination: perfect score, cancel remaining
+                    if result.total_score >= 1.0 and _early_winner is None:
+                        _early_winner = result
+                        for f, bid in futures.items():
+                            if not f.done():
+                                f.cancel()
+                        if self.event_bus:
+                            self.event_bus.emit("mcts_early_terminate", {
+                                "winner_branch": branch_id,
+                                "score": result.total_score,
+                                "cancelled_branches": [
+                                    bid for f, bid in futures.items()
+                                    if not f.done() and bid != branch_id
+                                ],
+                            })
                 except Exception as e:
                     results[branch_id] = BranchResult(
                         branch_id=branch_id,

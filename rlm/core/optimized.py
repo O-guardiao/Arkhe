@@ -105,7 +105,17 @@ def find_final_answer(text: str, environment: Optional[object] = None) -> str | 
     # Check FINAL pattern
     match = _FINAL_PATTERN.search(text)
     if match:
-        return match.group(1).strip()
+        raw = match.group(1).strip()
+        # If argument looks like a variable name (no quotes, valid identifier),
+        # try to resolve it via environment — same as FINAL_VAR.
+        # This prevents the common mistake of FINAL(var) returning the literal name.
+        stripped = raw.strip('"').strip("'")
+        if stripped.isidentifier() and environment is not None and hasattr(environment, 'execute_code'):
+            result = environment.execute_code(f"print(FINAL_VAR({stripped!r}))")
+            resolved = result.stdout.strip()
+            if resolved and not resolved.startswith("Error:"):
+                return resolved
+        return raw
     
     return None
 
