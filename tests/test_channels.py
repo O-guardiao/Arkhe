@@ -24,6 +24,7 @@ import json
 import os
 import time
 from io import BytesIO
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.error import HTTPError
@@ -1718,8 +1719,220 @@ class TestSlackEventsEndpoint:
 @pytest.fixture(scope="module")
 def webchat_client() -> TestClient:
     from rlm.server.webchat import router
+
+    class _DummyEnv:
+        def __init__(self) -> None:
+            self._next_command_id = 1
+            self.saved_paths: list[str] = []
+            self._snapshot: dict[str, Any] = {
+                "tasks": {
+                    "current": {"task_id": 7, "title": "Analisar sessão", "status": "in-progress", "note": "inspecionando runtime"},
+                    "items": [{"task_id": 7, "title": "Analisar sessão", "status": "in-progress", "note": "inspecionando runtime"}],
+                },
+                "attachments": {"items": []},
+                "timeline": {"entries": []},
+                "recursive_session": {
+                    "state": {
+                        "message_count": 2,
+                        "event_count": 2,
+                        "queued_commands": 0,
+                        "latest_event": {"event_type": "assistant_message_emitted"},
+                    },
+                    "messages": [
+                        {"message_id": 1, "role": "user", "content": "oi", "timestamp": "2026-03-20T00:00:00+00:00"},
+                        {"message_id": 2, "role": "assistant", "content": "olá", "timestamp": "2026-03-20T00:00:01+00:00"},
+                    ],
+                    "commands": [],
+                    "events": [
+                        {"event_id": 1, "event_type": "user_message_received", "source": "user", "payload": {"role": "user"}, "timestamp": "2026-03-20T00:00:00+00:00"},
+                        {"event_id": 2, "event_type": "assistant_message_emitted", "source": "assistant", "payload": {"role": "assistant"}, "timestamp": "2026-03-20T00:00:01+00:00"},
+                    ],
+                },
+                "coordination": {
+                    "events": [
+                        {"event_id": 1, "operation": "fanout", "topic": "riemann", "sender_id": 0, "receiver_id": 1, "payload_preview": "branch 1 started", "metadata": {}, "timestamp": "2026-03-20T00:00:01+00:00"},
+                        {"event_id": 2, "operation": "consensus", "topic": "riemann", "sender_id": 2, "receiver_id": 0, "payload_preview": "branch 2 won", "metadata": {}, "timestamp": "2026-03-20T00:00:02+00:00"},
+                    ],
+                    "branch_tasks": [
+                        {"branch_id": 1, "task_id": 101, "mode": "explore", "title": "Branch 1", "parent_task_id": 7, "status": "completed", "metadata": {"role": "analysis"}, "created_at": "2026-03-20T00:00:00+00:00", "updated_at": "2026-03-20T00:00:03+00:00"},
+                        {"branch_id": 2, "task_id": 102, "mode": "implement", "title": "Branch 2", "parent_task_id": 7, "status": "completed", "metadata": {"role": "implementation"}, "created_at": "2026-03-20T00:00:00+00:00", "updated_at": "2026-03-20T00:00:03+00:00"},
+                    ],
+                    "latest_parallel_summary": {
+                        "winner_branch_id": 2,
+                        "cancelled_count": 0,
+                        "failed_count": 0,
+                        "total_tasks": 2,
+                        "task_ids_by_branch": {"1": 101, "2": 102},
+                        "strategy": {"mode": "parallel"},
+                        "stop_evaluation": {"reason": "winner-chosen"},
+                    },
+                },
+                "controls": {
+                    "paused": False,
+                    "pause_reason": "",
+                    "focused_branch_id": None,
+                    "fixed_winner_branch_id": None,
+                    "branch_priorities": {},
+                    "last_checkpoint_path": None,
+                    "last_checkpoint_at": None,
+                    "last_operator_note": "",
+                },
+                "strategy": {"active_recursive_strategy": None},
+            }
+
+        def get_runtime_state_snapshot(self) -> dict[str, Any]:
+            return json.loads(json.dumps(self._snapshot))
+
+        def queue_recursive_command(
+            self,
+            command_type: str,
+            *,
+            payload: dict[str, Any] | None = None,
+            status: str = "queued",
+            branch_id: int | None = None,
+        ) -> dict[str, Any]:
+            entry = {
+                "command_id": self._next_command_id,
+                "command_type": command_type,
+                "payload": dict(payload or {}),
+                "status": status,
+                "branch_id": branch_id,
+                "outcome": {},
+                "timestamp": "2026-03-20T00:00:04+00:00",
+                "updated_at": "2026-03-20T00:00:04+00:00",
+            }
+            self._next_command_id += 1
+            self._snapshot["recursive_session"]["commands"].append(entry)
+            self._snapshot["recursive_session"]["state"]["queued_commands"] += 1
+            self._snapshot["recursive_session"]["events"].append({
+                "event_id": len(self._snapshot["recursive_session"]["events"]) + 1,
+                "event_type": "command_queued",
+                "source": "control",
+                "payload": {"command_type": command_type},
+                "timestamp": "2026-03-20T00:00:04+00:00",
+            })
+            self._snapshot["recursive_session"]["state"]["event_count"] += 1
+            self._snapshot["recursive_session"]["state"]["latest_event"] = {"event_type": "command_queued"}
+            return dict(entry)
+
+        def update_recursive_command(
+            self,
+            command_id: int,
+            *,
+            status: str,
+            outcome: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            for entry in self._snapshot["recursive_session"]["commands"]:
+                if entry["command_id"] == command_id:
+                    entry["status"] = status
+                    entry["outcome"] = dict(outcome or {})
+                    entry["updated_at"] = "2026-03-20T00:00:05+00:00"
+                    self._snapshot["recursive_session"]["state"]["queued_commands"] = max(
+                        0,
+                        self._snapshot["recursive_session"]["state"]["queued_commands"] - 1,
+                    )
+                    return dict(entry)
+            raise KeyError(command_id)
+
+        def set_runtime_paused(self, paused: bool, *, reason: str = "", origin: str = "operator") -> dict[str, Any]:
+            self._snapshot["controls"]["paused"] = paused
+            self._snapshot["controls"]["pause_reason"] = reason
+            self._snapshot["controls"]["last_operator_note"] = reason
+            return self._snapshot["controls"]
+
+        def set_runtime_focus(self, branch_id: int, *, fixed: bool = False, reason: str = "", origin: str = "operator") -> dict[str, Any]:
+            self._snapshot["controls"]["focused_branch_id"] = branch_id
+            if fixed:
+                self._snapshot["controls"]["fixed_winner_branch_id"] = branch_id
+                self._snapshot["coordination"]["latest_parallel_summary"]["winner_branch_id"] = branch_id
+            for item in self._snapshot["coordination"]["branch_tasks"]:
+                item.setdefault("metadata", {})["operator_focus"] = item["branch_id"] == branch_id
+                item["metadata"]["operator_fixed_winner"] = fixed and item["branch_id"] == branch_id
+            return self._snapshot["controls"]
+
+        def reprioritize_branch(self, branch_id: int, priority: int, *, reason: str = "", origin: str = "operator") -> dict[str, Any]:
+            self._snapshot["controls"]["branch_priorities"][str(branch_id)] = priority
+            for item in self._snapshot["coordination"]["branch_tasks"]:
+                if item["branch_id"] == branch_id:
+                    item.setdefault("metadata", {})["operator_priority"] = priority
+            return self._snapshot["controls"]
+
+        def record_operator_note(self, note: str, *, branch_id: int | None = None, origin: str = "operator") -> dict[str, Any]:
+            self._snapshot["controls"]["last_operator_note"] = note
+            return self._snapshot["controls"]
+
+        def mark_runtime_checkpoint(self, checkpoint_path: str, *, origin: str = "operator") -> dict[str, Any]:
+            self._snapshot["controls"]["last_checkpoint_path"] = checkpoint_path
+            self._snapshot["controls"]["last_checkpoint_at"] = "2026-03-20T00:00:06+00:00"
+            return self._snapshot["controls"]
+
+    class _DummySessionManager:
+        def __init__(self) -> None:
+            self._sessions: dict[str, Any] = {}
+            self._events: dict[str, list[dict[str, Any]]] = {}
+
+        def get_or_create(self, client_id: str) -> Any:
+            browser_id = client_id.split(":", 1)[1]
+            runtime_id = f"runtime-{browser_id}"
+            session = self._sessions.get(runtime_id)
+            if session is None:
+                session = SimpleNamespace(
+                    session_id=runtime_id,
+                    client_id=client_id,
+                    status="idle",
+                    created_at="2026-03-20T00:00:00+00:00",
+                    last_active="2026-03-20T00:00:00+00:00",
+                    state_dir=os.path.join(os.getcwd(), runtime_id),
+                    total_completions=0,
+                    total_tokens_used=0,
+                    last_error="",
+                    metadata={},
+                    rlm_instance=SimpleNamespace(
+                        _persistent_env=_DummyEnv(),
+                        save_state=lambda path: f"State saved to {path}",
+                    ),
+                )
+                self._sessions[runtime_id] = session
+                self._events[runtime_id] = []
+            return session
+
+        def get_session(self, session_id: str) -> Any | None:
+            return self._sessions.get(session_id)
+
+        def session_to_dict(self, session: Any) -> dict[str, Any]:
+            return {
+                "session_id": session.session_id,
+                "client_id": session.client_id,
+                "status": session.status,
+                "created_at": session.created_at,
+                "last_active": session.last_active,
+                "total_completions": session.total_completions,
+                "total_tokens_used": session.total_tokens_used,
+                "last_error": session.last_error,
+                "metadata": session.metadata,
+                "has_rlm_instance": True,
+            }
+
+        def log_event(self, session_id: str, event_type: str, payload: dict[str, Any] | None = None) -> None:
+            self._events.setdefault(session_id, []).append({
+                "timestamp": "2026-03-20T00:00:02+00:00",
+                "event_type": event_type,
+                "payload": payload or {},
+            })
+
+        def update_session(self, session: Any) -> None:
+            self._sessions[session.session_id] = session
+
+        def get_events(self, session_id: str, limit: int = 100) -> list[dict[str, Any]]:
+            items = list(self._events.get(session_id, []))
+            if limit > 0:
+                items = items[-limit:]
+            return list(reversed(items))
+
     app = FastAPI()
     app.include_router(router)
+    app.state.session_manager = _DummySessionManager()
+    app.state.supervisor = SimpleNamespace(abort=lambda session_id, reason="": True)
     return TestClient(app, raise_server_exceptions=True)
 
 
@@ -1766,7 +1979,7 @@ class TestWebChatMessage:
         assert resp.status_code == 503
         monkeypatch.delenv("RLM_WEBCHAT_DISABLED")
 
-    def test_valid_message_returns_session_and_stream_url(
+    def test_valid_message_returns_runtime_activity_contract(
         self, webchat_client: TestClient
     ) -> None:
         with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
@@ -1777,8 +1990,10 @@ class TestWebChatMessage:
         assert resp.status_code == 200
         data = resp.json()
         assert data["session_id"] == "sess_abc"
-        assert "result_key" in data
-        assert data["stream_url"].startswith("/webchat/stream/")
+        assert data["runtime_session_id"] == "runtime-sess_abc"
+        assert data["activity_url"] == "/webchat/session/runtime-sess_abc/activity"
+        assert "stream_url" not in data
+        assert "result_key" not in data
 
     def test_generates_session_id_if_missing(self, webchat_client: TestClient) -> None:
         with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
@@ -1790,25 +2005,129 @@ class TestWebChatMessage:
         data = resp.json()
         assert len(data["session_id"]) == 16  # secrets.token_hex(8) = 16 chars hex
 
-    def test_result_key_contains_session_id(self, webchat_client: TestClient) -> None:
+    def test_runtime_session_id_matches_browser_session(self, webchat_client: TestClient) -> None:
         with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             resp = webchat_client.post(
                 "/webchat/message",
                 json={"text": "Teste", "session_id": "my_session"},
             )
         data = resp.json()
-        assert data["result_key"].startswith("my_session:")
+        assert data["runtime_session_id"] == "runtime-my_session"
 
 
-class TestWebChatStream:
-    def test_unknown_result_key_returns_error_done(
-        self, webchat_client: TestClient
-    ) -> None:
-        resp = webchat_client.get("/webchat/stream/nonexistent_key_xyz", headers={"Accept": "text/event-stream"})
+class TestWebChatActivity:
+    def test_activity_returns_runtime_snapshot(self, webchat_client: TestClient) -> None:
+        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+            webchat_client.post(
+                "/webchat/message",
+                json={"text": "Teste", "session_id": "sess_runtime"},
+            )
+
+        resp = webchat_client.get("/webchat/session/runtime-sess_runtime/activity")
         assert resp.status_code == 200
-        body = resp.text
-        assert "session não encontrada" in body or "error" in body
-        assert "[DONE]" in body
+        data = resp.json()
+        assert data["session"]["session_id"] == "runtime-sess_runtime"
+        assert data["runtime"]["recursive_session"]["messages"][1]["content"] == "olá"
+        assert data["runtime"]["coordination"]["latest_parallel_summary"]["winner_branch_id"] == 2
+        assert len(data["runtime"]["coordination"]["branch_tasks"]) == 2
+        assert data["runtime"]["controls"]["paused"] is False
+        assert data["event_log"][-1]["event_type"] == "webchat_message_enqueued"
+
+
+class TestWebChatCommands:
+    def test_command_endpoint_executes_focus_branch(self, webchat_client: TestClient) -> None:
+        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+            webchat_client.post(
+                "/webchat/message",
+                json={"text": "Teste", "session_id": "sess_cmd"},
+            )
+
+        resp = webchat_client.post(
+            "/webchat/session/runtime-sess_cmd/commands",
+            json={
+                "command_type": "focus_branch",
+                "payload": {"note": "olhar branch 2"},
+                "branch_id": 2,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["command"]["command_type"] == "focus_branch"
+        assert data["command"]["branch_id"] == 2
+        assert data["command"]["status"] == "completed"
+        assert data["runtime"]["controls"]["focused_branch_id"] == 2
+        assert data["runtime"]["recursive_session"]["commands"][-1]["command_type"] == "focus_branch"
+
+    def test_command_endpoint_executes_pause_runtime(self, webchat_client: TestClient) -> None:
+        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+            webchat_client.post(
+                "/webchat/message",
+                json={"text": "Teste", "session_id": "sess_pause"},
+            )
+
+        resp = webchat_client.post(
+            "/webchat/session/runtime-sess_pause/commands",
+            json={
+                "command_type": "pause_runtime",
+                "payload": {"reason": "congelar execucao"},
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["command"]["status"] == "completed"
+        assert data["runtime"]["controls"]["paused"] is True
+        assert data["runtime"]["controls"]["pause_reason"] == "congelar execucao"
+
+    def test_command_endpoint_executes_checkpoint(self, webchat_client: TestClient) -> None:
+        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+            webchat_client.post(
+                "/webchat/message",
+                json={"text": "Teste", "session_id": "sess_checkpoint"},
+            )
+
+        resp = webchat_client.post(
+            "/webchat/session/runtime-sess_checkpoint/commands",
+            json={
+                "command_type": "create_checkpoint",
+                "payload": {"checkpoint_name": "snapshot-a"},
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["command"]["status"] == "completed"
+        assert "operator_checkpoints" in data["command"]["outcome"]["checkpoint_path"]
+        assert data["runtime"]["controls"]["last_checkpoint_path"].endswith("snapshot-a")
+
+    def test_command_endpoint_requires_branch_for_reprioritize(self, webchat_client: TestClient) -> None:
+        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+            webchat_client.post(
+                "/webchat/message",
+                json={"text": "Teste", "session_id": "sess_reprio"},
+            )
+
+        resp = webchat_client.post(
+            "/webchat/session/runtime-sess_reprio/commands",
+            json={
+                "command_type": "reprioritize_branch",
+                "payload": {"priority": 9},
+            },
+        )
+        assert resp.status_code == 400
+
+    def test_command_endpoint_rejects_empty_type(self, webchat_client: TestClient) -> None:
+        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+            webchat_client.post(
+                "/webchat/message",
+                json={"text": "Teste", "session_id": "sess_cmd_empty"},
+            )
+
+        resp = webchat_client.post(
+            "/webchat/session/runtime-sess_cmd_empty/commands",
+            json={"command_type": "   "},
+        )
+        assert resp.status_code == 400
 
 
 class TestWebChatUI:
@@ -1823,26 +2142,6 @@ class TestWebChatUI:
             assert resp.status_code == 404
         finally:
             wc_module._STATIC_DIR = original_static
-
-
-class TestWebChatCleanup:
-    def test_cleanup_removes_from_buffers(self) -> None:
-        from rlm.server.webchat import _cleanup_result, _result_buffer, _result_events
-        import asyncio
-
-        key = "test_cleanup_key"
-        _result_buffer[key] = ["algum resultado"]
-        _result_events[key] = asyncio.Event()
-
-        _cleanup_result(key)
-
-        assert key not in _result_buffer
-        assert key not in _result_events
-
-    def test_cleanup_idempotent(self) -> None:
-        """Chamar _cleanup_result com chave inexistente não deve lançar exceção."""
-        from rlm.server.webchat import _cleanup_result
-        _cleanup_result("chave_que_nao_existe")
 
 
 # ===========================================================================

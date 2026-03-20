@@ -286,6 +286,135 @@
         linear-gradient(180deg, rgba(15, 29, 50, 0.95), rgba(7, 16, 28, 0.95));
     }
 
+    .workbench-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 20px;
+      min-height: 0;
+      flex: 1;
+    }
+
+    .runtime-card {
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 22px;
+      padding: 16px;
+    }
+
+    .runtime-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .runtime-item {
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(4, 9, 17, 0.34);
+      border-radius: 16px;
+      padding: 12px;
+    }
+
+    .runtime-item strong {
+      color: #f5f9ff;
+      font-weight: 600;
+    }
+
+    .runtime-meta {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .runtime-empty {
+      color: var(--muted);
+      font-size: 13px;
+      border: 1px dashed rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 12px;
+      margin-top: 12px;
+    }
+
+    .mono-badge {
+      font-family: "Cascadia Code", "IBM Plex Mono", monospace;
+      font-size: 12px;
+      color: #dfe9fb;
+    }
+
+    .conversation-panel {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      border-radius: 24px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(2, 7, 14, 0.22);
+    }
+
+    .runtime-panel {
+      min-height: 0;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .runtime-field {
+      width: 100%;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      border-radius: 14px;
+      padding: 10px 12px;
+      outline: none;
+    }
+
+    .runtime-field::placeholder {
+      color: #7f93b1;
+    }
+
+    .branch-tree {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .branch-node {
+      position: relative;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(4, 9, 17, 0.34);
+      border-radius: 16px;
+      padding: 12px 12px 12px 18px;
+    }
+
+    .branch-node::before {
+      content: "";
+      position: absolute;
+      left: 8px;
+      top: 12px;
+      bottom: 12px;
+      width: 2px;
+      border-radius: 999px;
+      background: rgba(255, 122, 89, 0.55);
+    }
+
+    .branch-node.winner::before {
+      background: rgba(110, 231, 183, 0.8);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      color: #deebff;
+    }
+
     @media (max-width: 1100px) {
       #app-shell {
         grid-template-columns: 1fr;
@@ -298,6 +427,10 @@
 
       .chat-shell {
         min-height: calc(100vh - 24px);
+      }
+
+      .workbench-grid {
+        grid-template-columns: 1fr;
       }
     }
 
@@ -324,7 +457,7 @@
           <div class="min-w-0">
             <p class="text-[11px] uppercase tracking-[0.28em] text-slate-400">RLM Control Room</p>
             <h1 class="text-xl font-semibold text-white">WebChat</h1>
-            <p class="mt-1 text-sm text-slate-400">Interface direta para sessão, streaming e histórico local.</p>
+            <p class="mt-1 text-sm text-slate-400">Conversa sobre uma sessão recursiva viva, não um chat descartável.</p>
           </div>
         </div>
 
@@ -386,8 +519,9 @@
           <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Observações</p>
           <ul class="mt-3 space-y-2 text-sm text-slate-400 leading-relaxed">
             <li>O histórico fica salvo apenas no navegador atual.</li>
-            <li>O streaming usa SSE; se a conexão cair, a mensagem em andamento pode falhar.</li>
-            <li>Sem cancelamento de geração no backend atual.</li>
+            <li>A conversa agora observa mensagens e eventos reais da sessão recursiva.</li>
+            <li>O painel lateral mostra estado, tarefas, comandos, branches e coordenação paralela.</li>
+            <li>Os comandos operacionais entram no ledger e agora também afetam o runtime da própria sessão.</li>
           </ul>
         </section>
       </div>
@@ -398,8 +532,8 @@
         <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Canal integrado</p>
-            <h2 class="text-2xl font-semibold text-white">Conversa operacional com o agente</h2>
-            <p class="mt-1 text-sm text-slate-400">Use perguntas diretas, tarefas compostas ou pedidos de execução técnica.</p>
+            <h2 class="text-2xl font-semibold text-white">Console de sessão recursiva</h2>
+            <p class="mt-1 text-sm text-slate-400">A conversa é só a superfície. O lado direito mostra o que a sessão realmente está fazendo.</p>
           </div>
           <div class="text-sm text-slate-400 rounded-2xl border border-white/8 bg-white/4 px-4 py-3 max-w-xl">
             <div class="flex items-center justify-between gap-4 flex-wrap">
@@ -414,32 +548,147 @@
         <div id="error-banner" class="banner rounded-2xl px-4 py-3 text-sm hidden"></div>
       </div>
 
-      <div id="messages" class="flex-1 overflow-y-auto px-5 py-5 space-y-4 scrollbar-thin">
-        <div id="welcome-msg" class="welcome-card rounded-3xl p-6 max-w-3xl">
-          <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-            <div class="max-w-2xl">
-              <p class="text-[11px] uppercase tracking-[0.24em] text-slate-400">Status inicial</p>
-              <h3 class="mt-2 text-3xl font-semibold text-white">RLM pronto para trabalho iterativo</h3>
-              <p class="mt-3 text-slate-300 leading-relaxed">
-                Esta interface já fala com o backend SSE do projeto. O que faltava era acabamento: sessão persistente local,
-                ações úteis e uma UX menos descartável.
-              </p>
-            </div>
-            <div class="grid grid-cols-1 gap-3 min-w-[220px]">
-              <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
-                <div class="text-xs text-slate-500">Canal</div>
-                <div class="mt-1 font-medium text-white">/webchat</div>
-              </div>
-              <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
-                <div class="text-xs text-slate-500">Transporte</div>
-                <div class="mt-1 font-medium text-white">POST + SSE</div>
-              </div>
-              <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
-                <div class="text-xs text-slate-500">Persistência</div>
-                <div class="mt-1 font-medium text-white">localStorage</div>
+      <div class="flex-1 min-h-0 px-5 py-5">
+        <div class="workbench-grid">
+          <section class="conversation-panel">
+            <div class="px-5 py-4 border-b border-white/10 bg-black/10">
+              <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Camada conversacional</p>
+                  <p class="mt-1 text-sm text-slate-300">Entrada e resposta textual da sessão.</p>
+                </div>
+                <div class="mono-badge">browser <span id="browser-session-inline">--------</span></div>
               </div>
             </div>
-          </div>
+
+            <div id="messages" class="flex-1 overflow-y-auto px-5 py-5 space-y-4 scrollbar-thin">
+              <div id="welcome-msg" class="welcome-card rounded-3xl p-6 max-w-3xl">
+                <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                  <div class="max-w-2xl">
+                    <p class="text-[11px] uppercase tracking-[0.24em] text-slate-400">Status inicial</p>
+                    <h3 class="mt-2 text-3xl font-semibold text-white">A conversa agora observa a sessão viva</h3>
+                    <p class="mt-3 text-slate-300 leading-relaxed">
+                      Em vez de simular token streaming de uma resposta já pronta, esta tela acompanha mensagens, eventos,
+                      comandos e tarefas da sessão recursiva real do rlm-main.
+                    </p>
+                  </div>
+                  <div class="grid grid-cols-1 gap-3 min-w-[220px]">
+                    <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                      <div class="text-xs text-slate-500">Canal</div>
+                      <div class="mt-1 font-medium text-white">/webchat</div>
+                    </div>
+                    <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                      <div class="text-xs text-slate-500">Observação</div>
+                      <div class="mt-1 font-medium text-white">sessão recursiva</div>
+                    </div>
+                    <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                      <div class="text-xs text-slate-500">Persistência</div>
+                      <div class="mt-1 font-medium text-white">local + runtime</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <aside class="runtime-panel scrollbar-thin space-y-4">
+            <section class="runtime-card">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Sessão viva</p>
+                  <h3 class="mt-1 text-lg font-semibold text-white">Estado operacional</h3>
+                </div>
+                <div id="runtime-status-badge" class="mono-badge">sem runtime</div>
+              </div>
+              <div class="grid grid-cols-2 gap-3 mt-4 text-sm">
+                <div class="stat-card p-3">
+                  <div class="text-xs text-slate-500">Runtime ID</div>
+                  <div id="runtime-session-id" class="mt-1 mono-badge">aguardando</div>
+                </div>
+                <div class="stat-card p-3">
+                  <div class="text-xs text-slate-500">Tarefa atual</div>
+                  <div id="runtime-current-task" class="mt-1 text-slate-200">Sem tarefa</div>
+                </div>
+                <div class="stat-card p-3">
+                  <div class="text-xs text-slate-500">Mensagens recursivas</div>
+                  <div id="runtime-message-count" class="mt-1 text-white font-semibold">0</div>
+                </div>
+                <div class="stat-card p-3">
+                  <div class="text-xs text-slate-500">Eventos recursivos</div>
+                  <div id="runtime-event-count" class="mt-1 text-white font-semibold">0</div>
+                </div>
+              </div>
+            </section>
+
+            <section class="runtime-card">
+              <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Controles do runtime</p>
+              <div id="runtime-controls-summary" class="runtime-list"></div>
+            </section>
+
+            <section class="runtime-card">
+              <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Mensagens do runtime</p>
+              <div id="runtime-messages" class="runtime-list"></div>
+            </section>
+
+            <section class="runtime-card">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Comandos operacionais</p>
+                  <h3 class="mt-1 text-lg font-semibold text-white">Ponte humano → runtime</h3>
+                </div>
+                <div class="pill">recursive_command</div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2 mt-4">
+                <button id="btn-command-pause" class="soft-button rounded-xl px-3 py-2 text-sm">pausar</button>
+                <button id="btn-command-resume" class="soft-button rounded-xl px-3 py-2 text-sm">retomar</button>
+                <button id="btn-command-checkpoint" class="soft-button rounded-xl px-3 py-2 text-sm">checkpoint</button>
+                <button id="btn-command-fix-winner" class="soft-button rounded-xl px-3 py-2 text-sm">fixar winner</button>
+                <button id="btn-command-reprioritize" class="soft-button rounded-xl px-3 py-2 text-sm">repriorizar</button>
+                <button id="btn-command-summary" class="soft-button rounded-xl px-3 py-2 text-sm">pedir resumo</button>
+                <button id="btn-command-parallel" class="soft-button rounded-xl px-3 py-2 text-sm">auditar paralelo</button>
+                <button id="btn-command-focus" class="soft-button rounded-xl px-3 py-2 text-sm">focar branch</button>
+                <button id="btn-command-note" class="soft-button rounded-xl px-3 py-2 text-sm">nota do operador</button>
+              </div>
+
+              <div class="mt-3 grid grid-cols-1 gap-3">
+                <input id="command-branch-id" class="runtime-field" type="number" min="0" placeholder="branch_id opcional para foco/escopo" />
+                <input id="command-priority" class="runtime-field" type="number" placeholder="prioridade inteira para repriorização" />
+                <input id="command-checkpoint-name" class="runtime-field" type="text" placeholder="nome opcional do checkpoint operacional" />
+                <textarea id="command-note" class="runtime-field min-h-[92px] resize-y" placeholder="nota operacional, intenção do operador ou instrução de inspeção"></textarea>
+              </div>
+            </section>
+
+            <section class="runtime-card">
+              <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Comandos recursivos</p>
+              <div id="runtime-commands" class="runtime-list"></div>
+            </section>
+
+            <section class="runtime-card">
+              <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Paralelismo</p>
+              <div id="runtime-parallel-summary" class="runtime-list"></div>
+            </section>
+
+            <section class="runtime-card">
+              <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Árvore de branches</p>
+              <div id="runtime-branches" class="branch-tree"></div>
+            </section>
+
+            <section class="runtime-card">
+              <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Eventos recentes</p>
+              <div id="runtime-events" class="runtime-list"></div>
+            </section>
+
+            <section class="runtime-card">
+              <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Coordenação paralela</p>
+              <div id="runtime-coordination-events" class="runtime-list"></div>
+            </section>
+
+            <section class="runtime-card">
+              <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Tarefas do runtime</p>
+              <div id="runtime-tasks" class="runtime-list"></div>
+            </section>
+          </aside>
         </div>
       </div>
 
@@ -470,9 +719,11 @@
 
   <script>
     const SESSION_KEY = "rlm_webchat_session";
+    const RUNTIME_SESSION_PREFIX = "rlm_webchat_runtime:";
     const HISTORY_PREFIX = "rlm_webchat_history:";
     const DRAFT_PREFIX = "rlm_webchat_draft:";
     const MAX_HISTORY_ITEMS = 80;
+    const ACTIVITY_POLL_MS = 1100;
     const QUICK_PROMPTS = [
       "Resuma o estado atual do projeto e os riscos imediatos.",
       "Revise este fluxo com foco em bugs, regressões e testes faltantes.",
@@ -483,9 +734,11 @@
 
     let sessionId = localStorage.getItem(SESSION_KEY) || null;
     let isStreaming = false;
-    let currentEventSource = null;
     let lastUserMessage = "";
     let healthPollId = null;
+    let runtimePollId = null;
+    let runtimeSessionId = null;
+    let observedAssistantMessageCount = 0;
 
     function genSessionId() {
       return Array.from(crypto.getRandomValues(new Uint8Array(8)))
@@ -541,6 +794,10 @@
       return `${HISTORY_PREFIX}${sessionId}`;
     }
 
+    function getRuntimeKey() {
+      return `${RUNTIME_SESSION_PREFIX}${sessionId}`;
+    }
+
     function getDraftKey() {
       return `${DRAFT_PREFIX}${sessionId}`;
     }
@@ -580,6 +837,51 @@
       } catch (_) {
         return "agora";
       }
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => window.setTimeout(resolve, ms));
+    }
+
+    function truncateText(value, size = 160) {
+      const text = String(value || "").trim();
+      if (!text) {
+        return "";
+      }
+      return text.length > size ? `${text.slice(0, size - 1)}…` : text;
+    }
+
+    function stringifyPayload(payload, size = 160) {
+      if (payload === null || payload === undefined) {
+        return "";
+      }
+      if (typeof payload === "string") {
+        return truncateText(payload, size);
+      }
+      try {
+        return truncateText(JSON.stringify(payload), size);
+      } catch (_) {
+        return truncateText(String(payload), size);
+      }
+    }
+
+    function setRuntimeSession(value) {
+      runtimeSessionId = value || null;
+      if (runtimeSessionId) {
+        localStorage.setItem(getRuntimeKey(), runtimeSessionId);
+      } else {
+        localStorage.removeItem(getRuntimeKey());
+      }
+      updateRuntimeSessionBadge();
+    }
+
+    function updateRuntimeSessionBadge() {
+      document.getElementById("runtime-session-id").textContent = runtimeSessionId
+        ? `#${String(runtimeSessionId).slice(0, 8)}`
+        : "aguardando";
+      document.getElementById("runtime-status-badge").textContent = runtimeSessionId
+        ? `runtime ${String(runtimeSessionId).slice(0, 8)}`
+        : "sem runtime";
     }
 
     function updateDraftStatus(text) {
@@ -699,8 +1001,11 @@
       const msgs = document.getElementById("messages");
       msgs.innerHTML = "";
       const history = getStoredHistory();
+      const lastUser = [...history].reverse().find((item) => item.role === "user");
+      lastUserMessage = lastUser?.text || "";
       if (!history.length) {
         msgs.innerHTML = document.getElementById("welcome-msg-template").innerHTML;
+        updateStats(history);
         return;
       }
       history.forEach((item) => addMessage(item));
@@ -715,15 +1020,15 @@
           <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div class="max-w-2xl">
               <p class="text-[11px] uppercase tracking-[0.24em] text-slate-400">Status inicial</p>
-              <h3 class="mt-2 text-3xl font-semibold text-white">RLM pronto para trabalho iterativo</h3>
+              <h3 class="mt-2 text-3xl font-semibold text-white">A conversa agora observa a sessão viva</h3>
               <p class="mt-3 text-slate-300 leading-relaxed">
-                Faça um pedido técnico direto. O histórico desta sessão fica localmente no navegador para você não perder contexto ao recarregar a página.
+                Faça um pedido técnico direto. Esta página usa a sessão recursiva real como fonte de verdade e mantém o histórico local só como camada de conveniência.
               </p>
             </div>
             <div class="grid grid-cols-1 gap-3 min-w-[220px]">
               <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3"><div class="text-xs text-slate-500">Canal</div><div class="mt-1 font-medium text-white">/webchat</div></div>
-              <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3"><div class="text-xs text-slate-500">Streaming</div><div class="mt-1 font-medium text-white">SSE</div></div>
-              <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3"><div class="text-xs text-slate-500">Sessão</div><div class="mt-1 font-medium text-white">persistida localmente</div></div>
+              <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3"><div class="text-xs text-slate-500">Observação</div><div class="mt-1 font-medium text-white">mensagens + eventos</div></div>
+              <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3"><div class="text-xs text-slate-500">Sessão</div><div class="mt-1 font-medium text-white">local + runtime</div></div>
             </div>
           </div>
         </div>`;
@@ -745,6 +1050,322 @@
 
     function updateSessionBadge() {
       document.getElementById("session-badge").textContent = `#${String(sessionId).slice(0, 8)}`;
+      document.getElementById("browser-session-inline").textContent = `#${String(sessionId).slice(0, 8)}`;
+    }
+
+    function renderRuntimeList(rootId, items, emptyText, renderItem) {
+      const root = document.getElementById(rootId);
+      if (!items.length) {
+        root.innerHTML = `<div class="runtime-empty">${escapeHtml(emptyText)}</div>`;
+        return;
+      }
+      root.innerHTML = items.map(renderItem).join("");
+    }
+
+    function renderRuntimePanels(activity) {
+      const session = activity?.session || null;
+      const runtime = activity?.runtime || {};
+      const recursive = runtime.recursive_session || {};
+      const coordination = runtime.coordination || {};
+      const controls = runtime.controls || {};
+      const state = recursive.state || {};
+      const messages = recursive.messages || [];
+      const commands = recursive.commands || [];
+      const events = recursive.events || [];
+      const tasks = runtime.tasks?.items || [];
+      const currentTask = runtime.tasks?.current || null;
+      const branchTasks = coordination.branch_tasks || [];
+      const parallelSummary = coordination.latest_parallel_summary || {};
+      const coordinationEvents = coordination.events || [];
+      const winnerBranchId = parallelSummary.winner_branch_id;
+      const controlsVisible = Object.values(controls).some((value) => {
+        if (value === null || value === undefined || value === "") {
+          return false;
+        }
+        if (typeof value === "object") {
+          return Object.keys(value).length > 0;
+        }
+        return Boolean(value);
+      });
+
+      document.getElementById("runtime-message-count").textContent = String(state.message_count || 0);
+      document.getElementById("runtime-event-count").textContent = String(state.event_count || 0);
+      document.getElementById("runtime-current-task").textContent = currentTask?.title || "Sem tarefa";
+      document.getElementById("runtime-status-badge").textContent = controls.paused
+        ? "runtime pausado"
+        : (session?.status ? `status ${session.status}` : (runtimeSessionId ? `runtime ${String(runtimeSessionId).slice(0, 8)}` : "sem runtime"));
+
+      renderRuntimeList(
+        "runtime-controls-summary",
+        controlsVisible ? [controls] : [],
+        "Nenhum controle operacional persistido para esta sessão ainda.",
+        (item) => `
+          <article class="runtime-item">
+            <div class="flex items-center justify-between gap-3">
+              <strong>${item.paused ? "Runtime pausado" : "Runtime ativo"}</strong>
+              <span class="runtime-meta">focus ${escapeHtml(String(item.focused_branch_id ?? "nenhum"))}</span>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2 text-sm text-slate-300">
+              <div>Winner fixado: ${escapeHtml(String(item.fixed_winner_branch_id ?? "nao"))}</div>
+              <div>Checkpoint: ${escapeHtml(item.last_checkpoint_at || "nenhum")}</div>
+            </div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(item.pause_reason || item.last_operator_note || "Sem razao operacional registrada.")}</div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(stringifyPayload(item.branch_priorities) || "Sem prioridades registradas.")}</div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(item.last_checkpoint_path || "Sem checkpoint operacional." )}</div>
+          </article>`
+      );
+
+      renderRuntimeList(
+        "runtime-messages",
+        messages.slice(-6).reverse(),
+        "Ainda não há mensagens recursivas registradas.",
+        (item) => `
+          <article class="runtime-item">
+            <div class="flex items-center justify-between gap-3">
+              <strong>${escapeHtml(item.role || "unknown")}</strong>
+              <span class="runtime-meta">${escapeHtml(formatTimestamp(item.timestamp))}</span>
+            </div>
+            <div class="mt-2 text-sm text-slate-300 leading-relaxed">${escapeHtml(truncateText(item.content || "", 220))}</div>
+          </article>`
+      );
+
+      renderRuntimeList(
+        "runtime-commands",
+        commands.slice(-5).reverse(),
+        "Nenhum comando recursivo foi enfileirado nesta sessão.",
+        (item) => `
+          <article class="runtime-item">
+            <div class="flex items-center justify-between gap-3">
+              <strong>${escapeHtml(item.command_type || "unknown")}</strong>
+              <span class="runtime-meta">${escapeHtml(item.status || "queued")}</span>
+            </div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(stringifyPayload(item.payload)) || "Sem payload visível."}</div>
+          </article>`
+      );
+
+      renderRuntimeList(
+        "runtime-parallel-summary",
+        parallelSummary && Object.keys(parallelSummary).length ? [parallelSummary] : [],
+        "Ainda não há resumo consolidado do paralelismo.",
+        (item) => `
+          <article class="runtime-item">
+            <div class="flex items-center justify-between gap-3">
+              <strong>Resumo da orquestração</strong>
+              <span class="runtime-meta">winner ${escapeHtml(item.winner_branch_id ?? "nenhum")}</span>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2 text-sm text-slate-300">
+              <div>Total: ${escapeHtml(String(item.total_tasks ?? 0))}</div>
+              <div>Cancelados: ${escapeHtml(String(item.cancelled_count ?? 0))}</div>
+              <div>Falhas: ${escapeHtml(String(item.failed_count ?? 0))}</div>
+              <div>Winner: ${escapeHtml(String(item.winner_branch_id ?? "nenhum"))}</div>
+            </div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(stringifyPayload(item.strategy)) || "Sem estratégia registrada."}</div>
+          </article>`
+      );
+
+      renderRuntimeList(
+        "runtime-branches",
+        branchTasks,
+        "Nenhum branch paralelo foi anexado ao digest de coordenação.",
+        (item) => `
+          <article class="branch-node ${winnerBranchId === item.branch_id ? "winner" : ""}">
+            <div class="flex items-center justify-between gap-3">
+              <strong>Branch ${escapeHtml(String(item.branch_id))}</strong>
+              <span class="runtime-meta">${escapeHtml(item.status || "unknown")}</span>
+            </div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(item.title || "sem título")}</div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <span class="pill">task ${escapeHtml(String(item.task_id))}</span>
+              <span class="pill">mode ${escapeHtml(item.mode || "unknown")}</span>
+              ${item.parent_task_id !== null && item.parent_task_id !== undefined ? `<span class="pill">parent ${escapeHtml(String(item.parent_task_id))}</span>` : ""}
+              ${winnerBranchId === item.branch_id ? `<span class="pill">winner</span>` : ""}
+              ${item.metadata?.operator_focus ? `<span class="pill">focus</span>` : ""}
+              ${item.metadata?.operator_fixed_winner ? `<span class="pill">fixed</span>` : ""}
+              ${item.metadata?.operator_priority !== undefined ? `<span class="pill">prio ${escapeHtml(String(item.metadata.operator_priority))}</span>` : ""}
+            </div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(stringifyPayload(item.metadata)) || "Sem metadados extras."}</div>
+          </article>`
+      );
+
+      renderRuntimeList(
+        "runtime-events",
+        events.slice(-8).reverse(),
+        "Nenhum evento recursivo recente.",
+        (item) => `
+          <article class="runtime-item">
+            <div class="flex items-center justify-between gap-3">
+              <strong>${escapeHtml(item.event_type || "unknown")}</strong>
+              <span class="runtime-meta">${escapeHtml(item.source || "runtime")}</span>
+            </div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(stringifyPayload(item.payload)) || "Sem payload visível."}</div>
+          </article>`
+      );
+
+      renderRuntimeList(
+        "runtime-coordination-events",
+        coordinationEvents.slice(-8).reverse(),
+        "Nenhum evento de coordenação paralela recente.",
+        (item) => `
+          <article class="runtime-item">
+            <div class="flex items-center justify-between gap-3">
+              <strong>${escapeHtml(item.operation || "unknown")}</strong>
+              <span class="runtime-meta">b${escapeHtml(String(item.sender_id ?? "?"))} → b${escapeHtml(String(item.receiver_id ?? "?"))}</span>
+            </div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(item.topic || "sem tópico")}</div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(truncateText(item.payload_preview || stringifyPayload(item.metadata), 180) || "Sem payload visível."))}</div>
+          </article>`
+      );
+
+      renderRuntimeList(
+        "runtime-tasks",
+        tasks.slice(-6).reverse(),
+        "Nenhuma tarefa registrada no runtime atual.",
+        (item) => `
+          <article class="runtime-item">
+            <div class="flex items-center justify-between gap-3">
+              <strong>${escapeHtml(item.title || "sem título")}</strong>
+              <span class="runtime-meta">${escapeHtml(item.status || "unknown")}</span>
+            </div>
+            <div class="mt-2 text-sm text-slate-300">${escapeHtml(truncateText(item.note || stringifyPayload(item.metadata), 180) || "Sem nota operacional."))}</div>
+          </article>`
+      );
+
+      observedAssistantMessageCount = messages.filter((item) => item.role === "assistant").length;
+    }
+
+    function readBranchId() {
+      const raw = document.getElementById("command-branch-id").value.trim();
+      if (!raw) {
+        return null;
+      }
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    }
+
+    function readPriority() {
+      const raw = document.getElementById("command-priority").value.trim();
+      if (!raw) {
+        return null;
+      }
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    }
+
+    async function sendOperationalCommand(commandType, payload = {}, branchId = null) {
+      if (!runtimeSessionId) {
+        showBanner("Ainda não existe runtime ativo para receber comando operacional.");
+        return null;
+      }
+
+      const resp = await fetch(`/webchat/session/${encodeURIComponent(runtimeSessionId)}/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          command_type: commandType,
+          payload,
+          branch_id: branchId,
+        }),
+      });
+
+      if (!resp.ok) {
+        throw new Error(await resp.text());
+      }
+
+      const data = await resp.json();
+      renderRuntimePanels({
+        session: { ...(data.runtime?.session || {}), session_id: runtimeSessionId },
+        runtime: data.runtime,
+        event_log: [],
+      });
+      await fetchRuntimeActivity(false);
+      return data.command || null;
+    }
+
+    async function fetchRuntimeActivity(showFeedback = false) {
+      if (!runtimeSessionId) {
+        renderRuntimePanels(null);
+        return null;
+      }
+
+      try {
+        const resp = await fetch(`/webchat/session/${encodeURIComponent(runtimeSessionId)}/activity`, {
+          cache: "no-store"
+        });
+
+        if (resp.status === 404) {
+          setRuntimeSession(null);
+          renderRuntimePanels(null);
+          return null;
+        }
+
+        if (!resp.ok) {
+          throw new Error(await resp.text());
+        }
+
+        const data = await resp.json();
+        renderRuntimePanels(data);
+        return data;
+      } catch (error) {
+        if (showFeedback) {
+          showBanner(`Falha ao observar a sessão viva: ${String(error)}`);
+        }
+        return null;
+      }
+    }
+
+    function startRuntimePolling() {
+      if (runtimePollId) {
+        window.clearInterval(runtimePollId);
+      }
+      runtimePollId = window.setInterval(() => {
+        fetchRuntimeActivity(false);
+      }, ACTIVITY_POLL_MS);
+    }
+
+    function stopRuntimePolling() {
+      if (runtimePollId) {
+        window.clearInterval(runtimePollId);
+        runtimePollId = null;
+      }
+    }
+
+    function getAssistantMessages(activity) {
+      const messages = activity?.runtime?.recursive_session?.messages || [];
+      return messages.filter((item) => item.role === "assistant");
+    }
+
+    function getTerminalActivityError(activity) {
+      const eventLog = activity?.event_log || [];
+      const latest = [...eventLog].reverse().find((item) => [
+        "execution_error",
+        "webchat_response_error",
+        "security_threat_high"
+      ].includes(item.event_type));
+      if (!latest) {
+        return "";
+      }
+      return latest.payload?.error
+        || latest.payload?.body_preview
+        || latest.payload?.text_preview
+        || stringifyPayload(latest.payload, 220)
+        || latest.event_type;
+    }
+
+    function buildLiveProgress(activity) {
+      const currentTask = activity?.runtime?.tasks?.current;
+      const latestEvent = activity?.runtime?.recursive_session?.state?.latest_event;
+      const queued = activity?.runtime?.recursive_session?.state?.queued_commands || 0;
+      const lines = ["Observando a sessão recursiva viva..."];
+      if (currentTask?.title) {
+        lines.push(`Tarefa atual: ${currentTask.title}`);
+      }
+      if (latestEvent?.event_type) {
+        lines.push(`Último evento: ${latestEvent.event_type}`);
+      }
+      if (queued > 0) {
+        lines.push(`Comandos na fila: ${queued}`);
+      }
+      return lines.join("\n\n");
     }
 
     function autoResizeTextarea(el) {
@@ -759,14 +1380,17 @@
     }
 
     function prepareFreshSession() {
+      stopRuntimePolling();
       sessionId = genSessionId();
       localStorage.setItem(SESSION_KEY, sessionId);
+      setRuntimeSession(null);
       updateSessionBadge();
       const input = document.getElementById("input");
       input.value = "";
       saveDraft("");
       updateCharCount();
       renderHistory();
+      renderRuntimePanels(null);
       showBanner("");
     }
 
@@ -790,69 +1414,37 @@
       return false;
     }
 
-    async function receiveStream(streamUrl, bubble) {
-      return new Promise((resolve) => {
-        const es = new EventSource(streamUrl);
-        currentEventSource = es;
-        let accumulated = "";
-        let finished = false;
-        const timeoutId = window.setTimeout(() => {
-          if (!finished) {
-            es.close();
-            currentEventSource = null;
-            bubble.classList.remove("streaming");
-            bubble.innerHTML = renderMarkdown(accumulated || "Erro: timeout do stream.");
-            resolve(accumulated || "Erro: timeout do stream.");
-          }
-        }, 125000);
-
-        es.onmessage = (event) => {
-          if (event.data === "[DONE]") {
-            finished = true;
-            clearTimeout(timeoutId);
-            es.close();
-            currentEventSource = null;
-            bubble.classList.remove("streaming");
-            const finalText = accumulated || "(sem resposta)";
-            bubble.innerHTML = renderMarkdown(finalText);
-            resolve(finalText);
-            return;
-          }
-
-          try {
-            const chunk = JSON.parse(event.data);
-            if (chunk.error) {
-              finished = true;
-              clearTimeout(timeoutId);
-              es.close();
-              currentEventSource = null;
-              bubble.classList.remove("streaming");
-              bubble.innerHTML = `<span class="text-rose-300">${escapeHtml(chunk.error)}</span>`;
-              resolve(`Erro: ${chunk.error}`);
-              return;
-            }
-            accumulated += chunk.text || "";
-            bubble.innerHTML = renderMarkdown(accumulated);
-            bubble.classList.add("streaming");
-            scrollMessagesToBottom();
-          } catch (_) {
-            // ignore malformed chunks
-          }
-        };
-
-        es.onerror = () => {
-          if (finished) {
-            return;
-          }
-          clearTimeout(timeoutId);
-          es.close();
-          currentEventSource = null;
+    async function monitorLiveTurn(bubble, baselineAssistantCount) {
+      const deadline = Date.now() + 125000;
+      while (Date.now() < deadline) {
+        const activity = await fetchRuntimeActivity(false);
+        const assistantMessages = getAssistantMessages(activity);
+        if (assistantMessages.length > baselineAssistantCount) {
+          const latest = assistantMessages[assistantMessages.length - 1];
+          const finalText = latest?.content || "(sem resposta)";
           bubble.classList.remove("streaming");
-          const message = accumulated || "Conexão perdida durante o stream.";
-          bubble.innerHTML = renderMarkdown(message);
-          resolve(message);
-        };
-      });
+          bubble.innerHTML = renderMarkdown(finalText);
+          return finalText;
+        }
+
+        const terminalError = getTerminalActivityError(activity);
+        if (terminalError) {
+          const textError = `Erro: ${terminalError}`;
+          bubble.classList.remove("streaming");
+          bubble.innerHTML = `<span class="text-rose-300">${escapeHtml(textError)}</span>`;
+          return textError;
+        }
+
+        bubble.innerHTML = renderMarkdown(buildLiveProgress(activity));
+        bubble.classList.add("streaming");
+        scrollMessagesToBottom();
+        await sleep(ACTIVITY_POLL_MS);
+      }
+
+      const timeoutText = "Erro: timeout aguardando a sessão viva.";
+      bubble.classList.remove("streaming");
+      bubble.innerHTML = `<span class="text-rose-300">${escapeHtml(timeoutText)}</span>`;
+      return timeoutText;
     }
 
     async function sendMessage(textOverride = null) {
@@ -878,10 +1470,11 @@
       isStreaming = true;
       document.getElementById("btn-send").disabled = true;
       document.getElementById("btn-retry").disabled = true;
-      setStatus("thinking");
+      setStatus("thinking", "Observando a sessão viva até a resposta textual aparecer.");
 
       const placeholder = { role: "agent", text: "", timestamp: Date.now() };
       const bubble = addMessage(placeholder, { streaming: true });
+      const baselineAssistantCount = observedAssistantMessageCount;
 
       try {
         const resp = await fetch("/webchat/message", {
@@ -906,9 +1499,14 @@
           updateSessionBadge();
         }
 
-        const finalText = await receiveStream(data.stream_url, bubble);
+        if (data.runtime_session_id) {
+          setRuntimeSession(data.runtime_session_id);
+          startRuntimePolling();
+        }
+
+        const finalText = await monitorLiveTurn(bubble, baselineAssistantCount);
         replaceLastAgentMessage(finalText || "(sem resposta)");
-        setStatus("online");
+        setStatus(finalText.startsWith("Erro:") ? "error" : "online");
       } catch (error) {
         const textError = `Erro de conexão: ${String(error)}`;
         bubble.classList.remove("streaming");
@@ -988,6 +1586,91 @@
       const btnRetry = document.getElementById("btn-retry");
       const btnHealth = document.getElementById("btn-health");
       const btnNewSession = document.getElementById("btn-new-session");
+      const btnCommandPause = document.getElementById("btn-command-pause");
+      const btnCommandResume = document.getElementById("btn-command-resume");
+      const btnCommandCheckpoint = document.getElementById("btn-command-checkpoint");
+      const btnCommandFixWinner = document.getElementById("btn-command-fix-winner");
+      const btnCommandReprioritize = document.getElementById("btn-command-reprioritize");
+      const btnCommandSummary = document.getElementById("btn-command-summary");
+      const btnCommandParallel = document.getElementById("btn-command-parallel");
+      const btnCommandFocus = document.getElementById("btn-command-focus");
+      const btnCommandNote = document.getElementById("btn-command-note");
+      const commandNote = document.getElementById("command-note");
+      const commandCheckpointName = document.getElementById("command-checkpoint-name");
+
+      btnCommandPause.addEventListener("click", async () => {
+        try {
+          await sendOperationalCommand("pause_runtime", {
+            requested_by: "operator",
+            reason: commandNote.value.trim(),
+          });
+          setStatus("online", "Runtime pausado operacionalmente.");
+        } catch (error) {
+          showBanner(`Falha ao pausar runtime: ${String(error)}`);
+        }
+      });
+      btnCommandResume.addEventListener("click", async () => {
+        try {
+          await sendOperationalCommand("resume_runtime", {
+            requested_by: "operator",
+            reason: commandNote.value.trim(),
+          });
+          setStatus("online", "Runtime retomado operacionalmente.");
+        } catch (error) {
+          showBanner(`Falha ao retomar runtime: ${String(error)}`);
+        }
+      });
+      btnCommandCheckpoint.addEventListener("click", async () => {
+        try {
+          await sendOperationalCommand("create_checkpoint", {
+            requested_by: "operator",
+            reason: commandNote.value.trim(),
+            checkpoint_name: commandCheckpointName.value.trim(),
+          });
+          commandCheckpointName.value = "";
+          setStatus("online", "Checkpoint operacional persistido.");
+        } catch (error) {
+          showBanner(`Falha ao criar checkpoint: ${String(error)}`);
+        }
+      });
+      btnCommandFixWinner.addEventListener("click", async () => {
+        const branchId = readBranchId();
+        if (branchId === null) {
+          showBanner("Informe um branch_id para fixar o winner.");
+          return;
+        }
+        try {
+          await sendOperationalCommand("fix_winner_branch", {
+            requested_by: "operator",
+            reason: commandNote.value.trim(),
+          }, branchId);
+          setStatus("online", `Winner operacional fixado no branch ${branchId}.`);
+        } catch (error) {
+          showBanner(`Falha ao fixar winner: ${String(error)}`);
+        }
+      });
+      btnCommandReprioritize.addEventListener("click", async () => {
+        const branchId = readBranchId();
+        const priority = readPriority();
+        if (branchId === null) {
+          showBanner("Informe um branch_id para repriorizar.");
+          return;
+        }
+        if (priority === null) {
+          showBanner("Informe uma prioridade inteira para repriorizar o branch.");
+          return;
+        }
+        try {
+          await sendOperationalCommand("reprioritize_branch", {
+            requested_by: "operator",
+            reason: commandNote.value.trim(),
+            priority,
+          }, branchId);
+          setStatus("online", `Branch ${branchId} repriorizado para ${priority}.`);
+        } catch (error) {
+          showBanner(`Falha ao repriorizar branch: ${String(error)}`);
+        }
+      });
 
       input.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey) {
@@ -1015,13 +1698,68 @@
       });
       btnHealth.addEventListener("click", () => checkHealth(true));
       btnNewSession.addEventListener("click", prepareFreshSession);
+      btnCommandSummary.addEventListener("click", async () => {
+        try {
+          const command = await sendOperationalCommand("request_runtime_summary", {
+            requested_by: "operator",
+            note: commandNote.value.trim(),
+          }, readBranchId());
+          commandNote.value = "";
+          setStatus("online", `Comando ${command?.command_type || "request_runtime_summary"} aplicado.`);
+        } catch (error) {
+          showBanner(`Falha ao enfileirar comando operacional: ${String(error)}`);
+        }
+      });
+      btnCommandParallel.addEventListener("click", async () => {
+        try {
+          const command = await sendOperationalCommand("review_parallel_state", {
+            requested_by: "operator",
+            note: commandNote.value.trim(),
+          }, readBranchId());
+          commandNote.value = "";
+          setStatus("online", `Comando ${command?.command_type || "review_parallel_state"} aplicado.`);
+        } catch (error) {
+          showBanner(`Falha ao enfileirar comando operacional: ${String(error)}`);
+        }
+      });
+      btnCommandFocus.addEventListener("click", async () => {
+        const branchId = readBranchId();
+        if (branchId === null) {
+          showBanner("Informe um branch_id para o comando de foco.");
+          return;
+        }
+        try {
+          await sendOperationalCommand("focus_branch", {
+            requested_by: "operator",
+            note: commandNote.value.trim(),
+          }, branchId);
+          setStatus("online", `Foco operacional enviado para branch ${branchId}.`);
+        } catch (error) {
+          showBanner(`Falha ao enfileirar comando operacional: ${String(error)}`);
+        }
+      });
+      btnCommandNote.addEventListener("click", async () => {
+        const note = commandNote.value.trim();
+        if (!note) {
+          showBanner("Escreva uma nota do operador antes de enviá-la ao runtime.");
+          return;
+        }
+        try {
+          const command = await sendOperationalCommand("operator_note", {
+            requested_by: "operator",
+            note,
+          }, readBranchId());
+          commandNote.value = "";
+          setStatus("online", `Nota operacional registrada como ${command?.command_type || "operator_note"}.`);
+        } catch (error) {
+          showBanner(`Falha ao enfileirar comando operacional: ${String(error)}`);
+        }
+      });
 
       window.addEventListener("online", () => checkHealth(true));
       window.addEventListener("offline", () => setStatus("offline"));
       window.addEventListener("beforeunload", () => {
-        if (currentEventSource) {
-          currentEventSource.close();
-        }
+        stopRuntimePolling();
       });
     }
 
@@ -1031,11 +1769,13 @@
         sessionId = genSessionId();
         localStorage.setItem(SESSION_KEY, sessionId);
       }
+      runtimeSessionId = localStorage.getItem(getRuntimeKey()) || null;
       updateSessionBadge();
+      updateRuntimeSessionBadge();
       populateQuickPrompts();
       bindEvents();
       renderHistory();
-      updateStats();
+      renderRuntimePanels(null);
 
       const input = document.getElementById("input");
       input.value = getDraft();
@@ -1045,6 +1785,8 @@
       document.getElementById("btn-retry").disabled = !lastUserMessage;
 
       checkHealth();
+      fetchRuntimeActivity(false);
+      startRuntimePolling();
       healthPollId = window.setInterval(() => {
         if (!isStreaming) {
           checkHealth();

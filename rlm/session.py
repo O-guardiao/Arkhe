@@ -240,6 +240,7 @@ class RLMSession:
         Compactação de turnos antigos roda em background após cada turno.
         """
         t_start = time.perf_counter()
+        self._record_recursive_message("user", user_message, metadata={"source": "chat"})
 
         # Monta prompt com contexto da sessão
         prompt = self._build_prompt(user_message)
@@ -249,6 +250,12 @@ class RLMSession:
         response = completion.response
 
         elapsed = time.perf_counter() - t_start
+
+        self._record_recursive_message(
+            "assistant",
+            response,
+            metadata={"source": "chat", "elapsed_s": elapsed},
+        )
 
         # Acumula turno
         self._state.turns.append(SessionTurn(user_message, response, elapsed))
@@ -317,9 +324,134 @@ class RLMSession:
             all_msgs.extend(h.log_poll())
         return all_msgs
 
+    def queue_recursive_command(
+        self,
+        command_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        status: str = "queued",
+        branch_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        env = self._persistent_env
+        if env is None or not hasattr(env, "queue_recursive_command"):
+            return None
+        return env.queue_recursive_command(
+            command_type,
+            payload=payload,
+            status=status,
+            branch_id=branch_id,
+        )
+
+    def update_recursive_command(
+        self,
+        command_id: int,
+        *,
+        status: str,
+        outcome: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        env = self._persistent_env
+        if env is None or not hasattr(env, "update_recursive_command"):
+            return None
+        return env.update_recursive_command(
+            command_id,
+            status=status,
+            outcome=outcome,
+        )
+
+    def recent_recursive_messages(
+        self,
+        *,
+        limit: int = 20,
+        role: str | None = None,
+    ) -> list[dict[str, Any]]:
+        env = self._persistent_env
+        if env is None or not hasattr(env, "recent_recursive_messages"):
+            return []
+        return env.recent_recursive_messages(limit=limit, role=role)
+
+    def recent_recursive_commands(
+        self,
+        *,
+        limit: int = 20,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        env = self._persistent_env
+        if env is None or not hasattr(env, "recent_recursive_commands"):
+            return []
+        return env.recent_recursive_commands(limit=limit, status=status)
+
+    def recent_recursive_events(
+        self,
+        *,
+        limit: int = 20,
+        event_type: str | None = None,
+        branch_id: int | None = None,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        env = self._persistent_env
+        if env is None or not hasattr(env, "recent_recursive_events"):
+            return []
+        return env.recent_recursive_events(
+            limit=limit,
+            event_type=event_type,
+            branch_id=branch_id,
+            source=source,
+        )
+
+    def emit_recursive_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        branch_id: int | None = None,
+        source: str = "session",
+        visibility: str = "internal",
+        correlation_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        env = self._persistent_env
+        if env is None or not hasattr(env, "emit_recursive_event"):
+            return None
+        return env.emit_recursive_event(
+            event_type,
+            payload=payload,
+            branch_id=branch_id,
+            source=source,
+            visibility=visibility,
+            correlation_id=correlation_id,
+        )
+
+    def recursive_session_state(self) -> dict[str, Any]:
+        env = self._persistent_env
+        if env is None or not hasattr(env, "get_recursive_session_state"):
+            return {
+                "message_count": 0,
+                "command_count": 0,
+                "event_count": 0,
+                "queued_commands": 0,
+                "latest_message": None,
+                "latest_command": None,
+                "latest_event": None,
+            }
+        return env.get_recursive_session_state()
+
     # ──────────────────────────────────────────────────────────────────────────
     # Internal
     # ──────────────────────────────────────────────────────────────────────────
+
+    def _record_recursive_message(
+        self,
+        role: str,
+        content: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        env = self._persistent_env
+        if env is None or not hasattr(env, "record_recursive_message"):
+            return None
+        try:
+            return env.record_recursive_message(role, content, metadata=metadata)
+        except Exception:
+            return None
 
     def _build_prompt(self, user_message: str) -> str:
         """

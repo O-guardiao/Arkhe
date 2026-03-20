@@ -1475,20 +1475,32 @@ def make_sub_rlm_parallel_fn(
                 )
 
         def _coordination_observer(event: dict[str, Any]) -> None:
-            if event.get("operation") != "control_publish":
-                return
-            signal_type = str(event.get("metadata", {}).get("semantic_type", "")).strip()
-            if signal_type == "switch_strategy":
-                return
-            if signal_type not in {"stop", "solution_found", "consensus_reached"}:
-                return
-            if signal_type == "solution_found" and resolved_policy != "stop_on_solution":
-                return
-            if signal_type == "consensus_reached" and resolved_policy != "consensus_reached":
-                return
-            sender_id = event.get("sender_id")
-            payload = event.get("payload")
-            _apply_stop_signal(sender_id if isinstance(sender_id, int) else None, str(payload))
+                nonlocal winner_branch_id
+                if event.get("operation") != "control_publish":
+                    return
+                signal_type = str(event.get("metadata", {}).get("semantic_type", "")).strip()
+                if signal_type == "switch_strategy":
+                    payload = event.get("payload")
+                    if not isinstance(payload, dict):
+                        return
+                    action = str(payload.get("action") or "").strip()
+                    prioritized_branch_id = payload.get("prioritized_branch_id")
+                    if not isinstance(prioritized_branch_id, int):
+                        return
+                    with winner_lock:
+                        winner_branch_id = prioritized_branch_id
+                    if action in {"focus_branch", "fix_winner_branch"}:
+                        _apply_stop_signal(prioritized_branch_id, str(payload.get("reason") or action))
+                    return
+                if signal_type not in {"stop", "solution_found", "consensus_reached"}:
+                    return
+                if signal_type == "solution_found" and resolved_policy != "stop_on_solution":
+                    return
+                if signal_type == "consensus_reached" and resolved_policy != "consensus_reached":
+                    return
+                sender_id = event.get("sender_id")
+                payload = event.get("payload")
+                _apply_stop_signal(sender_id if isinstance(sender_id, int) else None, str(payload))
 
         def _publish_control_signal(signal_type: str, payload: dict[str, Any], *, sender_id: int) -> None:
             publish_control = getattr(_sibling_bus_instance, "publish_control", None)
@@ -1925,20 +1937,32 @@ def make_sub_rlm_parallel_fn(
                 )
 
         def _coordination_observer(event: dict[str, Any]) -> None:
-            if event.get("operation") != "control_publish":
-                return
-            signal_type = str(event.get("metadata", {}).get("semantic_type", "")).strip()
-            if signal_type == "switch_strategy":
-                return
-            if signal_type not in {"stop", "solution_found", "consensus_reached"}:
-                return
-            if signal_type == "solution_found" and resolved_policy != "stop_on_solution":
-                return
-            if signal_type == "consensus_reached" and resolved_policy != "consensus_reached":
-                return
-            sender_id = event.get("sender_id")
-            payload = event.get("payload")
-            _apply_stop_signal(sender_id if isinstance(sender_id, int) else None, str(payload))
+                nonlocal winner_branch_id
+                if event.get("operation") != "control_publish":
+                    return
+                signal_type = str(event.get("metadata", {}).get("semantic_type", "")).strip()
+                if signal_type == "switch_strategy":
+                    payload = event.get("payload")
+                    if not isinstance(payload, dict):
+                        return
+                    action = str(payload.get("action") or "").strip()
+                    prioritized_branch_id = payload.get("prioritized_branch_id")
+                    if not isinstance(prioritized_branch_id, int):
+                        return
+                    with winner_lock:
+                        winner_branch_id = prioritized_branch_id
+                    if action in {"focus_branch", "fix_winner_branch"}:
+                        _apply_stop_signal(prioritized_branch_id, str(payload.get("reason") or action))
+                    return
+                if signal_type not in {"stop", "solution_found", "consensus_reached"}:
+                    return
+                if signal_type == "solution_found" and resolved_policy != "stop_on_solution":
+                    return
+                if signal_type == "consensus_reached" and resolved_policy != "consensus_reached":
+                    return
+                sender_id = event.get("sender_id")
+                payload = event.get("payload")
+                _apply_stop_signal(sender_id if isinstance(sender_id, int) else None, str(payload))
 
         def _publish_control_signal(signal_type: str, payload: dict[str, Any], *, sender_id: int) -> None:
             publish_control = getattr(_sibling_bus_instance, "publish_control", None)

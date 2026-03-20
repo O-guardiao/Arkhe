@@ -254,6 +254,32 @@ events = timeline_recent(limit=10)
         assert any(entry["event_type"] == "analysis.started" for entry in repl.locals["events"])
         repl.cleanup()
 
+    def test_recursive_session_apis_are_available(self):
+        """Recursive session helpers should be callable from REPL code."""
+        repl = LocalREPL()
+
+        result = repl.execute_code(
+            '''
+recursive_message("user", "Preciso continuar a prova", {"channel": "chat"})
+recursive_message("assistant", "Vou abrir duas frentes em paralelo")
+recursive_event("clarification_needed", {"question": "Qual branch priorizar?"}, source="planner")
+recursive_command("branch.prioritize", {"branch_id": 2})
+msgs = recursive_messages(limit=10)
+events = recursive_events(limit=10)
+cmds = recursive_commands(limit=10)
+state = recursive_session_state()
+'''
+        )
+
+        assert result.stderr == ""
+        assert len(repl.locals["msgs"]) == 2
+        assert repl.locals["msgs"][0]["role"] == "user"
+        assert any(entry["event_type"] == "clarification_needed" for entry in repl.locals["events"])
+        assert repl.locals["cmds"][0]["command_type"] == "branch.prioritize"
+        assert repl.locals["state"]["event_count"] >= 4
+        assert repl.locals["state"]["queued_commands"] == 1
+        repl.cleanup()
+
     def test_runtime_workbench_persists_in_checkpoint(self, tmp_path: Path):
         """Task ledger, attachments and timeline should survive checkpoint restore."""
         checkpoint = tmp_path / "runtime-checkpoint.json"
@@ -281,6 +307,38 @@ timeline_mark("checkpoint.prepared", {"ok": True})
         assert any(
             entry["event_type"] == "checkpoint.prepared"
             for entry in snapshot["timeline"]["entries"]
+        )
+        restored.cleanup()
+
+    def test_recursive_session_persists_in_checkpoint(self, tmp_path: Path):
+        """Recursive session messages and commands should survive checkpoint restore."""
+        checkpoint = tmp_path / "recursive-checkpoint.json"
+
+        repl = LocalREPL()
+        repl.record_recursive_message("user", "Quero manter o pai falando com o usuario")
+        repl.record_recursive_message("assistant", "Ok, vou delegar dois filhos")
+        repl.queue_recursive_command("branch.pause", payload={"branch_id": 3})
+        repl.emit_recursive_event(
+            "branch_progress",
+            payload={"branch_id": 3, "status": "paused"},
+            branch_id=3,
+            source="planner",
+        )
+        repl.save_checkpoint(str(checkpoint))
+        repl.cleanup()
+
+        restored = LocalREPL()
+        load_message = restored.load_checkpoint(str(checkpoint))
+        snapshot = restored.get_runtime_state_snapshot()
+
+        assert "Checkpoint restored" in load_message
+        assert [entry["role"] for entry in snapshot["recursive_session"]["messages"]] == ["user", "assistant"]
+        assert snapshot["recursive_session"]["commands"][0]["command_type"] == "branch.pause"
+        assert snapshot["recursive_session"]["state"]["message_count"] == 2
+        assert snapshot["recursive_session"]["state"]["queued_commands"] == 1
+        assert any(
+            entry["event_type"] == "branch_progress"
+            for entry in snapshot["recursive_session"]["events"]
         )
         restored.cleanup()
 

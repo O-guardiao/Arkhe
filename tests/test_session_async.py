@@ -911,6 +911,44 @@ class TestSessionAsyncHandle:
         # Após o turno, kwargs NÃO deve conter _parent_log_queue
         assert "_parent_log_queue" not in (session._rlm.environment_kwargs or {})
 
+    def test_chat_records_recursive_messages_when_persistent_env_exists(self):
+        from rlm.environments.local_repl import LocalREPL
+
+        session = self._make_session_mock(response="FINAL(ok)")
+        repl = LocalREPL()
+        session._rlm._persistent_env = repl
+
+        result = session.chat("mensagem persistida")
+        messages = session.recent_recursive_messages(limit=10)
+        events = session.recent_recursive_events(limit=10)
+
+        assert result == "FINAL(ok)"
+        assert [entry["role"] for entry in messages] == ["user", "assistant"]
+        assert messages[0]["content"] == "mensagem persistida"
+        assert [entry["event_type"] for entry in events[:2]] == [
+            "user_message_received",
+            "assistant_message_emitted",
+        ]
+        repl.cleanup()
+
+    def test_queue_recursive_command_delegates_to_persistent_env(self):
+        from rlm.environments.local_repl import LocalREPL
+
+        session = self._make_session_mock(response="FINAL(ok)")
+        repl = LocalREPL()
+        session._rlm._persistent_env = repl
+
+        queued = session.queue_recursive_command(
+            "branch.resume",
+            {"branch_id": 5},
+        )
+        state = session.recursive_session_state()
+
+        assert queued is not None
+        assert queued["command_type"] == "branch.resume"
+        assert state["queued_commands"] == 1
+        repl.cleanup()
+
 
 # ===========================================================================
 # 6. poll_logs — agrega múltiplos handles

@@ -392,6 +392,250 @@ class ExecutionTimeline:
 
 
 @dataclass
+class RecursiveMessageEntry:
+    message_id: int
+    role: str
+    content: str
+    branch_id: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    timestamp: str = field(default_factory=_now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class RecursiveCommandEntry:
+    command_id: int
+    command_type: str
+    payload: dict[str, Any] = field(default_factory=dict)
+    status: str = "queued"
+    branch_id: int | None = None
+    outcome: dict[str, Any] = field(default_factory=dict)
+    timestamp: str = field(default_factory=_now_iso)
+    updated_at: str = field(default_factory=_now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class RecursiveEventEntry:
+    event_id: int
+    event_type: str
+    payload: dict[str, Any] = field(default_factory=dict)
+    branch_id: int | None = None
+    source: str = "runtime"
+    visibility: str = "internal"
+    correlation_id: str | None = None
+    timestamp: str = field(default_factory=_now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class RecursiveSessionLedger:
+    def __init__(
+        self,
+        *,
+        max_messages: int = 400,
+        max_commands: int = 200,
+        max_events: int = 600,
+    ) -> None:
+        self._max_messages = max_messages
+        self._max_commands = max_commands
+        self._max_events = max_events
+        self._messages: deque[RecursiveMessageEntry] = deque(maxlen=max_messages)
+        self._commands: deque[RecursiveCommandEntry] = deque(maxlen=max_commands)
+        self._events: deque[RecursiveEventEntry] = deque(maxlen=max_events)
+        self._next_message_id = 1
+        self._next_command_id = 1
+        self._next_event_id = 1
+        self._lock = threading.RLock()
+
+    def add_message(
+        self,
+        role: str,
+        content: str,
+        *,
+        branch_id: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            entry = RecursiveMessageEntry(
+                message_id=self._next_message_id,
+                role=str(role).strip() or "unknown",
+                content=str(content),
+                branch_id=branch_id,
+                metadata=dict(metadata or {}),
+            )
+            self._messages.append(entry)
+            self._next_message_id += 1
+            return entry.to_dict()
+
+    def recent_messages(self, limit: int = 20, *, role: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            items = list(self._messages)
+            if role is not None:
+                items = [item for item in items if item.role == role]
+            if limit > 0:
+                items = items[-limit:]
+            return [item.to_dict() for item in items]
+
+    def queue_command(
+        self,
+        command_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        status: str = "queued",
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            entry = RecursiveCommandEntry(
+                command_id=self._next_command_id,
+                command_type=str(command_type).strip() or "unknown",
+                payload=dict(payload or {}),
+                status=str(status).strip() or "queued",
+                branch_id=branch_id,
+            )
+            self._commands.append(entry)
+            self._next_command_id += 1
+            return entry.to_dict()
+
+    def update_command(
+        self,
+        command_id: int,
+        *,
+        status: str,
+        outcome: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            normalized = int(command_id)
+            for entry in self._commands:
+                if entry.command_id == normalized:
+                    entry.status = str(status).strip() or entry.status
+                    if outcome is not None:
+                        entry.outcome = dict(outcome)
+                    entry.updated_at = _now_iso()
+                    return entry.to_dict()
+        raise KeyError(f"recursive command {command_id} not found")
+
+    def recent_commands(
+        self,
+        limit: int = 20,
+        *,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            items = list(self._commands)
+            if status is not None:
+                items = [item for item in items if item.status == status]
+            if limit > 0:
+                items = items[-limit:]
+            return [item.to_dict() for item in items]
+
+    def emit_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        branch_id: int | None = None,
+        source: str = "runtime",
+        visibility: str = "internal",
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            entry = RecursiveEventEntry(
+                event_id=self._next_event_id,
+                event_type=str(event_type).strip() or "unknown",
+                payload=dict(payload or {}),
+                branch_id=branch_id,
+                source=str(source).strip() or "runtime",
+                visibility=str(visibility).strip() or "internal",
+                correlation_id=None if correlation_id is None else str(correlation_id),
+            )
+            self._events.append(entry)
+            self._next_event_id += 1
+            return entry.to_dict()
+
+    def recent_events(
+        self,
+        limit: int = 20,
+        *,
+        event_type: str | None = None,
+        branch_id: int | None = None,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            items = list(self._events)
+            if event_type is not None:
+                items = [item for item in items if item.event_type == event_type]
+            if branch_id is not None:
+                items = [item for item in items if item.branch_id == branch_id]
+            if source is not None:
+                items = [item for item in items if item.source == source]
+            if limit > 0:
+                items = items[-limit:]
+            return [item.to_dict() for item in items]
+
+    def state(self) -> dict[str, Any]:
+        with self._lock:
+            queued = sum(1 for item in self._commands if item.status == "queued")
+            return {
+                "message_count": len(self._messages),
+                "command_count": len(self._commands),
+                "event_count": len(self._events),
+                "queued_commands": queued,
+                "latest_message": self._messages[-1].to_dict() if self._messages else None,
+                "latest_command": self._commands[-1].to_dict() if self._commands else None,
+                "latest_event": self._events[-1].to_dict() if self._events else None,
+            }
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "max_messages": self._max_messages,
+                "max_commands": self._max_commands,
+                "max_events": self._max_events,
+                "next_message_id": self._next_message_id,
+                "next_command_id": self._next_command_id,
+                "next_event_id": self._next_event_id,
+                "messages": [item.to_dict() for item in self._messages],
+                "commands": [item.to_dict() for item in self._commands],
+                "events": [item.to_dict() for item in self._events],
+            }
+
+    def restore(self, payload: dict[str, Any] | None) -> None:
+        with self._lock:
+            self._messages.clear()
+            self._commands.clear()
+            self._events.clear()
+            self._next_message_id = 1
+            self._next_command_id = 1
+            self._next_event_id = 1
+            if not payload:
+                return
+            self._max_messages = int(payload.get("max_messages", self._max_messages))
+            self._max_commands = int(payload.get("max_commands", self._max_commands))
+            self._max_events = int(payload.get("max_events", self._max_events))
+            self._messages = deque(
+                (RecursiveMessageEntry(**raw) for raw in payload.get("messages", [])),
+                maxlen=self._max_messages,
+            )
+            self._commands = deque(
+                (RecursiveCommandEntry(**raw) for raw in payload.get("commands", [])),
+                maxlen=self._max_commands,
+            )
+            self._events = deque(
+                (RecursiveEventEntry(**raw) for raw in payload.get("events", [])),
+                maxlen=self._max_events,
+            )
+            self._next_message_id = int(payload.get("next_message_id", len(self._messages) + 1))
+            self._next_command_id = int(payload.get("next_command_id", len(self._commands) + 1))
+            self._next_event_id = int(payload.get("next_event_id", len(self._events) + 1))
+
+
+@dataclass
 class CoordinationEvent:
     event_id: int
     operation: str

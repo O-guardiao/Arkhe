@@ -18,6 +18,7 @@ from rlm.core.runtime_workbench import (
     CoordinationDigest,
     ContextAttachmentStore,
     ExecutionTimeline,
+    RecursiveSessionLedger,
     TaskLedger,
 )
 from rlm.core.types import REPLResult, RLMChatCompletion
@@ -247,9 +248,20 @@ class LocalREPL(NonIsolatedEnv):
         self._task_ledger = TaskLedger()
         self._context_attachments = ContextAttachmentStore()
         self._execution_timeline = ExecutionTimeline(on_record=self._publish_timeline_event)
+        self._recursive_session = RecursiveSessionLedger()
         self._coordination_digest = CoordinationDigest()
         self._mcts_archives: dict[str, Any] = {}
         self._active_recursive_strategy: dict[str, Any] | None = None
+        self._runtime_control_state: dict[str, Any] = {
+            "paused": False,
+            "pause_reason": "",
+            "focused_branch_id": None,
+            "fixed_winner_branch_id": None,
+            "branch_priorities": {},
+            "last_checkpoint_path": None,
+            "last_checkpoint_at": None,
+            "last_operator_note": "",
+        }
 
         # Setup globals, locals, and modules in environment.
         self.setup()
@@ -494,6 +506,88 @@ class LocalREPL(NonIsolatedEnv):
         ) -> dict[str, Any]:
             return self.record_runtime_event(event_type, data, origin=origin)
 
+        def recursive_message(
+            role: str,
+            content: str,
+            metadata: dict[str, Any] | None = None,
+            branch_id: int | None = None,
+        ) -> dict[str, Any]:
+            return self.record_recursive_message(
+                role,
+                content,
+                metadata=metadata,
+                branch_id=branch_id,
+            )
+
+        def recursive_messages(
+            limit: int = 20,
+            role: str | None = None,
+        ) -> list[dict[str, Any]]:
+            return self.recent_recursive_messages(limit=limit, role=role)
+
+        def recursive_event(
+            event_type: str,
+            payload: dict[str, Any] | None = None,
+            branch_id: int | None = None,
+            source: str = "runtime",
+            visibility: str = "internal",
+            correlation_id: str | None = None,
+        ) -> dict[str, Any]:
+            return self.emit_recursive_event(
+                event_type,
+                payload=payload,
+                branch_id=branch_id,
+                source=source,
+                visibility=visibility,
+                correlation_id=correlation_id,
+            )
+
+        def recursive_events(
+            limit: int = 20,
+            event_type: str | None = None,
+            branch_id: int | None = None,
+            source: str | None = None,
+        ) -> list[dict[str, Any]]:
+            return self.recent_recursive_events(
+                limit=limit,
+                event_type=event_type,
+                branch_id=branch_id,
+                source=source,
+            )
+
+        def recursive_command(
+            command_type: str,
+            payload: dict[str, Any] | None = None,
+            status: str = "queued",
+            branch_id: int | None = None,
+        ) -> dict[str, Any]:
+            return self.queue_recursive_command(
+                command_type,
+                payload=payload,
+                status=status,
+                branch_id=branch_id,
+            )
+
+        def recursive_command_update(
+            command_id: int,
+            status: str,
+            outcome: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            return self.update_recursive_command(
+                command_id,
+                status=status,
+                outcome=outcome,
+            )
+
+        def recursive_commands(
+            limit: int = 20,
+            status: str | None = None,
+        ) -> list[dict[str, Any]]:
+            return self.recent_recursive_commands(limit=limit, status=status)
+
+        def recursive_session_state() -> dict[str, Any]:
+            return self.get_recursive_session_state()
+
         def active_recursive_strategy() -> dict[str, Any] | None:
             current = self.get_active_recursive_strategy()
             return dict(current) if current is not None else None
@@ -513,6 +607,14 @@ class LocalREPL(NonIsolatedEnv):
             "attachment_pin": attachment_pin,
             "timeline_recent": timeline_recent,
             "timeline_mark": timeline_mark,
+            "recursive_message": recursive_message,
+            "recursive_messages": recursive_messages,
+            "recursive_event": recursive_event,
+            "recursive_events": recursive_events,
+            "recursive_command": recursive_command,
+            "recursive_command_update": recursive_command_update,
+            "recursive_commands": recursive_commands,
+            "recursive_session_state": recursive_session_state,
             "active_recursive_strategy": active_recursive_strategy,
         }
         self.globals.update(self._runtime_scaffold_refs)
@@ -770,6 +872,182 @@ class LocalREPL(NonIsolatedEnv):
     ) -> dict[str, Any]:
         return self._execution_timeline.record(event_type, data, origin=origin)
 
+    def record_recursive_message(
+        self,
+        role: str,
+        content: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        entry = self._recursive_session.add_message(
+            role,
+            content,
+            metadata=metadata,
+            branch_id=branch_id,
+        )
+        self.record_runtime_event(
+            "recursive.message.recorded",
+            {
+                "message_id": entry["message_id"],
+                "role": entry["role"],
+                "branch_id": entry["branch_id"],
+            },
+            origin="recursive-session",
+        )
+        self.emit_recursive_event(
+            "user_message_received" if entry["role"] == "user" else "assistant_message_emitted",
+            payload={
+                "message_id": entry["message_id"],
+                "role": entry["role"],
+                "metadata": dict(entry.get("metadata") or {}),
+            },
+            branch_id=entry["branch_id"],
+            source=str((entry.get("metadata") or {}).get("source") or "runtime"),
+            visibility="chat",
+            correlation_id=f"msg:{entry['message_id']}",
+        )
+        return entry
+
+    def recent_recursive_messages(
+        self,
+        *,
+        limit: int = 20,
+        role: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._recursive_session.recent_messages(limit=limit, role=role)
+
+    def emit_recursive_event(
+        self,
+        event_type: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        branch_id: int | None = None,
+        source: str = "runtime",
+        visibility: str = "internal",
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
+        entry = self._recursive_session.emit_event(
+            event_type,
+            payload=payload,
+            branch_id=branch_id,
+            source=source,
+            visibility=visibility,
+            correlation_id=correlation_id,
+        )
+        self.record_runtime_event(
+            "recursive.event.emitted",
+            {
+                "event_id": entry["event_id"],
+                "event_type": entry["event_type"],
+                "branch_id": entry["branch_id"],
+                "source": entry["source"],
+            },
+            origin="recursive-session",
+        )
+        return entry
+
+    def recent_recursive_events(
+        self,
+        *,
+        limit: int = 20,
+        event_type: str | None = None,
+        branch_id: int | None = None,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._recursive_session.recent_events(
+            limit=limit,
+            event_type=event_type,
+            branch_id=branch_id,
+            source=source,
+        )
+
+    def queue_recursive_command(
+        self,
+        command_type: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        status: str = "queued",
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        entry = self._recursive_session.queue_command(
+            command_type,
+            payload=payload,
+            status=status,
+            branch_id=branch_id,
+        )
+        self.record_runtime_event(
+            "recursive.command.queued",
+            {
+                "command_id": entry["command_id"],
+                "command_type": entry["command_type"],
+                "status": entry["status"],
+                "branch_id": entry["branch_id"],
+            },
+            origin="recursive-session",
+        )
+        self.emit_recursive_event(
+            "command_queued",
+            payload={
+                "command_id": entry["command_id"],
+                "command_type": entry["command_type"],
+                "status": entry["status"],
+                "payload": dict(entry.get("payload") or {}),
+            },
+            branch_id=entry["branch_id"],
+            source="control",
+            visibility="control",
+            correlation_id=f"cmd:{entry['command_id']}",
+        )
+        return entry
+
+    def update_recursive_command(
+        self,
+        command_id: int,
+        *,
+        status: str,
+        outcome: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        entry = self._recursive_session.update_command(
+            command_id,
+            status=status,
+            outcome=outcome,
+        )
+        self.record_runtime_event(
+            "recursive.command.updated",
+            {
+                "command_id": entry["command_id"],
+                "command_type": entry["command_type"],
+                "status": entry["status"],
+            },
+            origin="recursive-session",
+        )
+        self.emit_recursive_event(
+            "command_updated",
+            payload={
+                "command_id": entry["command_id"],
+                "command_type": entry["command_type"],
+                "status": entry["status"],
+                "outcome": dict(entry.get("outcome") or {}),
+            },
+            branch_id=entry["branch_id"],
+            source="control",
+            visibility="control",
+            correlation_id=f"cmd:{entry['command_id']}",
+        )
+        return entry
+
+    def recent_recursive_commands(
+        self,
+        *,
+        limit: int = 20,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._recursive_session.recent_commands(limit=limit, status=status)
+
+    def get_recursive_session_state(self) -> dict[str, Any]:
+        return self._recursive_session.state()
+
     def current_runtime_task(self) -> dict[str, Any] | None:
         return self._task_ledger.current()
 
@@ -928,6 +1206,192 @@ class LocalREPL(NonIsolatedEnv):
     def clear_active_recursive_strategy(self, *, origin: str = "runtime") -> None:
         self.set_active_recursive_strategy(None, origin=origin)
 
+    def get_runtime_control_state(self) -> dict[str, Any]:
+        state = dict(self._runtime_control_state)
+        state["branch_priorities"] = dict(state.get("branch_priorities") or {})
+        return state
+
+    def _publish_operator_control(
+        self,
+        signal_type: str,
+        payload: dict[str, Any],
+        *,
+        sender_id: int | None = None,
+    ) -> bool:
+        publish_control = getattr(self._sibling_bus, "publish_control", None)
+        if not callable(publish_control):
+            return False
+        topic = f"control/{signal_type}"
+        publish_control(topic, dict(payload), sender_id=sender_id, signal_type=signal_type)
+        return True
+
+    def set_runtime_paused(
+        self,
+        paused: bool,
+        *,
+        reason: str = "",
+        origin: str = "operator",
+    ) -> dict[str, Any]:
+        self._runtime_control_state["paused"] = bool(paused)
+        self._runtime_control_state["pause_reason"] = str(reason or "")
+        event_type = "runtime_paused" if paused else "runtime_resumed"
+        self.record_runtime_event(
+            f"control.{event_type}",
+            {"reason": reason, "origin": origin},
+            origin="control",
+        )
+        self.emit_recursive_event(
+            event_type,
+            payload={"reason": reason, "origin": origin},
+            source="control",
+            visibility="control",
+        )
+        if paused:
+            self._publish_operator_control(
+                "stop",
+                {"reason": reason or "Paused by operator", "origin": origin, "action": "pause_runtime"},
+            )
+        return self.get_runtime_control_state()
+
+    def set_runtime_focus(
+        self,
+        branch_id: int,
+        *,
+        fixed: bool = False,
+        reason: str = "",
+        origin: str = "operator",
+    ) -> dict[str, Any]:
+        normalized_branch = int(branch_id)
+        self._runtime_control_state["focused_branch_id"] = normalized_branch
+        if fixed:
+            self._runtime_control_state["fixed_winner_branch_id"] = normalized_branch
+        branch_tasks = self._coordination_digest.list_branch_tasks()
+        for item in branch_tasks:
+            self._coordination_digest.update_branch_task(
+                int(item["branch_id"]),
+                metadata={
+                    "operator_focus": int(item["branch_id"]) == normalized_branch,
+                    "operator_fixed_winner": fixed and int(item["branch_id"]) == normalized_branch,
+                },
+            )
+        summary = self._coordination_digest.filtered_snapshot(limit=0).get("latest_parallel_summary") or {}
+        self.set_parallel_summary(
+            winner_branch_id=normalized_branch if fixed else summary.get("winner_branch_id"),
+            cancelled_count=int(summary.get("cancelled_count", 0)),
+            failed_count=int(summary.get("failed_count", 0)),
+            total_tasks=int(summary.get("total_tasks", len(branch_tasks))),
+            strategy=summary.get("strategy"),
+            stop_evaluation=summary.get("stop_evaluation"),
+        )
+        action = "fix_winner_branch" if fixed else "focus_branch"
+        self.record_runtime_event(
+            f"control.{action}",
+            {"branch_id": normalized_branch, "reason": reason, "origin": origin},
+            origin="control",
+        )
+        self.emit_recursive_event(
+            action,
+            payload={"branch_id": normalized_branch, "reason": reason, "origin": origin},
+            branch_id=normalized_branch,
+            source="control",
+            visibility="control",
+        )
+        self._publish_operator_control(
+            "switch_strategy",
+            {
+                "action": action,
+                "prioritized_branch_id": normalized_branch,
+                "reason": reason,
+                "origin": origin,
+            },
+            sender_id=normalized_branch if fixed else None,
+        )
+        if fixed:
+            self._publish_operator_control(
+                "stop",
+                {"reason": reason or f"Winner branch fixed by operator: {normalized_branch}", "origin": origin, "action": action},
+                sender_id=normalized_branch,
+            )
+        return self.get_runtime_control_state()
+
+    def reprioritize_branch(
+        self,
+        branch_id: int,
+        priority: int,
+        *,
+        reason: str = "",
+        origin: str = "operator",
+    ) -> dict[str, Any]:
+        normalized_branch = int(branch_id)
+        normalized_priority = int(priority)
+        priorities = dict(self._runtime_control_state.get("branch_priorities") or {})
+        priorities[str(normalized_branch)] = normalized_priority
+        self._runtime_control_state["branch_priorities"] = priorities
+        self._coordination_digest.update_branch_task(
+            normalized_branch,
+            metadata={"operator_priority": normalized_priority, "operator_priority_reason": reason},
+        )
+        strategy = self.get_active_recursive_strategy() or {}
+        strategy["operator_branch_priorities"] = dict(priorities)
+        self.set_active_recursive_strategy(strategy or None, origin=origin)
+        self.record_runtime_event(
+            "control.reprioritize_branch",
+            {"branch_id": normalized_branch, "priority": normalized_priority, "reason": reason, "origin": origin},
+            origin="control",
+        )
+        self.emit_recursive_event(
+            "reprioritize_branch",
+            payload={"branch_id": normalized_branch, "priority": normalized_priority, "reason": reason, "origin": origin},
+            branch_id=normalized_branch,
+            source="control",
+            visibility="control",
+        )
+        self._publish_operator_control(
+            "switch_strategy",
+            {
+                "action": "reprioritize_branch",
+                "prioritized_branch_id": normalized_branch,
+                "priority": normalized_priority,
+                "reason": reason,
+                "origin": origin,
+                "branch_priorities": priorities,
+            },
+        )
+        return self.get_runtime_control_state()
+
+    def record_operator_note(self, note: str, *, branch_id: int | None = None, origin: str = "operator") -> dict[str, Any]:
+        clean = str(note or "").strip()
+        self._runtime_control_state["last_operator_note"] = clean
+        self.record_runtime_event(
+            "control.operator_note",
+            {"note": clean, "branch_id": branch_id, "origin": origin},
+            origin="control",
+        )
+        self.emit_recursive_event(
+            "operator_note",
+            payload={"note": clean, "origin": origin},
+            branch_id=branch_id,
+            source="control",
+            visibility="control",
+        )
+        return self.get_runtime_control_state()
+
+    def mark_runtime_checkpoint(self, checkpoint_path: str, *, origin: str = "operator") -> dict[str, Any]:
+        self._runtime_control_state["last_checkpoint_path"] = str(checkpoint_path)
+        self._runtime_control_state["last_checkpoint_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.record_runtime_event(
+            "control.checkpoint_created",
+            {"checkpoint_path": checkpoint_path, "origin": origin},
+            origin="control",
+        )
+        self.emit_recursive_event(
+            "checkpoint_created",
+            payload={"checkpoint_path": checkpoint_path, "origin": origin},
+            source="control",
+            visibility="control",
+        )
+        return self.get_runtime_control_state()
+
     def get_runtime_state_snapshot(
         self,
         *,
@@ -947,12 +1411,19 @@ class LocalREPL(NonIsolatedEnv):
             "timeline": {
                 "entries": self._execution_timeline.recent(limit=0),
             },
+            "recursive_session": {
+                "state": self.get_recursive_session_state(),
+                "messages": self.recent_recursive_messages(limit=0),
+                "commands": self.recent_recursive_commands(limit=0),
+                "events": self.recent_recursive_events(limit=0),
+            },
             "coordination": self._coordination_digest.filtered_snapshot(
                 limit=coordination_limit,
                 operation=coordination_operation,
                 topic=coordination_topic,
                 branch_id=coordination_branch_id,
             ),
+            "controls": self.get_runtime_control_state(),
             "strategy": {
                 "active_recursive_strategy": self.get_active_recursive_strategy(),
             },
@@ -1502,7 +1973,9 @@ class LocalREPL(NonIsolatedEnv):
                 "tasks": self._task_ledger.snapshot(),
                 "attachments": self._context_attachments.snapshot(),
                 "timeline": self._execution_timeline.snapshot(),
+                "recursive_session": self._recursive_session.snapshot(),
                 "coordination": self._coordination_digest.snapshot(),
+                "controls": self.get_runtime_control_state(),
             },
             "locals_serialized": {},
             "locals_skipped": [],
@@ -1568,7 +2041,9 @@ class LocalREPL(NonIsolatedEnv):
         self._task_ledger.restore(runtime_workbench.get("tasks"))
         self._context_attachments.restore(runtime_workbench.get("attachments"))
         self._execution_timeline.restore(runtime_workbench.get("timeline"))
+        self._recursive_session.restore(runtime_workbench.get("recursive_session"))
         self._coordination_digest.restore(runtime_workbench.get("coordination"))
+        self._runtime_control_state = dict(runtime_workbench.get("controls") or self._runtime_control_state)
 
         # Re-inject codebase tools if checkpoint was in codebase mode
         codebase_path = state.get("codebase_path")
