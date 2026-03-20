@@ -144,6 +144,7 @@ Exemplos:
     arkhe update --check
     arkhe update
     arkhe update --no-restart
+    arkhe update --path ~/.arkhe/repo
 
 Recuperação:
     Se o update bloquear por worktree suja, faça commit ou stash primeiro.
@@ -152,6 +153,7 @@ Recuperação:
             arguments=(
                 ArgumentSpec(flags=("--check",), kwargs={"action": "store_true", "help": "Apenas verifica se há commits remotos pendentes"}),
                 ArgumentSpec(flags=("--no-restart",), kwargs={"action": "store_true", "help": "Não reinicia os serviços após atualizar"}),
+                ArgumentSpec(flags=("--path",), kwargs={"default": None, "help": "Checkout do Arkhe a atualizar; default tenta detectar a instalação ativa"}),
             ),
         ),
         CommandSpec(

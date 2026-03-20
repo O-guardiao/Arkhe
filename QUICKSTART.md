@@ -106,6 +106,18 @@ O servidor roda em background. PIDs salvos em `~/.rlm/run/`.
 arkhe status
 ```
 
+### Atualizar a instalação
+
+```powershell
+arkhe update
+```
+
+Se você estiver fora do checkout instalado, aponte explicitamente a pasta:
+
+```powershell
+arkhe update --path $HOME/.arkhe/repo
+```
+
 Mostra:
 - PID dos processos (API e WebSocket)
 - Se estão ativos ou parados

@@ -48,4 +48,9 @@ def cmd_update(args: argparse.Namespace, *, context: CliContext | None = None) -
     current_context = _context_or_default(context)
     from rlm.cli.service import update_installation
 
-    return update_installation(check_only=args.check, restart=not args.no_restart, context=current_context)
+    return update_installation(
+        check_only=args.check,
+        restart=not args.no_restart,
+        target_path=getattr(args, "path", None),
+        context=current_context,
+    )

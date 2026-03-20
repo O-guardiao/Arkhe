@@ -145,7 +145,7 @@ permanece como alias de compatibilidade. Também funciona via `python -m rlm`.
 | `arkhe start --api-only` | Apenas API REST (sem WebSocket) |
 | `arkhe stop` | Para todos os processos Arkhe |
 | `arkhe status` | Mostra processos ativos, PIDs e endpoints |
-| `arkhe update` | Atualiza o checkout git local e roda `uv sync` |
+| `arkhe update` | Atualiza a instalação ativa do Arkhe e roda `uv sync` |
 | `arkhe doctor` | Diagnóstico completo: .env, API key, servidor, canais |
 | `arkhe version` | Versão instalada |
 | `arkhe token rotate` | Regenera os tokens `RLM_WS_TOKEN`, `RLM_INTERNAL_TOKEN`, `RLM_ADMIN_TOKEN`, `RLM_HOOK_TOKEN` e `RLM_API_TOKEN` |
@@ -165,6 +165,9 @@ arkhe doctor
 
 # Atualizar checkout local com fast-forward seguro
 arkhe update
+
+# Atualizar uma instalação específica fora do diretório atual
+arkhe update --path ~/.arkhe/repo
 
 # Iniciar e acompanhar logs
 arkhe start --foreground

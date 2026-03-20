@@ -7,11 +7,64 @@ from typing import Callable
 from rlm.cli.context import CliContext
 
 
+def _looks_like_checkout(path: Path) -> bool:
+    return (path / ".git").exists()
+
+
+def _walk_to_checkout_root(path: Path) -> Path | None:
+    current = path.resolve()
+    for candidate in (current, *current.parents):
+        if _looks_like_checkout(candidate):
+            return candidate
+    return None
+
+
+def _package_checkout_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_project_root(context: CliContext, target_path: str | None) -> Path | None:
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    def add_candidate(path: Path | None) -> None:
+        if path is None:
+            return
+        resolved = path.resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        candidates.append(resolved)
+
+    if target_path:
+        add_candidate(Path(target_path).expanduser())
+
+    add_candidate(context.paths.project_root)
+    add_candidate(_package_checkout_root())
+
+    configured_repo_dir = context.env.get("ARKHE_REPO_DIR", "").strip()
+    if configured_repo_dir:
+        add_candidate(Path(configured_repo_dir).expanduser())
+
+    configured_install_dir = context.env.get("ARKHE_INSTALL_DIR", "").strip()
+    if configured_install_dir:
+        add_candidate(Path(configured_install_dir).expanduser() / "repo")
+
+    add_candidate(context.home / ".arkhe" / "repo")
+
+    for candidate in candidates:
+        checkout_root = _walk_to_checkout_root(candidate)
+        if checkout_root is not None:
+            return checkout_root
+    return None
+
+
 def update_installation_impl(
     context: CliContext,
     *,
     check_only: bool,
     restart: bool,
+    target_path: str | None,
     info: Callable[[str], None],
     ok: Callable[[str], None],
     err: Callable[[str], None],
@@ -19,10 +72,13 @@ def update_installation_impl(
     stop_services: Callable[[], int],
     start_services: Callable[[], int],
 ) -> int:
-    project_root = context.paths.project_root
+    project_root = _resolve_project_root(context, target_path)
 
-    if not (project_root / ".git").exists():
-        err("`rlm update` requer um checkout git do projeto na pasta atual.")
+    if project_root is None:
+        if target_path:
+            err(f"Nenhum checkout git do Arkhe foi encontrado em '{target_path}'.")
+        else:
+            err("Nenhum checkout git do Arkhe foi encontrado. Rode o comando dentro do repo, use --path ou instale em ~/.arkhe/repo.")
         return 1
 
     if not context.has_tool("git"):
@@ -33,6 +89,7 @@ def update_installation_impl(
         err("`uv` não encontrado no PATH.")
         return 1
 
+    info(f"Usando checkout em {project_root}")
     info("Validando worktree local...")
     status = subprocess.run(
         ["git", "status", "--porcelain"],
@@ -103,6 +160,10 @@ def update_installation_impl(
         ok("Nenhuma atualização remota disponível.")
         return 0
 
+    if ahead_count > 0:
+        err(f"Checkout local divergiu de origin/{branch} ({ahead_count} commit(s) à frente, {behind_count} atrás). Faça rebase/merge manual antes do update.")
+        return 1
+
     info("Aplicando git pull --ff-only...")
     pull = subprocess.run(
         ["git", "pull", "--ff-only", "origin", branch],
@@ -129,8 +190,14 @@ def update_installation_impl(
 
     if restart and services_are_running():
         info("Reiniciando serviços do RLM...")
-        stop_services()
-        start_services()
+        stop_rc = stop_services()
+        if stop_rc != 0:
+            err("Falha ao parar serviços antes do restart.")
+            return stop_rc
+        start_rc = start_services()
+        if start_rc != 0:
+            err("Falha ao iniciar serviços após o update.")
+            return start_rc
         ok("Serviços reiniciados.")
     elif restart:
         info("Serviços não estavam ativos; nenhum restart necessário.")

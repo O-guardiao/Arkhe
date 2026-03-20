@@ -275,12 +275,18 @@ def _services_are_running() -> bool:
     return services_are_running_impl(_runtime_layout(), read_pid=_read_pid, pid_alive=_pid_alive)
 
 
-def update_installation(check_only: bool = False, restart: bool = True, context: CliContext | None = None) -> int:
+def update_installation(
+    check_only: bool = False,
+    restart: bool = True,
+    target_path: str | None = None,
+    context: CliContext | None = None,
+) -> int:
     current_context = _service_context(context, load_env=True)
     rc = update_installation_impl(
         current_context,
         check_only=check_only,
         restart=restart,
+        target_path=target_path,
         info=_info,
         ok=_ok,
         err=_err,

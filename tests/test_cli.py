@@ -118,9 +118,10 @@ class TestCLIParser:
     def test_update_flags_parsed(self) -> None:
         from rlm.cli.parser import build_parser
         parser = build_parser()
-        args = parser.parse_args(["update", "--check", "--no-restart"])
+        args = parser.parse_args(["update", "--check", "--no-restart", "--path", "C:/arkhe"])
         assert args.check is True
         assert args.no_restart is True
+        assert args.path == "C:/arkhe"
 
     def test_status_json_flag_parsed(self) -> None:
         from rlm.cli.parser import build_parser
