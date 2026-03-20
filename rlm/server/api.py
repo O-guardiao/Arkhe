@@ -42,6 +42,7 @@ from rlm.core.skill_loader import SkillLoader
 from rlm.core.exec_approval import ExecApprovalGate
 from rlm.server.webhook_dispatch import create_webhook_router
 from rlm.server.openai_compat import create_openai_compat_router
+from rlm.server.runtime_pipeline import RuntimeDispatchRejected, RuntimeDispatchServices, dispatch_runtime_prompt_sync
 from rlm.server.auth_helpers import configured_tokens, require_token
 from rlm.server.ws_server import RLMEventBus, start_ws_server
 from rlm.plugins import PluginLoader
@@ -370,315 +371,48 @@ async def receive_webhook(client_id: str, request: Request):
         raise HTTPException(400, "Invalid JSON payload")
 
     sm: SessionManager = request.app.state.session_manager
-    supervisor: RLMSupervisor = request.app.state.supervisor
-    plugin_loader: PluginLoader = request.app.state.plugin_loader
-    router: EventRouter = request.app.state.event_router
-    hooks: HookSystem = request.app.state.hooks
-    skill_loader: SkillLoader = request.app.state.skill_loader
-    eligible_skills = request.app.state.skills_eligible
-    skill_context: str = request.app.state.skill_context
+    services = RuntimeDispatchServices(
+        session_manager=sm,
+        supervisor=request.app.state.supervisor,
+        plugin_loader=request.app.state.plugin_loader,
+        event_router=request.app.state.event_router,
+        hooks=request.app.state.hooks,
+        skill_loader=request.app.state.skill_loader,
+        eligible_skills=request.app.state.skills_eligible,
+        skill_context=request.app.state.skill_context,
+        exec_approval=request.app.state.exec_approval,
+        exec_approval_required=request.app.state.exec_approval_required,
+    )
 
-    # Get or create session
     session = sm.get_or_create(client_id)
     sm.log_event(session.session_id, "webhook_received", {
         "client_id": client_id,
         "payload_size": len(json.dumps(payload)),
     })
-
-    # Disparar hook de mensagem recebida
-    hooks.trigger(
+    services.hooks.trigger(
         "message.received",
         session_id=session.session_id,
         context={"client_id": client_id, "payload": payload},
     )
 
-    # Phase 11.3: STT pré-processamento — transcreve áudio ANTES de rotear
-    # Se client_id for 'audio:*' e tiver payload de áudio, enriquece com 'transcription'
-    payload = EventRouter.preprocess_audio(client_id, payload)
-
-    # Route the event to get prompt + plugins
-    # prompt can now be a str OR a list of dictionaries (multimodal)
-    prompt, plugins_to_load = router.route(client_id, payload)
-
-    # Phase 9.3: Prompt injection scan before the input reaches the LLM
-    from rlm.core.security import auditor as _sec_auditor
-    _raw_text: str = ""
-    if isinstance(prompt, str):
-        _raw_text = prompt
-    elif isinstance(prompt, list):
-        _raw_text = " ".join(p.get("text", "") for p in prompt if isinstance(p, dict))
-    if _raw_text:
-        _threat = _sec_auditor.audit_input(_raw_text, session_id=session.session_id)
-        if _threat.threat_level == "high":
-            sm.log_event(session.session_id, "security_threat_high", {
-                "patterns": _threat.patterns_found,
-                "text_preview": _raw_text[:200],
-            })
-            # High threat: reject with explicit message (does NOT execute the RLM)
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "Input rejected by security policy.",
-                    "threat_level": _threat.threat_level,
-                    "patterns": _threat.patterns_found,
-                },
-            )
-        elif _threat.is_suspicious:
-            sm.log_event(session.session_id, "security_threat_low", {
-                "patterns": _threat.patterns_found,
-                "level": _threat.threat_level,
-            })
-
-    # --- Smart Skill Delivery: contexto dinâmico por query ---
-    # Extrai texto da query para keyword routing (multimodal-safe)
-    _query_text: str = ""
-    if isinstance(prompt, str):
-        _query_text = prompt
-    elif isinstance(prompt, list):
-        # multimodal: extrai partes text
-        _query_text = " ".join(
-            part.get("text", "") for part in prompt if isinstance(part, dict)
-        )
-    _prompt_plan = skill_loader.plan_prompt_context(eligible_skills, query=_query_text, mode="auto")
-    # Gera contexto otimizado: bodies só para skills relevantes à query
-    _dynamic_skill_context: str = skill_loader.build_system_prompt_context(
-        eligible_skills, query=_query_text, mode="auto"
-    )
-    # Log de economia de tokens (debug)
-    if _query_text:
-        _estimate = skill_loader.estimate_tokens(eligible_skills, query=_query_text)
-        gateway_log.debug(
-            f"Smart Delivery: {_estimate['smart_tokens']}t vs {_estimate['full_tokens']}t full "
-            f"({_estimate['saving_pct']}% saving, {_estimate['matched_skills']} skills matched)"
-        )
-        ranked_payload = [
-            {
-                "name": rank.skill.name,
-                "score": rank.score,
-                "telemetry": rank.telemetry_score,
-                "trace": rank.trace_score,
-                "cost_penalty": rank.cost_penalty,
-                "risk_penalty": rank.risk_penalty,
-            }
-            for rank in _prompt_plan.ranked_skills[:8]
-        ]
-        blocked_payload = [
-            {
-                "name": availability.skill.name,
-                "reasons": availability.reasons,
-            }
-            for availability in _prompt_plan.blocked_skills[:8]
-        ]
-        sm.log_event(session.session_id, "skill_routing", {
-            "query": _query_text[:300],
-            "effective_mode": _prompt_plan.effective_mode,
-            "selected_skills": [skill.name for skill in _prompt_plan.expanded_skills],
-            "ranked_skills": ranked_payload,
-            "blocked_skills": blocked_payload,
-        })
-        get_skill_telemetry().record_routing(
-            mode=_prompt_plan.effective_mode,
-            query=_query_text,
-            ranked_skills=ranked_payload,
-            selected_skills=[skill.name for skill in _prompt_plan.expanded_skills],
-            blocked_skills=blocked_payload,
-            session_id=session.session_id,
-            client_id=client_id,
-        )
-
-    # Injeta SIF table no system prompt do RLM para esta requisição
-    # (skills_context vai para build_rlm_system_prompt → aparecem no system prompt, não só no REPL)
-    if session.rlm_instance and (_dynamic_skill_context or skill_context):
-        session.rlm_instance.skills_context = _dynamic_skill_context or skill_context
-
-    # Load plugins and universal reply into the REPL namespace
-    if session.rlm_instance:
-        env = getattr(session.rlm_instance, '_persistent_env', None)
-        if env and hasattr(env, 'locals'):
-            repl_locals = env.locals
-            if plugins_to_load:
-                plugin_loader.inject_multiple(plugins_to_load, repl_locals)
-                
-            # Phase 9.2 / 11.3: Inject reply helpers bound to this specific client_id
-            from rlm.plugins.channel_registry import ChannelRegistry
-
-            def reply(message: str) -> bool:
-                """Envia resposta de texto ao usuário pelo canal original."""
-                return ChannelRegistry.reply(session.client_id, message)
-
-            def reply_audio(
-                text: str,
-                voice: str = "alloy",
-                output_format: str = "mp3",
-            ) -> bool:
-                """
-                Sintetiza TTS e envia como áudio pelo canal original.
-
-                Args:
-                    text: Texto para falar.
-                    voice: Voz TTS — alloy, echo, fable, onyx, nova, shimmer.
-                    output_format: Formato do arquivo (mp3, opus, aac, flac).
-                """
-                return ChannelRegistry.reply_audio(
-                    session.client_id, text, voice=voice, output_format=output_format
-                )
-
-            def send_media(media_url_or_path: str, caption: str = "") -> bool:
-                """Envia mídia (imagem, áudio, documento) pelo canal original."""
-                return ChannelRegistry.send_media(session.client_id, media_url_or_path, caption)
-
-            repl_locals['reply'] = reply
-            repl_locals['reply_audio'] = reply_audio
-            repl_locals['send_media'] = send_media
-
-            # Phase 9.1: Activate eligible MCP skills
-            skill_loader.activate_all(
-                eligible_skills,
-                repl_locals,
-                activation_scope=session.session_id,
-            )
-            # Inject dynamic skill context (keyword-routed)
-            if _dynamic_skill_context:
-                repl_locals['__rlm_skills__'] = _dynamic_skill_context
-            elif skill_context:
-                repl_locals['__rlm_skills__'] = skill_context
-
-            # SIF Factory — Camada 2: callables compiladas (shell, weather, web_search...).
-            # LLM chama diretamente sem boilerplate: shell("cmd"), weather("SP")
-            skill_loader.inject_sif_callables(eligible_skills, repl_locals)
-
-            # Inject skill_doc + skill_list REPL globals (Camada 3: on-demand lazy)
-            _skill_doc_fn, _skill_list_fn = skill_loader.build_skill_doc_fn(eligible_skills)
-            repl_locals['skill_doc'] = _skill_doc_fn
-            repl_locals['skill_list'] = _skill_list_fn
-
-            # Phase 9.2: Exec Approval Gate
-            approval_gate: ExecApprovalGate = request.app.state.exec_approval
-            approval_required: bool = request.app.state.exec_approval_required
-            if approval_required:
-                repl_locals['confirm_exec'] = approval_gate.make_repl_fn(session.session_id)
-            else:
-                # Gate disponível mas não obrigatório — LLM pode chamar voluntariamente
-                _gate_fn = approval_gate.make_repl_fn(session.session_id)
-                repl_locals['confirm_exec'] = _gate_fn
-
-            repl_locals.setdefault(PENDING_HANDOFFS_KEY, [])
-
-            def _handoff_task_sink(payload: dict[str, Any]) -> dict[str, Any] | None:
-                create_task = getattr(env, 'create_runtime_task', None)
-                current_task_id = getattr(env, 'current_runtime_task_id', None)
-                if not callable(create_task):
-                    return None
-                parent_task_id = current_task_id() if callable(current_task_id) else None
-                if parent_task_id is None:
-                    return None
-                handoff_task = create_task(
-                    f"[handoff:{payload.get('target_role', 'unknown')}] {str(payload.get('remaining_goal', ''))[:120]}",
-                    parent_task_id=parent_task_id,
-                    status='in-progress',
-                    metadata={
-                        'mode': 'handoff',
-                        'target_role': payload.get('target_role', ''),
-                        'reason': payload.get('reason', ''),
-                        'suggested_mode': payload.get('suggested_mode', ''),
-                    },
-                    current=False,
-                )
-                return {
-                    'task_id': handoff_task.get('task_id'),
-                    'parent_task_id': parent_task_id,
-                }
-
-            repl_locals['request_handoff'] = make_handoff_fn(
-                session_id=session.session_id,
-                log_event=sm.log_event,
-                hooks=hooks,
-                telemetry=get_skill_telemetry(),
-                client_id=client_id,
-                state_sink=lambda payload: repl_locals[PENDING_HANDOFFS_KEY].append(dict(payload)),
-                task_sink=_handoff_task_sink,
-            )
-            repl_locals['handoff_roles'] = list(VALID_HANDOFF_ROLES)
-
-    # Execute via Supervisor (in a thread to not block FastAPI)
     loop = asyncio.get_event_loop()
-    hooks.trigger(
-        "completion.started",
-        session_id=session.session_id,
-        context={"client_id": client_id},
-    )
     try:
-        # Pass the prompt (str or list) to the supervisor
-        def _execute_with_skill_context() -> ExecutionResult:
-            _skill_ctx_tokens = skill_loader.set_request_context(
-                session_id=session.session_id,
-                client_id=client_id,
-                query=_query_text,
-            )
-            try:
-                return supervisor.execute(session, prompt)
-            finally:
-                skill_loader.clear_request_context(_skill_ctx_tokens)
-
-        result: ExecutionResult = await loop.run_in_executor(
+        result = await loop.run_in_executor(
             None,
-            _execute_with_skill_context,
+            lambda: dispatch_runtime_prompt_sync(
+                services,
+                client_id,
+                payload,
+                session=session,
+                record_conversation=False,
+                source_name="webhook",
+            ),
         )
+    except RuntimeDispatchRejected as exc:
+        return JSONResponse(status_code=exc.status_code, content=exc.payload)
     except Exception as e:
-        hooks.trigger(
-            "completion.aborted",
-            session_id=session.session_id,
-            context={"error": str(e)},
-        )
-        sm.log_event(session.session_id, "execution_error", {"error": str(e)})
         raise HTTPException(500, f"Execution failed: {e}")
-
-    hooks.trigger(
-        "completion.finished",
-        session_id=session.session_id,
-        context={
-            "status": result.status,
-            "execution_time": result.execution_time,
-        },
-    )
-
-    if result.status == "completed" and session.rlm_instance is not None:
-        env = getattr(session.rlm_instance, '_persistent_env', None)
-        if env and hasattr(env, 'locals'):
-            repl_locals = env.locals
-            role_outcome = orchestrate_roles(
-                rlm=session.rlm_instance,
-                prompt=_query_text or str(prompt),
-                response=result.response or "",
-                prompt_plan=_prompt_plan,
-                repl_locals=repl_locals,
-                log_event=sm.log_event,
-                session_id=session.session_id,
-                hooks=hooks,
-            )
-            result.response = role_outcome.response
-            if role_outcome.steps:
-                sm.log_event(session.session_id, "agent_role_summary", {
-                    "steps": role_outcome.steps,
-                    "escalated": role_outcome.escalated,
-                    "retried": role_outcome.retried,
-                })
-
-    # Update session in DB
-    sm.update_session(session)
-    sm.log_event(session.session_id, "execution_complete", {
-        "status": result.status,
-        "execution_time": result.execution_time,
-    })
-
-    return {
-        "status": result.status,
-        "session_id": session.session_id,
-        "response": result.response,
-        "execution_time": round(result.execution_time, 2),
-        "abort_reason": result.abort_reason,
-        "error_detail": result.error_detail,
-    }
+    return result
 
 
 # ---------------------------------------------------------------------------

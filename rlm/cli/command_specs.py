@@ -10,6 +10,7 @@ from rlm.cli.commands.service import cmd_start, cmd_status, cmd_stop, cmd_update
 from rlm.cli.commands.setup import cmd_setup
 from rlm.cli.commands.skill import cmd_skill_install, cmd_skill_list
 from rlm.cli.commands.token import cmd_token_rotate
+from rlm.cli.commands.tui import cmd_tui
 from rlm.cli.commands.version import cmd_version
 
 
@@ -56,6 +57,29 @@ Compatibilidade:
 
 def get_command_specs() -> tuple[CommandSpec, ...]:
     return (
+        CommandSpec(
+            name="tui",
+            help="Abre o workbench TUI da sessão viva",
+            handler=cmd_tui,
+            description="Inicia um painel operacional em terminal sobre a mesma sessão recursiva viva, com árvores de branches, eventos, timeline e controles do operador.",
+            epilog="""
+Exemplos:
+    arkhe tui
+    arkhe tui --client-id tui:demo
+    arkhe tui --once
+
+Controles:
+    Texto livre            envia prompt ao runtime
+    /pause /resume         controla execução
+    /focus /winner         direciona branches
+    /priority /checkpoint  ajusta estratégia e persistência
+""",
+            arguments=(
+                ArgumentSpec(flags=("--client-id",), kwargs={"default": None, "help": "Client id da sessão viva (default: tui:default)"}),
+                ArgumentSpec(flags=("--refresh-interval",), kwargs={"type": float, "default": 0.75, "help": "Intervalo de atualização do painel em segundos"}),
+                ArgumentSpec(flags=("--once",), kwargs={"action": "store_true", "help": "Renderiza o painel uma vez e encerra"}),
+            ),
+        ),
         CommandSpec(
             name="setup",
             help="Wizard interativo de instalação",

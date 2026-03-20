@@ -95,6 +95,16 @@ class TestCLIParser:
         args = parser.parse_args(["start", "--ws-only"])
         assert args.ws_only is True
 
+    def test_tui_flags_parsed(self) -> None:
+        from rlm.cli.parser import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["tui", "--client-id", "tui:demo", "--refresh-interval", "1.5", "--once"])
+
+        assert args.client_id == "tui:demo"
+        assert args.refresh_interval == 1.5
+        assert args.once is True
+
     def test_peer_add_args_parsed(self) -> None:
         from rlm.cli.parser import build_parser
         parser = build_parser()
@@ -233,6 +243,15 @@ class TestUpdateCommand:
         with patch.dict("rlm.cli.main.DISPATCH", {"update": MagicMock(return_value=0)}):
             with pytest.raises(SystemExit) as exc:
                 main(["update"])
+        assert exc.value.code == 0
+
+    def test_tui_dispatches_to_handler(self) -> None:
+        from rlm.cli.main import main
+
+        with patch.dict("rlm.cli.main.DISPATCH", {"tui": MagicMock(return_value=0)}):
+            with pytest.raises(SystemExit) as exc:
+                main(["tui", "--once"])
+
         assert exc.value.code == 0
 
 

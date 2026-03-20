@@ -154,6 +154,18 @@ DEFAULT_ROUTES: list[EventRoute] = [
         ),
         description="WebChat SSE — interface web do RLM",
     ),
+    EventRoute(
+        source_pattern="tui:*",
+        plugins=[],
+        prompt_template=(
+            "TERMINAL WORKBENCH MESSAGE:\n"
+            "From: {from_user} (session: {session_id})\n"
+            "Message: {text}\n\n"
+            "Esta mensagem vem do workbench TUI do Arkhe. "
+            "Use as skills roteadas dinamicamente e responda de forma operacional, objetiva e útil para um operador humano."
+        ),
+        description="Workbench TUI — painel operacional de terminal do Arkhe",
+    ),
 ]
 
 
