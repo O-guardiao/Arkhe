@@ -88,7 +88,14 @@ def _kill_orphan_on_port(
         return True  # porta livre
     pid = _find_port_pid(port)
     if pid is None:
-        return False  # não conseguiu identificar
+        # Processo já morto mas socket em TIME_WAIT — aguardar liberação
+        info(f"Porta {port} ocupada sem processo ativo — aguardando liberação do socket...")
+        for _ in range(10):
+            time.sleep(0.5)
+            if not port_accepting_connections(host, port):
+                info(f"Porta {port} liberada.")
+                return True
+        return False
     # Não matar o próprio processo
     if pid == os.getpid():
         return False
