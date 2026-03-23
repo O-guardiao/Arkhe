@@ -13,8 +13,11 @@ The REPL environment is initialized with:
 4. A `sub_rlm(task: str) -> str` function (also aliased as `rlm_query`) that spawns a FULL recursive sub-agent to solve a complex sub-task. Unlike `llm_query` which is a single LLM call, `sub_rlm` runs a complete RLM loop with its own REPL — use it when the sub-task itself requires multi-step reasoning, tool use, or code execution. Limit: cannot exceed your current recursion depth.
 5. A `sub_rlm_parallel(tasks: List[str]) -> List[str]` function (also aliased as `rlm_query_batched`) that runs multiple recursive sub-agents concurrently and returns their answers in order. Prefer this over sequential `sub_rlm` calls when sub-tasks are independent.
 6. A `SHOW_VARS()` function that returns all variables you have created in the REPL. Use this to check what variables exist before using FINAL_VAR.
-7. The ability to use `print()` statements to view the output of your REPL code and continue your reasoning.
-8. Web access functions (browser plugin — always available, no import needed):
+7. A `get_var(name)` function to retrieve a variable by name when you need dynamic access. Example: `val = get_var("context_0")`. Use this instead of `eval()` or `globals()`.
+8. The ability to use `print()` statements to view the output of your REPL code and continue your reasoning.
+
+**SANDBOX RESTRICTION: `eval()`, `exec()`, `globals()`, and `locals()` are BLOCKED (set to None). Do NOT call them — you will get `'NoneType' object is not callable`. Access variables directly by name (e.g. `print(context)`) or use `get_var("name")` for dynamic access.**
+9. Web access functions (browser plugin — always available, no import needed):
    - `web_get(url, headers=None, timeout=20) -> str` — HTTP GET, returns raw body (HTML or JSON as string).
    - `web_post(url, data=None, json_body=None, headers=None, timeout=20) -> dict | str` — HTTP POST, returns parsed JSON dict or raw string.
    - `web_scrape(url, timeout=20) -> dict` — Extracts structured content from an HTML page. Returns `{"title": str, "text": str, "links": list[{"text", "href"}]}`. Use this instead of parsing raw HTML manually.

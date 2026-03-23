@@ -296,6 +296,7 @@ class LocalREPL(NonIsolatedEnv):
         # Add helper functions
         self.globals["FINAL_VAR"] = self._final_var
         self.globals["SHOW_VARS"] = self._show_vars
+        self.globals["get_var"] = self._get_var
         self.globals["llm_query"] = self._llm_query
         self.globals["llm_query_batched"] = self._llm_query_batched
 
@@ -1492,6 +1493,14 @@ class LocalREPL(NonIsolatedEnv):
             f"No variables have been created yet. "
             f"You must create and assign a variable in a REPL block BEFORE calling FINAL_VAR on it."
         )
+
+    def _get_var(self, name: str) -> Any:
+        """Safely retrieve a variable by name from the REPL namespace."""
+        if name in self.locals:
+            return self.locals[name]
+        if name in self.globals:
+            return self.globals[name]
+        raise NameError(f"Variable '{name}' not found. Use SHOW_VARS() to see available variables.")
 
     def _show_vars(self) -> str:
         """Show all available variables in the REPL environment."""
