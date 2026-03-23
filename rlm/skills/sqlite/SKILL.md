@@ -29,11 +29,11 @@ embedding_text = "sqlite sql database query table select insert db file"
 example_queries = ["rode uma query SQL", "abra este banco sqlite"]
 
 [mcp]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-sqlite", "--db", "data.db"]
+command = "uvx"
+args = ["mcp-server-sqlite", "--db-path", "data.db"]
 
 [requires]
-bins = ["node"]
+bins = ["uv"]
 +++
 
 # SQLite Skill
@@ -79,6 +79,6 @@ To connect to a different DB file, reload the server:
 
 ```python
 from rlm.plugins.mcp import load_server
-sqlite = load_server("sqlite", "npx", ["-y", "@modelcontextprotocol/server-sqlite", "--db", "/path/to/other.db"])
+sqlite = load_server("sqlite", "uvx", ["mcp-server-sqlite", "--db-path", "/path/to/other.db"])
 results = sqlite.read_query(query="SELECT * FROM products")
 ```
