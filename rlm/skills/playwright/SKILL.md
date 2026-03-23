@@ -5,7 +5,7 @@ tags = ["browser", "site", "formulário", "screenshot", "scraping", "login", "ja
 priority = "contextual"
 
 [mcp]
-command = "npx.cmd"
+command = "npx"
 args = ["-y", "@playwright/mcp"]
 
 [requires]

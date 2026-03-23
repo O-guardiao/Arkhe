@@ -5,7 +5,7 @@ tags = ["arquivo", "pasta", "diretório", "ler arquivo", "salvar arquivo", "cria
 priority = "contextual"
 
 [mcp]
-command = "npx.cmd"
+command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 
 [requires]
@@ -95,5 +95,5 @@ To change scope, reload with a different base path:
 
 ```python
 from rlm.plugins.mcp import load_server
-fs = load_server("filesystem", "npx.cmd", ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/workspace"])
+fs = load_server("filesystem", "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/workspace"])
 ```

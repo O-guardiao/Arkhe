@@ -88,7 +88,7 @@ def load_server(
     Spawns an MCP server and returns an object whose methods map to the server's tools.
     
     Example:
-        sqlite = load_server("sqlite", "npx.cmd", ["-y", "@modelcontextprotocol/server-sqlite", "--db", "test.db"])
+        sqlite = load_server("sqlite", "npx", ["-y", "@modelcontextprotocol/server-sqlite", "--db", "test.db"])
         results = sqlite.query_db(query="SELECT * FROM users")
     """
     cache_key = _build_cache_key(server_name, scope_key)

@@ -17,7 +17,7 @@ Formato do SKILL.md:
     priority = "contextual"   # "always" | "contextual" | "lazy"
 
     [mcp]
-    command = "npx.cmd"
+    command = "npx"
     args = ["-y", "@modelcontextprotocol/server-sqlite"]
 
     [requires]
@@ -234,6 +234,9 @@ def _parse_skill_file(text: str, name: str = "") -> SkillDef:
     # MCP config
     mcp = toml_data.get("mcp", {})
     mcp_command: str = mcp.get("command", "")
+    # Normalize Windows-only .cmd shims on non-Windows platforms
+    if mcp_command.endswith(".cmd") and sys.platform != "win32":
+        mcp_command = mcp_command[:-4]  # "npx.cmd" → "npx"
     mcp_args: list[str] = [str(a) for a in mcp.get("args", [])]
     mcp_env: dict[str, str] = {k: str(v) for k, v in mcp.get("env", {}).items()}
 
