@@ -100,9 +100,19 @@ def update_installation_impl(
     if status.returncode != 0:
         err((status.stderr or status.stdout or "Falha ao ler estado do git.").strip())
         return 1
-    if status.stdout.strip():
-        err("Há mudanças locais não commitadas. Faça commit/stash antes de atualizar.")
-        return 1
+
+    has_local_changes = bool(status.stdout.strip())
+    if has_local_changes:
+        info("Mudanças locais detectadas — guardando com git stash...")
+        stash = subprocess.run(
+            ["git", "stash", "--include-untracked", "-m", "arkhe-update-autostash"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+        )
+        if stash.returncode != 0:
+            err((stash.stderr or stash.stdout or "Falha ao fazer git stash.").strip())
+            return 1
 
     branch_result = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -147,6 +157,20 @@ def update_installation_impl(
     ahead_count = int(counts[0])
     behind_count = int(counts[1])
 
+    def _restore_stash() -> None:
+        if not has_local_changes:
+            return
+        info("Restaurando mudanças locais com git stash pop...")
+        pop = subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+        )
+        if pop.returncode != 0:
+            err("Conflito ao restaurar mudanças locais. Resolva com: git stash show -p | git apply --3way")
+            info("Suas mudanças estão salvas no stash. Use 'git stash list' para ver.")
+
     if check_only:
         if behind_count == 0 and ahead_count == 0:
             ok("Checkout já está sincronizado com origin.")
@@ -154,13 +178,16 @@ def update_installation_impl(
             ok("Checkout local está à frente do remoto; nada para baixar.")
         else:
             ok(f"Há {behind_count} commit(s) pendente(s) em origin/{branch}.")
+        _restore_stash()
         return 0
 
     if behind_count == 0:
         ok("Nenhuma atualização remota disponível.")
+        _restore_stash()
         return 0
 
     if ahead_count > 0:
+        _restore_stash()
         err(f"Checkout local divergiu de origin/{branch} ({ahead_count} commit(s) à frente, {behind_count} atrás). Faça rebase/merge manual antes do update.")
         return 1
 
@@ -187,6 +214,8 @@ def update_installation_impl(
         err((sync.stderr or sync.stdout or "Falha no uv sync.").strip())
         return 1
     ok("Dependências sincronizadas.")
+
+    _restore_stash()
 
     if restart and services_are_running():
         info("Reiniciando serviços do RLM...")
