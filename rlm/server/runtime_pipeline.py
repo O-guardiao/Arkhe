@@ -59,25 +59,16 @@ def _record_recursive_message(session: Any, role: str, content: str, *, origin: 
         pass
 
 
-def _prepare_repl_locals(
+def _apply_repl_injections(
     services: RuntimeDispatchServices,
+    repl_locals: dict[str, Any],
     *,
     session: Any,
     client_id: str,
-    prompt: str | list[dict[str, Any]] | dict[str, Any],
-    query_text: str,
     plugins_to_load: list[str],
-    prompt_plan: Any,
     dynamic_skill_context: str,
-) -> dict[str, Any] | None:
-    if session.rlm_instance and (dynamic_skill_context or services.skill_context):
-        session.rlm_instance.skills_context = dynamic_skill_context or services.skill_context
-
-    env = getattr(session.rlm_instance, "_persistent_env", None)
-    if env is None or not hasattr(env, "locals"):
-        return None
-
-    repl_locals = env.locals
+) -> None:
+    """Inject all server-mode callables into the REPL namespace."""
     if plugins_to_load:
         services.plugin_loader.inject_multiple(plugins_to_load, repl_locals)
 
@@ -118,8 +109,9 @@ def _prepare_repl_locals(
     repl_locals.setdefault(PENDING_HANDOFFS_KEY, [])
 
     def _handoff_task_sink(payload: dict[str, Any]) -> dict[str, Any] | None:
-        create_task = getattr(env, "create_runtime_task", None)
-        current_task_id = getattr(env, "current_runtime_task_id", None)
+        _env = getattr(session.rlm_instance, "_persistent_env", None)
+        create_task = getattr(_env, "create_runtime_task", None) if _env else None
+        current_task_id = getattr(_env, "current_runtime_task_id", None) if _env else None
         if not callable(create_task):
             return None
         parent_task_id = current_task_id() if callable(current_task_id) else None
@@ -152,6 +144,43 @@ def _prepare_repl_locals(
         task_sink=_handoff_task_sink,
     )
     repl_locals["handoff_roles"] = list(VALID_HANDOFF_ROLES)
+
+
+def _prepare_repl_locals(
+    services: RuntimeDispatchServices,
+    *,
+    session: Any,
+    client_id: str,
+    prompt: str | list[dict[str, Any]] | dict[str, Any],
+    query_text: str,
+    plugins_to_load: list[str],
+    prompt_plan: Any,
+    dynamic_skill_context: str,
+) -> dict[str, Any] | None:
+    if session.rlm_instance and (dynamic_skill_context or services.skill_context):
+        session.rlm_instance.skills_context = dynamic_skill_context or services.skill_context
+
+    env = getattr(session.rlm_instance, "_persistent_env", None)
+    if env is None or not hasattr(env, "locals"):
+        # Env not created yet (first turn). Store a deferred injection closure
+        # on the RLM core so it runs after _spawn_completion_context creates the env.
+        rlm_core = getattr(getattr(session, "rlm_instance", None), "_rlm", None)
+        if rlm_core is not None:
+            rlm_core._pending_repl_injection = lambda locals_dict: _apply_repl_injections(
+                services, locals_dict,
+                session=session, client_id=client_id,
+                plugins_to_load=plugins_to_load,
+                dynamic_skill_context=dynamic_skill_context,
+            )
+        return None
+
+    repl_locals = env.locals
+    _apply_repl_injections(
+        services, repl_locals,
+        session=session, client_id=client_id,
+        plugins_to_load=plugins_to_load,
+        dynamic_skill_context=dynamic_skill_context,
+    )
     return repl_locals
 
 

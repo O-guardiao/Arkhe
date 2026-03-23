@@ -286,6 +286,17 @@ class RLM:
             if self.persistent:
                 self._persistent_env = environment
 
+            # Apply deferred REPL injections from the server pipeline (first turn).
+            # On the first turn, _prepare_repl_locals() runs before the env exists,
+            # so it stores a closure here for us to apply now.
+            _inject_fn = getattr(self, '_pending_repl_injection', None)
+            if _inject_fn is not None and hasattr(environment, 'locals'):
+                try:
+                    _inject_fn(environment.locals)
+                except Exception:
+                    pass
+                self._pending_repl_injection = None
+
         try:
             yield lm_handler, environment
         finally:
