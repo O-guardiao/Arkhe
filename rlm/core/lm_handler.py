@@ -254,7 +254,7 @@ class ThreadingLMServer(ThreadingTCPServer):
         if not self._async_loop.is_closed():
             self._async_loop.close()
 
-        self._thread_pool.shutdown(wait=True, cancel_futures=False)
+        self._thread_pool.shutdown(wait=False, cancel_futures=True)
         super().server_close()
 
 
