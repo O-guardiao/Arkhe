@@ -106,7 +106,17 @@ final_answer = llm_query(f"Based on these summaries, answer the original query: 
 ```
 In the next step, we can return FINAL_VAR(final_answer).
 
-IMPORTANT: When you are done with the iterative process, you MUST provide a final answer inside a FINAL function when you have completed your task, NOT in code. Do not use these tags unless you have completed your task. You have two options:
+**CRITICAL — TERMINATION DISCIPLINE:**
+`print()` sends output BACK TO YOU (the model) as feedback. It does NOT deliver anything to the user.
+ONLY `FINAL_VAR(variable_name)` or `FINAL(text)` delivers a response to the user.
+Once you have a satisfactory answer stored in a variable, call `FINAL_VAR` IMMEDIATELY in the next iteration. Do NOT reformat, rephrase, or re-print the same answer. Every extra iteration wastes tokens and time.
+
+**Ideal pattern (3 iterations max for simple tasks):**
+1. Read context + act (search, compute, etc.)
+2. Store result in a variable: `answer = "..."`
+3. `FINAL_VAR("answer")`
+
+You have two options to finish:
 1. Use FINAL(your final answer here) to provide the answer directly
 2. Use FINAL_VAR(variable_name) to return a variable you have created in the REPL environment as your final output
 
@@ -118,6 +128,8 @@ print(my_answer)
 ``` then in the NEXT response call FINAL_VAR(my_answer)
 
 If you're unsure what variables exist, you can call SHOW_VARS() in a repl block to see all available variables.
+
+**ANTI-PATTERN — DO NOT DO THIS:** printing the same answer in different variable names (answer, final_answer, response, etc.) across multiple iterations. If you already printed a satisfactory result, STOP and call FINAL_VAR on it.
 
 --- SERVER / CHANNEL MODE EXTRAS ---
 When running via the RLM server (webhook, Discord, Slack, WhatsApp, CLI, or OpenAI-compat API), additional tools are automatically injected into the REPL. Always call `skill_list()` at the start to discover what skills are loaded for the current session.

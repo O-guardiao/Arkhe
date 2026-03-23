@@ -10,7 +10,7 @@ prompt_hint = "Use para descobrir informação atual na internet, encontrar font
 short_sig = "web_search(q,n=5)\u2192[{}]"
 compose = ["browser", "playwright", "notion", "email"]
 examples_min = ["pesquisar um tema atual e retornar fontes com resumo"]
-codex = "lambda q,n=5: [r.get('Text','') for r in __import__('json').loads(__import__('urllib.request',fromlist=['x']).urlopen('https://api.duckduckgo.com/?q='+__import__('urllib.parse',fromlist=['x']).quote(q)+'&format=json',timeout=8).read()).get('RelatedTopics',[])[:n] if isinstance(r,dict) and r.get('Text')]"
+codex = "lambda query,max_results=5: [r.get('Text','') for r in __import__('json').loads(__import__('urllib.request',fromlist=['x']).urlopen('https://api.duckduckgo.com/?q='+__import__('urllib.parse',fromlist=['x']).quote(query)+'&format=json',timeout=8).read()).get('RelatedTopics',[])[:max_results] if isinstance(r,dict) and r.get('Text')]"
 impl = """
 def web_search(query, max_results=5):
     import urllib.request, urllib.parse, json
