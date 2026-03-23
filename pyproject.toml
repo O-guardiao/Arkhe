@@ -26,6 +26,7 @@ dependencies = [
 modal = ["modal>=0.73.0", "dill>=0.3.7"]
 daytona = ["daytona>=0.128.1", "dill>=0.3.7"]
 prime = ["prime-sandboxes>=0.2.0", "dill>=0.3.7"]
+mcp = ["mcp>=1.0.0"]
 
 [project.scripts]
 arkhe = "rlm.cli.main:main"

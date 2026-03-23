@@ -329,9 +329,18 @@ def build_rlm_system_prompt(
             + "\n--- END SKILLS ---"
         )
 
+    # Append context metadata to the system prompt itself instead of
+    # injecting it as a fake assistant message (which caused models to
+    # waste iterations echoing/inspecting the metadata).
+    final_system_prompt = (
+        final_system_prompt.rstrip()
+        + "\n\n--- CONTEXT METADATA ---\n"
+        + metadata_prompt
+        + "\n--- END CONTEXT METADATA ---"
+    )
+
     return [
         {"role": "system", "content": final_system_prompt},
-        {"role": "assistant", "content": metadata_prompt},
     ]
 
 
