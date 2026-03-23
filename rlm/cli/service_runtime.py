@@ -53,6 +53,68 @@ def port_accepting_connections(host: str, port: int) -> bool:
         return False
 
 
+def _find_port_pid(port: int) -> int | None:
+    """Descobre o PID do processo segurando *port* (Linux only via fuser)."""
+    if sys.platform == "win32":
+        return None
+    fuser = shutil.which("fuser")
+    if not fuser:
+        return None
+    try:
+        result = subprocess.run(
+            [fuser, f"{port}/tcp"],
+            capture_output=True, text=True, timeout=5,
+        )
+        # fuser outputs PIDs to stderr (e.g. "5000/tcp:  1105")
+        raw = result.stderr if result.stderr else result.stdout
+        for token in raw.split():
+            token = token.strip()
+            if token.isdigit():
+                return int(token)
+    except Exception:
+        pass
+    return None
+
+
+def _kill_orphan_on_port(
+    port: int,
+    host: str,
+    *,
+    warn: Callable[[str], None],
+    info: Callable[[str], None],
+) -> bool:
+    """Se *port* está ocupada por processo órfão, mata-o. Retorna True se liberou."""
+    if not port_accepting_connections(host, port):
+        return True  # porta livre
+    pid = _find_port_pid(port)
+    if pid is None:
+        return False  # não conseguiu identificar
+    # Não matar o próprio processo
+    if pid == os.getpid():
+        return False
+    warn(f"Porta {port} ocupada por processo órfão pid={pid} — encerrando...")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return False
+    # Aguardar até 3s para liberar
+    for _ in range(6):
+        time.sleep(0.5)
+        if not port_accepting_connections(host, port):
+            info(f"Processo órfão pid={pid} encerrado, porta {port} liberada.")
+            return True
+    # Forçar SIGKILL
+    try:
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(0.5)
+    except (ProcessLookupError, PermissionError):
+        pass
+    freed = not port_accepting_connections(host, port)
+    if freed:
+        info(f"Processo órfão pid={pid} forçadamente encerrado (SIGKILL).")
+    return freed
+
+
 def start_runtime(
     context: CliContext,
     layout: ServiceRuntimeLayout,
@@ -104,6 +166,16 @@ def start_runtime(
     api_proc = None
 
     if not ws_only:
+        api_port = int(env.get("RLM_API_PORT", "5000"))
+        api_host = env.get("RLM_API_HOST", "127.0.0.1")
+        if port_accepting_connections(api_host, api_port):
+            if not _kill_orphan_on_port(api_port, api_host, warn=warn, info=info):
+                err(
+                    f"Porta {api_port} já está em uso e não foi possível liberar. "
+                    f"Execute: fuser -k {api_port}/tcp"
+                )
+                return 1
+
         info("Iniciando API FastAPI...")
         env.pop("RLM_WS_DISABLED", None)
         if api_only:
@@ -218,6 +290,23 @@ def stop_runtime(
         else:
             info(f"{label} pid={pid} não estava rodando")
         remove_pid(pid_file)
+
+    # Limpar processos órfãos que não tinham PID file
+    if not stopped:
+        from rlm.cli.context import CliContext as _Ctx
+        _ctx = _Ctx.from_environment(load_env=True)
+        _port = _ctx.api_port()
+        _host = _ctx.api_host()
+        if port_accepting_connections(_host, _port):
+            orphan_pid = _find_port_pid(_port)
+            if orphan_pid is not None:
+                warn(f"Processo órfão pid={orphan_pid} na porta {_port} — encerrando...")
+                try:
+                    os.kill(orphan_pid, signal.SIGTERM)
+                    ok(f"Processo órfão pid={orphan_pid} encerrado.")
+                    stopped = True
+                except (ProcessLookupError, PermissionError) as exc:
+                    err(f"Não foi possível encerrar órfão pid={orphan_pid}: {exc}")
 
     if not stopped:
         warn("Nenhum processo RLM encontrado.")
