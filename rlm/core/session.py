@@ -255,25 +255,67 @@ class SessionManager:
 
     def log_event(self, session_id: str, event_type: str, payload: dict | None = None):
         """Log an event for a session (webhook received, completion started, etc.)."""
-        with self._get_conn() as conn:
-            conn.execute(
-                "INSERT INTO event_log (session_id, timestamp, event_type, payload) VALUES (?, ?, ?, ?)",
-                (session_id, _now_iso(), event_type, json.dumps(payload or {})),
-            )
-            conn.commit()
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    "INSERT INTO event_log (session_id, timestamp, event_type, payload) VALUES (?, ?, ?, ?)",
+                    (session_id, _now_iso(), event_type, json.dumps(payload or {})),
+                )
+                conn.commit()
+        except sqlite3.OperationalError:
+            # event_log table may not exist yet (old DB); create and retry once.
+            try:
+                with self._get_conn() as conn:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS event_log (
+                            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                            session_id  TEXT NOT NULL,
+                            timestamp   TEXT NOT NULL,
+                            event_type  TEXT NOT NULL,
+                            payload     TEXT DEFAULT '{}',
+                            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                        )
+                    """)
+                    conn.execute(
+                        "INSERT INTO event_log (session_id, timestamp, event_type, payload) VALUES (?, ?, ?, ?)",
+                        (session_id, _now_iso(), event_type, json.dumps(payload or {})),
+                    )
+                    conn.commit()
+            except Exception:
+                pass
 
     def get_events(self, session_id: str, limit: int = 100) -> list[dict]:
         """Get recent events for a session."""
-        with self._get_conn() as conn:
-            rows = conn.execute(
-                "SELECT timestamp, event_type, payload FROM event_log "
-                "WHERE session_id = ? ORDER BY id DESC LIMIT ?",
-                (session_id, limit),
-            ).fetchall()
-        return [
-            {"timestamp": r[0], "event_type": r[1], "payload": json.loads(r[2])}
-            for r in rows
-        ]
+        try:
+            with self._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT timestamp, event_type, payload FROM event_log "
+                    "WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+                    (session_id, limit),
+                ).fetchall()
+            return [
+                {"timestamp": r[0], "event_type": r[1], "payload": json.loads(r[2])}
+                for r in rows
+            ]
+        except sqlite3.OperationalError:
+            # event_log table may not exist in databases created by older versions.
+            # Attempt to create it now and return empty.
+            try:
+                with self._get_conn() as conn:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS event_log (
+                            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                            session_id  TEXT NOT NULL,
+                            timestamp   TEXT NOT NULL,
+                            event_type  TEXT NOT NULL,
+                            payload     TEXT DEFAULT '{}',
+                            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                        )
+                    """)
+                    conn.commit()
+            except Exception:
+                pass
+            return []
 
     # --- Internal Helpers ---
 

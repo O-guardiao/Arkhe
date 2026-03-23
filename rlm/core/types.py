@@ -2,6 +2,17 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Literal
 
+
+def _sanitize_str(text: str) -> str:
+    """Replace lone surrogates that cannot be encoded as strict UTF-8."""
+    if not isinstance(text, str):
+        return text
+    try:
+        text.encode("utf-8")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="replace")
+
 ClientBackend = Literal[
     "openai",
     "portkey",
@@ -119,7 +130,7 @@ class RLMChatCompletion:
         d = {
             "root_model": self.root_model,
             "prompt": self.prompt,
-            "response": self.response,
+            "response": _sanitize_str(self.response),
             "usage_summary": self.usage_summary.to_dict(),
             "execution_time": self.execution_time,
             "is_complete": self.is_complete,
@@ -168,8 +179,8 @@ class REPLResult:
 
     def to_dict(self):
         return {
-            "stdout": self.stdout,
-            "stderr": self.stderr,
+            "stdout": _sanitize_str(self.stdout),
+            "stderr": _sanitize_str(self.stderr),
             "locals": {k: _serialize_value(v) for k, v in self.locals.items()},
             "execution_time": self.execution_time,
             "rlm_calls": [call.to_dict() for call in self.rlm_calls],

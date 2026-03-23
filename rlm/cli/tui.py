@@ -289,7 +289,10 @@ class RuntimeWorkbench:
         self.console.print(self.build_layout())
 
     def build_layout(self) -> Layout:
-        activity = build_activity_payload(self.runtime.session_manager, self.session)
+        try:
+            activity = build_activity_payload(self.runtime.session_manager, self.session)
+        except Exception:
+            activity = {"session": {}, "event_log": [], "runtime": None}
         runtime = activity.get("runtime") or {}
         layout = Layout(name="root")
         layout.split_column(

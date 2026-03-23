@@ -143,12 +143,21 @@ class LMResponse:
 # =============================================================================
 
 
+def _sanitize_surrogates(text: str) -> str:
+    """Replace lone surrogates that cannot be encoded as strict UTF-8."""
+    try:
+        text.encode("utf-8")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="replace")
+
+
 def socket_send(sock: socket.socket, data: dict) -> None:
     """Send a length-prefixed JSON message over socket.
 
     Protocol: 4-byte big-endian length prefix + UTF-8 JSON payload.
     """
-    payload = json.dumps(data).encode("utf-8")
+    payload = json.dumps(data, default=str).encode("utf-8", errors="surrogatepass")
     sock.sendall(struct.pack(">I", len(payload)) + payload)
 
 
