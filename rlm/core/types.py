@@ -112,6 +112,8 @@ class RLMChatCompletion:
     execution_time: float
     artifacts: dict[str, Any] | None = None
     """Artefatos REPL colhidos (None se capture_artifacts=False)."""
+    is_complete: bool = True
+    """False quando max_iterations esgotou sem FINAL_ANSWER explícito."""
 
     def to_dict(self):
         d = {
@@ -120,6 +122,7 @@ class RLMChatCompletion:
             "response": self.response,
             "usage_summary": self.usage_summary.to_dict(),
             "execution_time": self.execution_time,
+            "is_complete": self.is_complete,
         }
         if self.artifacts is not None:
             d["artifacts"] = {k: repr(v) for k, v in self.artifacts.items()}
@@ -133,6 +136,7 @@ class RLMChatCompletion:
             response=data.get("response"),
             usage_summary=UsageSummary.from_dict(data.get("usage_summary")),
             execution_time=data.get("execution_time"),
+            is_complete=data.get("is_complete", True),
             # artifacts não é restaurado de dict (contém callables não-serializáveis)
         )
 

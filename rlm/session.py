@@ -228,6 +228,9 @@ class RLMSession:
         except Exception:
             pass
 
+        # Fase 12: Stream ativo (completion_stream generator) — sobrevive entre turnos
+        self._active_stream: Any = None
+
     # ──────────────────────────────────────────────────────────────────────────
     # Public API
     # ──────────────────────────────────────────────────────────────────────────
@@ -278,6 +281,13 @@ class RLMSession:
     def reset(self) -> None:
         """Zera histórico e resumo. Mantém o RLM persistente ativo."""
         self._state = SessionState()
+        # Fase 12: Fecha stream ativo se houver
+        if self._active_stream is not None:
+            try:
+                self._active_stream.close()
+            except (StopIteration, GeneratorExit):
+                pass
+            self._active_stream = None
 
     def chat_async(self, user_message: str) -> "SessionAsyncHandle":
         """
@@ -302,6 +312,65 @@ class RLMSession:
             bloqueie em .result() quando precisar da resposta final.
         """
         return SessionAsyncHandle(session=self, user_message=user_message)
+
+    def chat_stream(self, user_message: str) -> str:
+        """
+        Fase 12 — Solução B: Chat via completion_stream (generator).
+
+        Na primeira chamada, inicia o generator. Nas chamadas seguintes,
+        reutiliza o MESMO generator — o environment, lm_handler, variáveis
+        REPL, tudo permanece vivo entre turnos. Zero zona morta.
+
+        Se o generator terminar (ex: erro), cria um novo automaticamente.
+
+        Uso::
+
+            session = RLMSession(backend="openai", backend_kwargs={"model_name": "gpt-4o-mini"})
+            resp = session.chat_stream("Cria uma função parse_log()")
+            # → lm_handler FICA VIVO, REPL mantém a função criada
+            resp = session.chat_stream("Agora usa parse_log() no arquivo X")
+            # → parse_log() ainda existe no REPL, sem reconstrução
+            session.close()  # encerra o generator graciosamente
+        """
+        t_start = time.perf_counter()
+        self._record_recursive_message("user", user_message, metadata={"source": "chat_stream"})
+
+        try:
+            if self._active_stream is None:
+                # Primeiro turno: cria o generator com contexto da sessão
+                prompt = self._build_prompt(user_message)
+                self._active_stream = self._rlm.completion_stream(prompt)
+                completion = next(self._active_stream)
+            else:
+                # Turnos seguintes: send() no generator existente
+                completion = self._active_stream.send(user_message)
+        except (StopIteration, GeneratorExit):
+            # Generator morreu — fallback para novo generator
+            self._active_stream = None
+            prompt = self._build_prompt(user_message)
+            self._active_stream = self._rlm.completion_stream(prompt)
+            completion = next(self._active_stream)
+
+        response = completion.response
+        elapsed = time.perf_counter() - t_start
+
+        self._record_recursive_message(
+            "assistant",
+            response,
+            metadata={
+                "source": "chat_stream",
+                "elapsed_s": elapsed,
+                "is_complete": completion.is_complete,
+            },
+        )
+
+        self._state.turns.append(SessionTurn(user_message, response, elapsed))
+        self._state.total_turns += 1
+        self._compact_background_if_needed()
+
+        return response
+
+
 
     def poll_logs(self, handles: "list[SessionAsyncHandle]") -> list[str]:
         """
@@ -613,6 +682,14 @@ class RLMSession:
 
     def close(self) -> None:
         """Fecha a instância RLM interna (chamado por SessionManager.close_session)."""
+        # Fase 12: Encerra o generator stream ativo antes de fechar o RLM
+        if self._active_stream is not None:
+            try:
+                self._active_stream.close()
+            except (StopIteration, GeneratorExit):
+                pass
+            self._active_stream = None
+        self._rlm.shutdown_persistent()
         self._rlm.close()
 
     def dispose(self) -> None:

@@ -1,7 +1,8 @@
 import hashlib
+import queue
 import time
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Generator
 
 from rlm.clients import BaseLM, get_client
 from rlm.core.lm_handler import LMHandler
@@ -170,6 +171,13 @@ class RLM:
         # Fase 10: Reentrancy barrier para compactação
         self._compaction_barrier = ReentrancyBarrier()
 
+        # Fase 12: Persistent LM handler — sobrevive entre turnos quando persistent=True
+        self._persistent_lm_handler: LMHandler | None = None
+
+        # Fase 12: Sentinel mode — recursão que dorme em vez de morrer (Solução A)
+        self._sentinel_input_queue: queue.Queue[str | None] = queue.Queue()
+        self._sentinel_output_queue: queue.Queue[RLMChatCompletion] = queue.Queue()
+
         # Validate persistence support at initialization
         if self.persistent:
             self._validate_persistent_environment_support()
@@ -201,24 +209,37 @@ class RLM:
 
         When persistent=True, the environment is reused across calls.
         When persistent=False (default), creates fresh environment each call.
+
+        Fase 12: Quando persistent=True, o lm_handler também é preservado
+        entre turnos, eliminando a "zona morta" onde o sistema fica sem cérebro.
         """
-        # Create client and wrap in handler
-        client: BaseLM = get_client(self.backend, self.backend_kwargs)
+        # Fase 12: Reusar lm_handler existente quando persistent=True
+        if self.persistent and self._persistent_lm_handler is not None:
+            lm_handler = self._persistent_lm_handler
+            reused_handler = True
+        else:
+            # Create client and wrap in handler
+            client: BaseLM = get_client(self.backend, self.backend_kwargs)
 
-        # Create other_backend_client if provided (for depth=1 routing)
-        other_backend_client: BaseLM | None = None
-        if self.other_backends and self.other_backend_kwargs:
-            other_backend_client = get_client(self.other_backends[0], self.other_backend_kwargs[0])
+            # Create other_backend_client if provided (for depth=1 routing)
+            other_backend_client: BaseLM | None = None
+            if self.other_backends and self.other_backend_kwargs:
+                other_backend_client = get_client(self.other_backends[0], self.other_backend_kwargs[0])
 
-        lm_handler = LMHandler(client, other_backend_client=other_backend_client)
+            lm_handler = LMHandler(client, other_backend_client=other_backend_client)
 
-        # Register other clients to be available as sub-call options (by model name)
-        if self.other_backends and self.other_backend_kwargs:
-            for backend, kwargs in zip(self.other_backends, self.other_backend_kwargs, strict=True):
-                other_client: BaseLM = get_client(backend, kwargs)
-                lm_handler.register_client(other_client.model_name, other_client)
+            # Register other clients to be available as sub-call options (by model name)
+            if self.other_backends and self.other_backend_kwargs:
+                for backend, kwargs in zip(self.other_backends, self.other_backend_kwargs, strict=True):
+                    other_client: BaseLM = get_client(backend, kwargs)
+                    lm_handler.register_client(other_client.model_name, other_client)
 
-        lm_handler.start()
+            lm_handler.start()
+
+            if self.persistent:
+                self._persistent_lm_handler = lm_handler
+
+            reused_handler = False
 
         # Environment: reuse if persistent, otherwise create fresh
         if self.persistent and self._persistent_env is not None:
@@ -268,7 +289,10 @@ class RLM:
         try:
             yield lm_handler, environment
         finally:
-            lm_handler.stop()
+            # Fase 12: Quando persistent=True, NÃO mata o lm_handler.
+            # Ele sobrevive entre turnos, eliminando a "zona morta".
+            if not self.persistent:
+                lm_handler.stop()
             if not self.persistent and hasattr(environment, "cleanup"):
                 environment.cleanup()
 
@@ -942,7 +966,536 @@ class RLM:
                 usage_summary=usage,
                 execution_time=time_end - time_start,
                 artifacts=_artifacts,
+                is_complete=False,  # Fase 12: sinaliza que max_iterations esgotou
             )
+
+    # =========================================================================
+    # Fase 12 — Solução B: Coroutine Inversion (completion_stream)
+    # =========================================================================
+
+    def completion_stream(
+        self,
+        prompt: str | dict[str, Any],
+        root_prompt: str | None = None,
+        mcts_branches: int = 0,
+    ) -> Generator[RLMChatCompletion, str | None, None]:
+        """
+        Generator-based completion: o context manager NÃO fecha entre turnos.
+
+        O environment, lm_handler, variáveis REPL — TUDO sobrevive entre turnos.
+        O chamador controla o ciclo de vida via send()/close().
+
+        Uso::
+
+            gen = rlm.completion_stream("Analise X")
+            result = next(gen)              # primeiro turno
+            print(result.response)
+            result = gen.send("E agora?")   # continua no MESMO contexto
+            print(result.response)
+            gen.send(None)                  # encerra (ou gen.close())
+
+        Yields:
+            RLMChatCompletion para cada turno.
+
+        Receives (via send):
+            str  — nova mensagem do usuário, continua no mesmo contexto
+            None — encerra o stream graciosamente
+        """
+        if self.depth >= self.max_depth:
+            yield self._fallback_answer_as_completion(prompt)
+            return
+
+        with self._spawn_completion_context(prompt) as (lm_handler, environment):
+            self._clear_active_mcts_strategy(environment)
+            message_history = self._setup_prompt(prompt)
+
+            # Injeta sub_rlm, browser globals etc. (mesma lógica do completion())
+            self._inject_repl_globals(lm_handler, environment)
+
+            # MCTS se configurado (apenas no primeiro turno)
+            if mcts_branches > 0 and self.depth == 0:
+                self._run_mcts_preamble(
+                    prompt, mcts_branches, lm_handler, environment, message_history,
+                )
+
+            self.hooks.trigger("completion.started", context={"prompt": str(prompt)[:100]})
+
+            current_prompt_text = prompt
+            turn_number = 0
+
+            while True:
+                turn_start = time.perf_counter()
+                turn_number += 1
+
+                # Executa o loop recursivo interno para este turno
+                result = self._run_inner_loop(
+                    message_history=message_history,
+                    lm_handler=lm_handler,
+                    environment=environment,
+                    root_prompt=root_prompt,
+                    turn_start=turn_start,
+                    prompt_for_result=current_prompt_text,
+                )
+
+                # Yield resultado e espera próxima mensagem do usuário
+                next_input = yield result
+
+                if next_input is None:
+                    # Usuário encerrou o stream
+                    self._record_environment_event(
+                        environment,
+                        "stream.closed",
+                        {"turn_number": turn_number, "source": "user"},
+                    )
+                    return
+
+                # Continua no MESMO contexto — sem destruir nada
+                current_prompt_text = next_input
+                message_history.append({"role": "user", "content": next_input})
+                self.loop_detector.reset()
+
+    # =========================================================================
+    # Fase 12 — Solução A: Sentinel Mode (blocking queue)
+    # =========================================================================
+
+    def sentinel_completion(
+        self,
+        prompt: str | dict[str, Any],
+        root_prompt: str | None = None,
+    ) -> None:
+        """
+        Modo sentinela: a recursão não morre, fica dormindo esperando input.
+
+        A thread que chama este método fica BLOQUEADA até shutdown.
+        Interação via filas:
+          - self._sentinel_input_queue.put("nova mensagem")  → enviar
+          - self._sentinel_output_queue.get()                → receber resposta
+          - self._sentinel_input_queue.put(None)             → shutdown graceful
+
+        Uso (de outra thread)::
+
+            import threading
+            t = threading.Thread(target=rlm.sentinel_completion, args=("Olá",))
+            t.daemon = True
+            t.start()
+
+            result = rlm._sentinel_output_queue.get()      # primeiro turno
+            rlm._sentinel_input_queue.put("Próximo passo?")
+            result = rlm._sentinel_output_queue.get()      # segundo turno
+            rlm._sentinel_input_queue.put(None)            # encerra
+        """
+        if self.depth >= self.max_depth:
+            self._sentinel_output_queue.put(
+                self._fallback_answer_as_completion(prompt)
+            )
+            return
+
+        with self._spawn_completion_context(prompt) as (lm_handler, environment):
+            self._clear_active_mcts_strategy(environment)
+            message_history = self._setup_prompt(prompt)
+            self._inject_repl_globals(lm_handler, environment)
+
+            self.hooks.trigger("completion.started", context={"prompt": str(prompt)[:100]})
+
+            turn_number = 0
+
+            while True:
+                turn_start = time.perf_counter()
+                turn_number += 1
+
+                result = self._run_inner_loop(
+                    message_history=message_history,
+                    lm_handler=lm_handler,
+                    environment=environment,
+                    root_prompt=root_prompt,
+                    turn_start=turn_start,
+                    prompt_for_result=prompt,
+                )
+
+                self._sentinel_output_queue.put(result)
+
+                # Bloqueia até próxima mensagem do humano
+                next_input = self._sentinel_input_queue.get()
+
+                if next_input is None:
+                    self._record_environment_event(
+                        environment,
+                        "sentinel.shutdown",
+                        {"turn_number": turn_number},
+                    )
+                    return
+
+                message_history.append({"role": "user", "content": next_input})
+                self.loop_detector.reset()
+                prompt = next_input
+
+    # =========================================================================
+    # Fase 12 — Helpers compartilhados entre completion, completion_stream, sentinel
+    # =========================================================================
+
+    def _inject_repl_globals(self, lm_handler: LMHandler, environment: BaseEnv) -> None:
+        """Injeta sub_rlm, browser globals e outros tools no REPL."""
+        if not hasattr(environment, "globals"):
+            return
+
+        _sub_rlm_fn = make_sub_rlm_fn(self)
+        environment.globals["sub_rlm"] = _sub_rlm_fn
+        _rlm_query_fn = lambda prompt, model=None: _sub_rlm_fn(prompt)
+        environment.globals["rlm_query"] = _rlm_query_fn
+        _par, _par_det = make_sub_rlm_parallel_fn(self)
+        environment.globals["sub_rlm_parallel"] = _par
+        environment.globals["sub_rlm_parallel_detailed"] = _par_det
+        environment.globals["rlm_query_batched"] = _par
+        environment.globals["SubRLMParallelTaskResult"] = __import__(
+            "rlm.core.sub_rlm", fromlist=["SubRLMParallelTaskResult"]
+        ).SubRLMParallelTaskResult
+        _async_fn = make_sub_rlm_async_fn(self)
+        environment.globals["sub_rlm_async"] = _async_fn
+        environment.globals["AsyncHandle"] = __import__(
+            "rlm.core.sub_rlm", fromlist=["AsyncHandle"]
+        ).AsyncHandle
+        _async_bus = getattr(self, "_async_bus", None)
+        environment.globals["async_bus"] = _async_bus
+        environment._rlm_scaffold_refs = {
+            "sub_rlm": _sub_rlm_fn,
+            "rlm_query": _rlm_query_fn,
+            "sub_rlm_parallel": _par,
+            "sub_rlm_parallel_detailed": _par_det,
+            "rlm_query_batched": _par,
+            "sub_rlm_async": _async_fn,
+            "async_bus": _async_bus,
+        }
+        environment.globals.update(make_browser_globals())
+
+    def _run_inner_loop(
+        self,
+        *,
+        message_history: list[dict[str, Any]],
+        lm_handler: LMHandler,
+        environment: BaseEnv,
+        root_prompt: str | None,
+        turn_start: float,
+        prompt_for_result: Any,
+        capture_artifacts: bool = False,
+    ) -> RLMChatCompletion:
+        """
+        Executa o loop recursivo interno (N iterações).
+
+        Retorna RLMChatCompletion com is_complete=True se FINAL_ANSWER foi encontrado,
+        ou is_complete=False se max_iterations esgotou.
+
+        Compartilhado por completion(), completion_stream() e sentinel_completion().
+        """
+        cancelled_by_environment = False
+
+        for i in range(self.max_iterations):
+            self._record_environment_event(
+                environment,
+                "iteration.started",
+                {"iteration": i + 1, "message_count": len(message_history)},
+            )
+
+            if self._cancel_token.is_cancelled:
+                break
+
+            env_cancel_requested = getattr(environment, "is_cancel_requested", None)
+            if callable(env_cancel_requested) and env_cancel_requested():
+                cancelled_by_environment = True
+                break
+
+            if self._abort_event is not None and self._abort_event.is_set():
+                break
+
+            # Compaction
+            if self.compactor.should_compact(message_history):
+                pre_count = len(message_history)
+
+                def _do_compact():
+                    self._record_environment_event(
+                        environment,
+                        "compaction.started",
+                        {"iteration": i + 1, "message_count": pre_count},
+                    )
+                    compacted = self.compactor.compact(
+                        message_history,
+                        llm_fn=lambda p: lm_handler.completion(p),
+                    )
+                    # Bug fix Fase 12: mutação in-place preserva a referência
+                    # do chamador (completion_stream / sentinel_completion).
+                    # Sem isso, compactação só funciona dentro do turno mas
+                    # é perdida entre turnos — context rot progressivo.
+                    message_history.clear()
+                    message_history.extend(compacted)
+                    self._record_environment_event(
+                        environment,
+                        "compaction.completed",
+                        {"iteration": i + 1, "before": pre_count, "after": len(message_history)},
+                    )
+                    self.hooks.trigger("compaction.completed", context=self.compactor.get_stats())
+
+                self._compaction_barrier.run_or_skip(_do_compact)
+
+            # Foraging mode
+            _foraging_active = (
+                isinstance(environment, SupportsPersistence)
+                and hasattr(environment, "is_in_foraging_mode")
+                and environment.is_in_foraging_mode()
+            )
+
+            context_count = (
+                environment.get_context_count()
+                if isinstance(environment, SupportsPersistence)
+                else 1
+            )
+            history_count = (
+                environment.get_history_count()
+                if isinstance(environment, SupportsPersistence)
+                else 0
+            )
+
+            _mm = getattr(self, "_multimodal_first_content", None)
+            if i == 0 and _mm is not None:
+                current_prompt = message_history + [
+                    build_multimodal_user_prompt(
+                        _mm, root_prompt, context_count, history_count,
+                        interaction_mode=self.interaction_mode,
+                    )
+                ]
+            else:
+                current_prompt = message_history + [
+                    build_user_prompt(
+                        root_prompt, i, context_count, history_count,
+                        interaction_mode=self.interaction_mode,
+                    )
+                ]
+
+            if _foraging_active and current_prompt and current_prompt[0].get("role") == "system":
+                current_prompt = [{"role": "system", "content": RLM_FORAGING_SYSTEM_PROMPT}] + current_prompt[1:]
+
+            iteration = self._completion_turn(
+                prompt=current_prompt,
+                lm_handler=lm_handler,
+                environment=environment,
+            )
+
+            final_answer = find_final_answer(iteration.response, environment=environment)
+            iteration.final_answer = final_answer
+
+            self._record_environment_event(
+                environment,
+                "iteration.completed",
+                {
+                    "iteration": i + 1,
+                    "code_blocks": len(iteration.code_blocks),
+                    "has_final": final_answer is not None,
+                    "iteration_time_s": iteration.iteration_time,
+                },
+            )
+
+            if self.logger:
+                self.logger.log(iteration)
+
+            if self.event_bus is not None:
+                self.event_bus.set_iteration(i)
+                self.event_bus.emit("thought", {
+                    "iteration": i + 1,
+                    "response_preview": iteration.response[:500] if iteration.response else "",
+                    "code_blocks": len(iteration.code_blocks) if iteration.code_blocks else 0,
+                    "has_final": final_answer is not None,
+                })
+                if iteration.code_blocks:
+                    for cb in iteration.code_blocks:
+                        self.event_bus.emit("repl_exec", {
+                            "code": cb.code[:300] if hasattr(cb, 'code') else str(cb)[:300],
+                        })
+
+            self.verbose.print_iteration(iteration, i + 1)
+
+            if final_answer is not None:
+                time_end = time.perf_counter()
+                usage = lm_handler.get_usage_summary()
+                self.verbose.print_final_answer(final_answer)
+                self.verbose.print_summary(i + 1, time_end - turn_start, usage.to_dict())
+
+                if self.event_bus is not None:
+                    self.event_bus.emit("final_answer", {
+                        "answer_preview": final_answer[:1000],
+                        "iterations": i + 1,
+                        "time": time_end - turn_start,
+                    })
+
+                if self.persistent and isinstance(environment, SupportsPersistence):
+                    environment.add_history(message_history)
+
+                _artifacts = (
+                    environment.extract_artifacts()
+                    if capture_artifacts and hasattr(environment, "extract_artifacts")
+                    else None
+                )
+                return RLMChatCompletion(
+                    root_model=self.backend_kwargs.get("model_name", "unknown")
+                    if self.backend_kwargs else "unknown",
+                    prompt=prompt_for_result,
+                    response=final_answer,
+                    usage_summary=usage,
+                    execution_time=time_end - turn_start,
+                    artifacts=_artifacts,
+                    is_complete=True,
+                )
+
+            new_messages = format_iteration(iteration)
+            nudge = self._build_recovery_nudge(
+                has_code_blocks=bool(iteration.code_blocks),
+                has_final=final_answer is not None,
+            )
+            if nudge is not None:
+                new_messages.append(nudge)
+            message_history.extend(new_messages)
+
+        # Esgotou iterações ou foi cancelado
+        if cancelled_by_environment:
+            time_end = time.perf_counter()
+            usage = lm_handler.get_usage_summary()
+            return RLMChatCompletion(
+                root_model=self.backend_kwargs.get("model_name", "unknown")
+                if self.backend_kwargs else "unknown",
+                prompt=prompt_for_result,
+                response="[CANCELLED] coordination stop requested",
+                usage_summary=usage,
+                execution_time=time_end - turn_start,
+                is_complete=False,
+            )
+
+        time_end = time.perf_counter()
+        final_answer = self._default_answer(message_history, lm_handler)
+        usage = lm_handler.get_usage_summary()
+        self.verbose.print_final_answer(final_answer)
+
+        if self.persistent and isinstance(environment, SupportsPersistence):
+            environment.add_history(message_history)
+
+        self.verbose.print_summary(self.max_iterations, time_end - turn_start, usage.to_dict())
+
+        self._record_environment_event(
+            environment,
+            "completion.finalized",
+            {
+                "iteration": self.max_iterations,
+                "elapsed_s": time_end - turn_start,
+                "used_default_answer": not cancelled_by_environment,
+            },
+        )
+
+        _artifacts = (
+            environment.extract_artifacts()
+            if capture_artifacts and hasattr(environment, "extract_artifacts")
+            else None
+        )
+        return RLMChatCompletion(
+            root_model=self.backend_kwargs.get("model_name", "unknown")
+            if self.backend_kwargs else "unknown",
+            prompt=prompt_for_result,
+            response=final_answer,
+            usage_summary=usage,
+            execution_time=time_end - turn_start,
+            artifacts=_artifacts,
+            is_complete=False,
+        )
+
+    def _fallback_answer_as_completion(self, prompt: Any) -> RLMChatCompletion:
+        """Wrapper de _fallback_answer que retorna RLMChatCompletion."""
+        from rlm.core.types import UsageSummary
+        response = self._fallback_answer(prompt)
+        return RLMChatCompletion(
+            root_model=self.backend_kwargs.get("model_name", "unknown")
+            if self.backend_kwargs else "unknown",
+            prompt=prompt,
+            response=response,
+            usage_summary=UsageSummary(model_usage_summaries={}),
+            execution_time=0.0,
+            is_complete=True,
+        )
+
+    def _run_mcts_preamble(
+        self,
+        prompt: Any,
+        mcts_branches: int,
+        lm_handler: LMHandler,
+        environment: BaseEnv,
+        message_history: list[dict[str, Any]],
+    ) -> None:
+        """Executa MCTS pre-exploration e injeta resultado no message_history."""
+        _mcts_prompt = prompt if isinstance(prompt, str) else str(prompt)
+        archive_key = hashlib.sha1(
+            _mcts_prompt.strip().encode("utf-8", errors="ignore")
+        ).hexdigest()[:16]
+        archive_store = getattr(self, "_mcts_archives", None)
+        if archive_store is None:
+            archive_store = {}
+            self._mcts_archives = archive_store
+        archive = archive_store.setdefault(archive_key, ProgramArchive())
+
+        _mcts_extra = {}
+        if hasattr(environment, "globals"):
+            for _tool_name in (
+                "sub_rlm", "rlm_query", "sub_rlm_parallel",
+                "sub_rlm_parallel_detailed", "rlm_query_batched",
+                "sub_rlm_async", "async_bus", "AsyncHandle",
+                "SubRLMParallelTaskResult",
+            ):
+                if _tool_name in environment.globals:
+                    _mcts_extra[_tool_name] = environment.globals[_tool_name]
+
+        orchestrator = MCTSOrchestrator(
+            lm_handler_address=lm_handler.address if hasattr(lm_handler, "address") else None,
+            branches=mcts_branches,
+            max_depth=2,
+            evaluation_stages=self._build_mcts_evaluation_stages(environment),
+            event_bus=self.event_bus,
+            extra_globals=_mcts_extra,
+        )
+
+        def _direct_llm(p: str) -> str:
+            return lm_handler.completion(p)
+
+        try:
+            search_result = evolutionary_branch_search(
+                _mcts_prompt, mcts_branches, _direct_llm, orchestrator,
+                rounds=2, elite_count=min(2, mcts_branches), archive=archive,
+            )
+            best_branch = search_result["best_branch"]
+            round_history = search_result["history"]
+            self._attach_mcts_archive(environment, archive_key, archive, round_history, best_branch)
+            self._set_active_mcts_strategy(environment, best_branch, archive_key=archive_key)
+
+            if hasattr(environment, "locals") and best_branch.repl_locals:
+                for k, v in best_branch.repl_locals.items():
+                    if not k.startswith("_"):
+                        environment.locals[k] = v
+
+            if self.event_bus:
+                self.event_bus.emit("mcts_complete", {
+                    "best_branch": best_branch.branch_id,
+                    "best_score": best_branch.total_score,
+                    "seeded_vars": list(best_branch.repl_locals.keys()),
+                    "rounds": len(round_history),
+                    "winner_metrics": best_branch.aggregated_metrics,
+                    "archive_key": archive_key,
+                    "archive_size": archive.size(),
+                })
+
+            best_round = max(round_history, key=lambda item: item["best_score"])
+            mcts_note = (
+                f"\n[MCTS PRE-EXPLORATION: Ran {mcts_branches} parallel branches across "
+                f"{len(round_history)} rounds. Best branch (score={best_branch.total_score:.1f}, "
+                f"round={best_round['round']}, strategy={best_branch.strategy_name or 'unknown'}) found: "
+                f"{best_branch.final_code[:200]}]"
+            )
+            message_history[-1]["content"] += mcts_note
+
+        except Exception as _mcts_err:
+            if self.verbose:
+                print(f"[MCTS] Pre-exploration failed: {_mcts_err}. Continuing normally.")
 
     def _completion_turn(
         self,
@@ -1028,6 +1581,28 @@ class RLM:
         client: BaseLM = get_client(self.backend, self.backend_kwargs)
         response = client.completion(message)
         return response
+
+    def shutdown_persistent(self) -> None:
+        """
+        Fase 12: Desliga recursos persistentes (lm_handler, environment).
+
+        Deve ser chamado quando a sessão realmente termina (processo saindo,
+        usuário desconectou, etc.). Sem isso, o lm_handler ficaria vivo
+        indefinidamente em modo persistent.
+        """
+        if self._persistent_lm_handler is not None:
+            try:
+                self._persistent_lm_handler.stop()
+            except Exception:
+                pass
+            self._persistent_lm_handler = None
+        if self._persistent_env is not None:
+            if hasattr(self._persistent_env, "cleanup"):
+                try:
+                    self._persistent_env.cleanup()
+                except Exception:
+                    pass
+            self._persistent_env = None
 
     def _validate_persistent_environment_support(self) -> None:
         """
@@ -1158,6 +1733,14 @@ class RLM:
 
     def close(self) -> None:
         """Clean up persistent environment. Call when done with multi-turn conversations."""
+        # Fase 12 fix: também para o lm_handler persistente para evitar
+        # resource leak se close() for chamado sem shutdown_persistent()
+        if self._persistent_lm_handler is not None:
+            try:
+                self._persistent_lm_handler.stop()
+            except Exception:
+                pass
+            self._persistent_lm_handler = None
         if self._persistent_env is not None:
             if hasattr(self._persistent_env, "cleanup"):
                 self._persistent_env.cleanup()
