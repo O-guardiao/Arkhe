@@ -626,7 +626,7 @@ class MCTSOrchestrator:
                             "metrics": result.aggregated_metrics,
                         })
                     # Early termination: perfect score, cancel remaining
-                    if result.total_score >= 1.0 and _early_winner is None:
+                    if result.total_score >= self.max_depth * 4.0 and _early_winner is None:
                         _early_winner = result
                         for f, bid in futures.items():
                             if not f.done():

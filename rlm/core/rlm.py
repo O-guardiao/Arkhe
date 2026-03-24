@@ -2,7 +2,7 @@ import hashlib
 import queue
 import time
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any, Generator, cast
 
 from rlm.clients import BaseLM, get_client
 from rlm.core.lm_handler import LMHandler
@@ -40,6 +40,9 @@ from rlm.plugins.browser import make_browser_globals
 from rlm.core.cancellation import CancellationToken
 from rlm.core.disposable import DisposableStore, adapt_closeable
 from rlm.core.control_flow import ReentrancyBarrier
+
+
+PromptInput = str | dict[str, Any] | list[dict[str, Any]]
 
 
 class RLM:
@@ -162,6 +165,10 @@ class RLM:
         # Supervisor abort signal — setado externamente via Supervisor.execute()
         self._abort_event: Any = None
 
+        # Flag sinalizando que o loop detector atingiu nível crítico.
+        # Setado em _completion_turn(), resetado no início de cada loop.
+        self._loop_detector_critical: bool = False
+
         # Fase 10: Cancellation Token — substitui _abort_event ad-hoc
         # Consumidores checam self._cancel_token.is_cancelled no loop
         self._cancel_token: CancellationToken = CancellationToken.NONE
@@ -204,7 +211,7 @@ class RLM:
             self.verbose.print_metadata(metadata)
 
     @contextmanager
-    def _spawn_completion_context(self, prompt: str | dict[str, Any]):
+    def _spawn_completion_context(self, prompt: PromptInput):
         """
         Spawn an LM handler and environment for a single completion call.
 
@@ -220,7 +227,7 @@ class RLM:
             reused_handler = True
         else:
             # Create client and wrap in handler
-            client: BaseLM = get_client(self.backend, self.backend_kwargs)
+            client: BaseLM = get_client(self.backend, self.backend_kwargs or {})
 
             # Create other_backend_client if provided (for depth=1 routing)
             other_backend_client: BaseLM | None = None
@@ -280,7 +287,7 @@ class RLM:
                 env_kwargs["custom_tools"] = self.custom_tools
             if self.custom_sub_tools is not None:
                 env_kwargs["custom_sub_tools"] = self.custom_sub_tools
-            environment: BaseEnv = get_environment(self.environment_type, env_kwargs)
+            environment = get_environment(self.environment_type, env_kwargs)
 
             # Lacuna 1: Expor memória do environment para que filhos a herdem
             _mem = getattr(environment, "_memory", None)
@@ -288,7 +295,12 @@ class RLM:
                 self._shared_memory = _mem
 
             if self.persistent:
-                self._persistent_env = environment
+                if not isinstance(environment, SupportsPersistence):
+                    raise RuntimeError(
+                        f"Environment '{self.environment_type}' does not support persistent mode. "
+                        f"Use environment='local' for persistent=True."
+                    )
+                self._persistent_env = cast(SupportsPersistence, environment)
 
             # Apply deferred REPL injections from the server pipeline (first turn).
             # On the first turn, _prepare_repl_locals() runs before the env exists,
@@ -311,7 +323,7 @@ class RLM:
             if not self.persistent and hasattr(environment, "cleanup"):
                 environment.cleanup()
 
-    def _setup_prompt(self, prompt: str | list | dict[str, Any]) -> list[dict[str, Any]]:
+    def _setup_prompt(self, prompt: PromptInput) -> list[dict[str, Any]]:
         """
         Setup the system prompt for the RLM. Build the initial message history.
 
@@ -565,7 +577,7 @@ class RLM:
 
     def completion(
         self,
-        prompt: str | dict[str, Any],
+        prompt: PromptInput,
         root_prompt: str | None = None,
         mcts_branches: int = 0,
         capture_artifacts: bool = False,
@@ -590,7 +602,7 @@ class RLM:
 
         # If we're at max depth, the RLM is an LM, so we fallback to the regular LM.
         if self.depth >= self.max_depth:
-            return self._fallback_answer(prompt)
+            return self._fallback_answer_as_completion(prompt)
 
         with self._spawn_completion_context(prompt) as (lm_handler, environment):
             self._clear_active_mcts_strategy(environment)
@@ -727,7 +739,7 @@ class RLM:
 
                 except Exception as _mcts_err:
                     # MCTS failure is non-fatal — continue with normal greedy loop
-                    if self.verbose:
+                    if self.verbose.enabled:
                         print(f"[MCTS] Pre-exploration failed: {_mcts_err}. Continuing normally.")
             # ── End MCTS ───────────────────────────────────────────────────────
 
@@ -735,6 +747,7 @@ class RLM:
 
             iteration_index = 0
             empty_retry_count = 0
+            self._loop_detector_critical = False
             while iteration_index < self.max_iterations:
                 self._record_environment_event(
                     environment,
@@ -746,7 +759,7 @@ class RLM:
                 )
                 # Fase 10: CancellationToken check (composicional, substitui abort_event)
                 if self._cancel_token.is_cancelled:
-                    if getattr(self, 'verbose', None):
+                    if self.verbose.enabled:
                         print(f"[CancellationToken] Cancelled: {self._cancel_token.reason}")
                     break
 
@@ -762,8 +775,11 @@ class RLM:
 
                 # Supervisor hook: check for external abort signal (legacy compat)
                 if self._abort_event is not None and self._abort_event.is_set():
-                    if getattr(self, 'verbose', None):
+                    if self.verbose.enabled:
                         print("[Supervisor] Abort signal received. Terminating RLM loop.")
+                    break
+
+                if self._loop_detector_critical:
                     break
 
                 # Phase 8 + Fase 10: Context Compaction com ReentrancyBarrier
@@ -794,7 +810,7 @@ class RLM:
                             },
                         )
                         self.hooks.trigger("compaction.completed", context=self.compactor.get_stats())
-                        if getattr(self, 'verbose', None):
+                        if self.verbose.enabled:
                             print("[Compaction] Reduced message history context window.")
                     self._compaction_barrier.run_or_skip(_do_compact)
 
@@ -938,12 +954,14 @@ class RLM:
                         environment.add_history(message_history)
 
                     # Recursive Primitive Accumulation: capture REPL locals before cleanup
+                    extract_artifacts = getattr(environment, "extract_artifacts", None)
                     _artifacts = (
-                        environment.extract_artifacts()
-                        if capture_artifacts and hasattr(environment, "extract_artifacts")
+                        extract_artifacts()
+                        if capture_artifacts and callable(extract_artifacts)
                         else None
                     )
                     self._clear_active_mcts_strategy(environment)
+                    self._last_message_history = list(message_history)
                     return RLMChatCompletion(
                         root_model=self.backend_kwargs.get("model_name", "unknown")
                         if self.backend_kwargs
@@ -976,6 +994,7 @@ class RLM:
                 usage = lm_handler.get_usage_summary()
                 cancelled_answer = "[CANCELLED] coordination stop requested"
                 self._clear_active_mcts_strategy(environment)
+                self._last_message_history = list(message_history)
                 return RLMChatCompletion(
                     root_model=self.backend_kwargs.get("model_name", "unknown")
                     if self.backend_kwargs
@@ -1010,12 +1029,14 @@ class RLM:
                 environment.add_history(message_history)
 
             # Recursive Primitive Accumulation: capture REPL locals before cleanup
+            extract_artifacts = getattr(environment, "extract_artifacts", None)
             _artifacts = (
-                environment.extract_artifacts()
-                if capture_artifacts and hasattr(environment, "extract_artifacts")
+                extract_artifacts()
+                if capture_artifacts and callable(extract_artifacts)
                 else None
             )
             self._clear_active_mcts_strategy(environment)
+            self._last_message_history = list(message_history)
             return RLMChatCompletion(
                 root_model=self.backend_kwargs.get("model_name", "unknown")
                 if self.backend_kwargs
@@ -1249,6 +1270,7 @@ class RLM:
 
         iteration_index = 0
         empty_retry_count = 0
+        self._loop_detector_critical = False
         while iteration_index < self.max_iterations:
             self._record_environment_event(
                 environment,
@@ -1265,6 +1287,9 @@ class RLM:
                 break
 
             if self._abort_event is not None and self._abort_event.is_set():
+                break
+
+            if self._loop_detector_critical:
                 break
 
             # Compaction
@@ -1413,6 +1438,7 @@ class RLM:
                     if capture_artifacts and hasattr(environment, "extract_artifacts")
                     else None
                 )
+                self._last_message_history = list(message_history)
                 return RLMChatCompletion(
                     root_model=self.backend_kwargs.get("model_name", "unknown")
                     if self.backend_kwargs else "unknown",
@@ -1438,6 +1464,7 @@ class RLM:
         if cancelled_by_environment:
             time_end = time.perf_counter()
             usage = lm_handler.get_usage_summary()
+            self._last_message_history = list(message_history)
             return RLMChatCompletion(
                 root_model=self.backend_kwargs.get("model_name", "unknown")
                 if self.backend_kwargs else "unknown",
@@ -1474,6 +1501,7 @@ class RLM:
             if capture_artifacts and hasattr(environment, "extract_artifacts")
             else None
         )
+        self._last_message_history = list(message_history)
         return RLMChatCompletion(
             root_model=self.backend_kwargs.get("model_name", "unknown")
             if self.backend_kwargs else "unknown",
@@ -1577,12 +1605,12 @@ class RLM:
             message_history[-1]["content"] += mcts_note
 
         except Exception as _mcts_err:
-            if self.verbose:
+            if self.verbose.enabled:
                 print(f"[MCTS] Pre-exploration failed: {_mcts_err}. Continuing normally.")
 
     def _completion_turn(
         self,
-        prompt: str | dict[str, Any],
+        prompt: PromptInput,
         lm_handler: LMHandler,
         environment: BaseEnv,
     ) -> RLMIteration:
@@ -1618,8 +1646,9 @@ class RLM:
             if loop_res.stuck:
                 self.hooks.trigger("loop_detector.stuck", context={"result": loop_res.message})
                 if loop_res.level == "critical":
-                    if getattr(self, 'verbose', None):
-                        print(f"\\n[Loop Detector] Critical loop detected: {loop_res.message}. Aborting code execution.")
+                    if self.verbose.enabled:
+                        print(f"\n[Loop Detector] Critical loop detected: {loop_res.message}. Aborting code execution.")
+                    self._loop_detector_critical = True
                     if self._abort_event is not None:
                         self._abort_event.set()
                     break
@@ -1657,11 +1686,11 @@ class RLM:
 
         return response
 
-    def _fallback_answer(self, message: str | dict[str, Any]) -> str:
+    def _fallback_answer(self, message: PromptInput) -> str:
         """
         Fallback behavior if the RLM is actually at max depth, and should be treated as an LM.
         """
-        client: BaseLM = get_client(self.backend, self.backend_kwargs)
+        client: BaseLM = get_client(self.backend, self.backend_kwargs or {})
         response = client.completion(message)
         return response
 
@@ -1680,9 +1709,10 @@ class RLM:
                 pass
             self._persistent_lm_handler = None
         if self._persistent_env is not None:
-            if hasattr(self._persistent_env, "cleanup"):
+            cleanup = getattr(self._persistent_env, "cleanup", None)
+            if callable(cleanup):
                 try:
-                    self._persistent_env.cleanup()
+                    cleanup()
                 except Exception:
                     pass
             self._persistent_env = None
@@ -1771,9 +1801,10 @@ class RLM:
 
         # Save REPL checkpoint if persistent env exists
         repl_msg = ""
-        if self._persistent_env is not None and hasattr(self._persistent_env, "save_checkpoint"):
+        save_checkpoint = getattr(self._persistent_env, "save_checkpoint", None) if self._persistent_env is not None else None
+        if callable(save_checkpoint):
             checkpoint_path = os_mod.path.join(state_dir, "repl_checkpoint.json")
-            repl_msg = self._persistent_env.save_checkpoint(checkpoint_path)
+            repl_msg = save_checkpoint(checkpoint_path)
 
         return f"State saved to {state_dir}. REPL: {repl_msg}"
 
@@ -1806,8 +1837,9 @@ class RLM:
         # Load REPL checkpoint
         checkpoint_path = os_mod.path.join(state_dir, "repl_checkpoint.json")
         if os_mod.path.exists(checkpoint_path) and self._persistent_env is not None:
-            if hasattr(self._persistent_env, "load_checkpoint"):
-                repl_msg = self._persistent_env.load_checkpoint(checkpoint_path)
+            load_checkpoint = getattr(self._persistent_env, "load_checkpoint", None)
+            if callable(load_checkpoint):
+                repl_msg = load_checkpoint(checkpoint_path)
                 results.append(repl_msg)
 
         if not results:
@@ -1825,8 +1857,9 @@ class RLM:
                 pass
             self._persistent_lm_handler = None
         if self._persistent_env is not None:
-            if hasattr(self._persistent_env, "cleanup"):
-                self._persistent_env.cleanup()
+            cleanup = getattr(self._persistent_env, "cleanup", None)
+            if callable(cleanup):
+                cleanup()
             self._persistent_env = None
 
     def dispose(self) -> None:

@@ -686,11 +686,13 @@ class TestApiIntegration:
 
     def test_hooks_trigger_on_message_received_in_api(self):
         import pathlib
-        api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
-        text = api_src.read_text(encoding="utf-8")
-        assert 'message.received' in text, "Hook message.received não disparado em api.py"
-        assert 'completion.started' in text, "Hook completion.started não disparado em api.py"
-        assert 'completion.finished' in text, "Hook completion.finished não disparado em api.py"
+        server_dir = pathlib.Path(__file__).parent.parent / "rlm" / "server"
+        api_text = (server_dir / "api.py").read_text(encoding="utf-8")
+        pipeline_text = (server_dir / "runtime_pipeline.py").read_text(encoding="utf-8")
+        text = api_text + pipeline_text
+        assert 'message.received' in text, "Hook message.received não disparado no server"
+        assert 'completion.started' in text, "Hook completion.started não disparado no server"
+        assert 'completion.finished' in text, "Hook completion.finished não disparado no server"
 
     def test_hooks_stats_endpoint_defined(self):
         import pathlib
