@@ -89,6 +89,8 @@ uv pip install -e .
 pip install -e .
 ```
 
+O cliente Python de MCP vem incluído na instalação padrão. Isso evita falhas nas skills MCP embutidas, como `filesystem`, `playwright` e `sqlite`.
+
 ### First Run (wizard interativo)
 
 ```bash
