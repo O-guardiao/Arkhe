@@ -162,10 +162,6 @@ class RLM:
         # Supervisor abort signal — setado externamente via Supervisor.execute()
         self._abort_event: Any = None
 
-        # Flag sinalizando que o loop detector atingiu nível crítico.
-        # Setado em _completion_turn(), resetado no início de cada completion().
-        self._loop_detector_critical: bool = False
-
         # Fase 10: Cancellation Token — substitui _abort_event ad-hoc
         # Consumidores checam self._cancel_token.is_cancelled no loop
         self._cancel_token: CancellationToken = CancellationToken.NONE
@@ -541,9 +537,9 @@ class RLM:
             "role": "user",
             "content": (
                 "Your previous response contained no ```repl``` code block. "
-                "If the answer is already clear, finish immediately with FINAL(your answer). "
-                "Otherwise, write executable Python code inside a ```repl``` block "
-                "to make progress, or call FINAL_VAR(variable_name) to finish."
+                "You MUST write executable Python code inside a ```repl``` block "
+                "to make progress. Inspect context, run computations, or call "
+                "FINAL_VAR(variable_name) to finish."
             ),
         }
 
@@ -731,7 +727,7 @@ class RLM:
 
                 except Exception as _mcts_err:
                     # MCTS failure is non-fatal — continue with normal greedy loop
-                    if self.verbose.enabled:
+                    if self.verbose:
                         print(f"[MCTS] Pre-exploration failed: {_mcts_err}. Continuing normally.")
             # ── End MCTS ───────────────────────────────────────────────────────
 
@@ -739,9 +735,6 @@ class RLM:
 
             iteration_index = 0
             empty_retry_count = 0
-            _text_only_stall_count = 0
-            _TEXT_ONLY_STALL_LIMIT = 2
-            self._loop_detector_critical = False
             while iteration_index < self.max_iterations:
                 self._record_environment_event(
                     environment,
@@ -753,7 +746,7 @@ class RLM:
                 )
                 # Fase 10: CancellationToken check (composicional, substitui abort_event)
                 if self._cancel_token.is_cancelled:
-                    if self.verbose.enabled:
+                    if getattr(self, 'verbose', None):
                         print(f"[CancellationToken] Cancelled: {self._cancel_token.reason}")
                     break
 
@@ -769,12 +762,8 @@ class RLM:
 
                 # Supervisor hook: check for external abort signal (legacy compat)
                 if self._abort_event is not None and self._abort_event.is_set():
-                    if self.verbose.enabled:
+                    if getattr(self, 'verbose', None):
                         print("[Supervisor] Abort signal received. Terminating RLM loop.")
-                    break
-
-                # Loop detector critical: _completion_turn setou o flag
-                if self._loop_detector_critical:
                     break
 
                 # Phase 8 + Fase 10: Context Compaction com ReentrancyBarrier
@@ -805,7 +794,7 @@ class RLM:
                             },
                         )
                         self.hooks.trigger("compaction.completed", context=self.compactor.get_stats())
-                        if self.verbose.enabled:
+                        if getattr(self, 'verbose', None):
                             print("[Compaction] Reduced message history context window.")
                     self._compaction_barrier.run_or_skip(_do_compact)
 
@@ -955,7 +944,6 @@ class RLM:
                         else None
                     )
                     self._clear_active_mcts_strategy(environment)
-                    self._last_message_history = list(message_history)
                     return RLMChatCompletion(
                         root_model=self.backend_kwargs.get("model_name", "unknown")
                         if self.backend_kwargs
@@ -969,59 +957,6 @@ class RLM:
 
                 # Format the iteration for the next prompt.
                 new_messages = format_iteration(iteration)
-
-                # Track text-only stalls: if model keeps responding without
-                # code blocks or FINAL, it's likely stuck on a conversational
-                # query.  Auto-finalize after _TEXT_ONLY_STALL_LIMIT consecutive
-                # text-only iterations to avoid burning tokens.
-                if not iteration.code_blocks and final_answer is None:
-                    _text_only_stall_count += 1
-                    # Also feed the text response into the loop detector so
-                    # it can spot repeated prose the same way it spots repeated
-                    # code.
-                    self.loop_detector.record(
-                        code="__TEXT_RESPONSE__",
-                        output=(iteration.response or "")[:500],
-                        is_error=False,
-                    )
-                else:
-                    _text_only_stall_count = 0
-
-                if _text_only_stall_count >= _TEXT_ONLY_STALL_LIMIT:
-                    # The LLM already answered but never emitted FINAL().
-                    # Treat the last response as the final answer.
-                    final_answer = (iteration.response or "").strip()
-                    if final_answer:
-                        time_end = time.perf_counter()
-                        usage = lm_handler.get_usage_summary()
-                        self.verbose.print_final_answer(final_answer)
-                        self.verbose.print_summary(
-                            iteration_index + 1, time_end - time_start, usage.to_dict()
-                        )
-                        self._record_environment_event(
-                            environment,
-                            "completion.finalized",
-                            {
-                                "iteration": iteration_index + 1,
-                                "elapsed_s": time_end - time_start,
-                                "used_default_answer": False,
-                                "auto_finalized_text_stall": True,
-                            },
-                        )
-                        if self.persistent and isinstance(environment, SupportsPersistence):
-                            environment.add_history(message_history)
-                        self._clear_active_mcts_strategy(environment)
-                        self._last_message_history = list(message_history)
-                        return RLMChatCompletion(
-                            root_model=self.backend_kwargs.get("model_name", "unknown")
-                            if self.backend_kwargs
-                            else "unknown",
-                            prompt=prompt,
-                            response=final_answer,
-                            usage_summary=usage,
-                            execution_time=time_end - time_start,
-                            artifacts=None,
-                        )
 
                 # Nudge: if model returned 0 code blocks and no final answer,
                 # inject a recovery hint so it doesn't waste further iterations.
@@ -1041,7 +976,6 @@ class RLM:
                 usage = lm_handler.get_usage_summary()
                 cancelled_answer = "[CANCELLED] coordination stop requested"
                 self._clear_active_mcts_strategy(environment)
-                self._last_message_history = list(message_history)
                 return RLMChatCompletion(
                     root_model=self.backend_kwargs.get("model_name", "unknown")
                     if self.backend_kwargs
@@ -1082,7 +1016,6 @@ class RLM:
                 else None
             )
             self._clear_active_mcts_strategy(environment)
-            self._last_message_history = list(message_history)
             return RLMChatCompletion(
                 root_model=self.backend_kwargs.get("model_name", "unknown")
                 if self.backend_kwargs
@@ -1316,9 +1249,6 @@ class RLM:
 
         iteration_index = 0
         empty_retry_count = 0
-        _text_only_stall_count = 0
-        _TEXT_ONLY_STALL_LIMIT = 2
-        self._loop_detector_critical = False
         while iteration_index < self.max_iterations:
             self._record_environment_event(
                 environment,
@@ -1335,10 +1265,6 @@ class RLM:
                 break
 
             if self._abort_event is not None and self._abort_event.is_set():
-                break
-
-            # Loop detector critical: _completion_turn setou o flag
-            if self._loop_detector_critical:
                 break
 
             # Compaction
@@ -1499,50 +1425,6 @@ class RLM:
                 )
 
             new_messages = format_iteration(iteration)
-
-            # Track text-only stalls (same logic as main completion loop)
-            if not iteration.code_blocks and final_answer is None:
-                _text_only_stall_count += 1
-                self.loop_detector.record(
-                    code="__TEXT_RESPONSE__",
-                    output=(iteration.response or "")[:500],
-                    is_error=False,
-                )
-            else:
-                _text_only_stall_count = 0
-
-            if _text_only_stall_count >= _TEXT_ONLY_STALL_LIMIT:
-                final_answer = (iteration.response or "").strip()
-                if final_answer:
-                    time_end = time.perf_counter()
-                    usage = lm_handler.get_usage_summary()
-                    self.verbose.print_final_answer(final_answer)
-                    self.verbose.print_summary(
-                        iteration_index + 1, time_end - turn_start, usage.to_dict()
-                    )
-                    self._record_environment_event(
-                        environment,
-                        "completion.finalized",
-                        {
-                            "iteration": iteration_index + 1,
-                            "elapsed_s": time_end - turn_start,
-                            "used_default_answer": False,
-                            "auto_finalized_text_stall": True,
-                        },
-                    )
-                    if self.persistent and isinstance(environment, SupportsPersistence):
-                        environment.add_history(message_history)
-                    return RLMChatCompletion(
-                        root_model=self.backend_kwargs.get("model_name", "unknown")
-                        if self.backend_kwargs else "unknown",
-                        prompt=prompt_for_result,
-                        response=final_answer,
-                        usage_summary=usage,
-                        execution_time=time_end - turn_start,
-                        artifacts=None,
-                        is_complete=True,
-                    )
-
             nudge = self._build_recovery_nudge(
                 has_code_blocks=bool(iteration.code_blocks),
                 has_final=final_answer is not None,
@@ -1695,7 +1577,7 @@ class RLM:
             message_history[-1]["content"] += mcts_note
 
         except Exception as _mcts_err:
-            if self.verbose.enabled:
+            if self.verbose:
                 print(f"[MCTS] Pre-exploration failed: {_mcts_err}. Continuing normally.")
 
     def _completion_turn(
@@ -1736,9 +1618,8 @@ class RLM:
             if loop_res.stuck:
                 self.hooks.trigger("loop_detector.stuck", context={"result": loop_res.message})
                 if loop_res.level == "critical":
-                    if self.verbose.enabled:
-                        print(f"\n[Loop Detector] Critical loop detected: {loop_res.message}. Aborting code execution.")
-                    self._loop_detector_critical = True
+                    if getattr(self, 'verbose', None):
+                        print(f"\\n[Loop Detector] Critical loop detected: {loop_res.message}. Aborting code execution.")
                     if self._abort_event is not None:
                         self._abort_event.set()
                     break
@@ -1758,7 +1639,7 @@ class RLM:
         """
         current_prompt = message_history + [
             {
-                "role": "user",
+                "role": "assistant",
                 "content": "Please provide a final answer to the user's question based on the information provided.",
             }
         ]

@@ -728,14 +728,14 @@ class TestApiIntegration:
         assert '"/exec/deny/{request_id}"' in text
 
     def test_confirm_exec_injected_in_repl(self):
-        server_dir = pathlib.Path(__file__).parent.parent / "rlm" / "server"
-        text = (server_dir / "api.py").read_text(encoding="utf-8") + (server_dir / "runtime_pipeline.py").read_text(encoding="utf-8")
+        api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
+        text = api_src.read_text(encoding="utf-8")
         assert "confirm_exec" in text
         assert "make_repl_fn" in text
 
     def test_request_handoff_injected_in_repl(self):
-        server_dir = pathlib.Path(__file__).parent.parent / "rlm" / "server"
-        text = (server_dir / "api.py").read_text(encoding="utf-8") + (server_dir / "runtime_pipeline.py").read_text(encoding="utf-8")
+        api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
+        text = api_src.read_text(encoding="utf-8")
         assert "request_handoff" in text
         assert "make_handoff_fn" in text
 

@@ -1032,7 +1032,7 @@ class SkillLoader:
         focused_ctx = self.build_system_prompt_context(skills, query=query, mode="focused")
         compact_ctx = self._build_compact_index(skills)
         from rlm.core.sif import SIFTableBuilder
-        sif_ctx = SIFTableBuilder.build(skills, query=query, allow_partial_compose=True)
+        sif_ctx = SIFTableBuilder.build(skills, query=query)
         plan = self.plan_prompt_context(skills, query=query, mode="auto")
         return {
             "full_tokens": len(full_ctx) // 4,

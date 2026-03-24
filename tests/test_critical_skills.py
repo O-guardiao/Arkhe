@@ -718,8 +718,8 @@ class TestApiSkillIntegration:
         assert "deactivate_scope(session.session_id)" in text
 
     def test_api_injects_skill_context_into_repl(self):
-        server_dir = pathlib.Path(__file__).parent.parent / "rlm" / "server"
-        text = (server_dir / "api.py").read_text(encoding="utf-8") + (server_dir / "runtime_pipeline.py").read_text(encoding="utf-8")
+        api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
+        text = api_src.read_text(encoding="utf-8")
         assert "__rlm_skills__" in text
         assert "skill_loader.activate_all" in text
 
