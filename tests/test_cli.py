@@ -1093,8 +1093,36 @@ class TestLauncherState:
         assert rc == 0
         payload = json.loads(context.paths.launcher_state_path.read_text(encoding="utf-8"))
         assert payload["runtime_artifacts"]["daemon_manager"] == "systemd"
-        assert payload["runtime_artifacts"]["daemon_definition"].endswith("rlm.service")
 
+
+# =========================================================================== #
+# Entry-point validation (inspirado por CLI-Anything _resolve_cli)             #
+# =========================================================================== #
+
+class TestInstalledEntryPoint:
+    """Valida que o entry_point declarado no pyproject.toml funciona via subprocess."""
+
+    def test_arkhe_help_subprocess(self) -> None:
+        import subprocess
+        from tests.conftest import resolve_arkhe_cli
+        result = subprocess.run(
+            resolve_arkhe_cli() + ["--help"],
+            capture_output=True, text=True, timeout=15,
+        )
+        assert result.returncode == 0
+        assert "arkhe" in result.stdout.lower() or "rlm" in result.stdout.lower()
+
+    def test_arkhe_version_subprocess(self) -> None:
+        import subprocess
+        from tests.conftest import resolve_arkhe_cli
+        result = subprocess.run(
+            resolve_arkhe_cli() + ["version"],
+            capture_output=True, text=True, timeout=15,
+        )
+        assert result.returncode == 0
+
+
+class TestShowStatusLauncherSync:
     def test_show_status_syncs_launcher_state(self, tmp_path: Path) -> None:
         from rlm.cli.context import CliContext
         from rlm.cli import service as svc

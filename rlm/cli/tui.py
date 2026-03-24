@@ -325,6 +325,10 @@ class RuntimeWorkbench:
         text.append(f"Focus: {controls.get('focused_branch_id')}  ")
         text.append(f"Winner: {summary.get('winner_branch_id')}  ")
         text.append(f"Checkpoint: {controls.get('last_checkpoint_path') or '-'}")
+        ds = self.runtime.dispatch_services
+        if ds and ds.eligible_skills:
+            skills_dir = Path(ds.eligible_skills[0].source_path).parent.parent
+            text.append(f"\nSkills: {len(ds.eligible_skills)} carregadas de {skills_dir}")
         return Panel(text, border_style="cyan")
 
     def _build_branches_panel(self, runtime: dict[str, Any]) -> Panel:

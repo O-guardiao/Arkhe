@@ -1006,6 +1006,8 @@ class SkillLoader:
                     f"Use skill_doc(nome) para ver exemplos de qualquer uma."
                 )
             parts = [f"### {s.name}", s.description]
+            if s.source_path:
+                parts.append(f"**Fonte**: `{s.source_path}`")
             if s.has_mcp:
                 parts.append(f"**REPL namespace**: `{s.namespace_name}` (MCP auto-loaded)")
             if s.body:
