@@ -12,6 +12,7 @@ from rlm.core.skill_loader import SkillLoader
 from rlm.core.skill_telemetry import get_skill_telemetry
 from rlm.core.supervisor import ExecutionResult, RLMSupervisor
 from rlm.plugins import PluginLoader
+from rlm.plugins.channel_registry import sanitize_text_payload
 from rlm.server.event_router import EventRouter
 
 
@@ -53,6 +54,7 @@ def _record_recursive_message(session: Any, role: str, content: str, *, origin: 
         return
     body = dict(metadata or {})
     body.setdefault("source", origin)
+    content = sanitize_text_payload(content)
     try:
         record_message(role, content, metadata=body)
     except Exception:
@@ -75,13 +77,18 @@ def _apply_repl_injections(
     from rlm.plugins.channel_registry import ChannelRegistry
 
     def reply(message: str) -> bool:
-        return ChannelRegistry.reply(session.client_id, message)
+        return ChannelRegistry.reply(session.client_id, sanitize_text_payload(message))
 
     def reply_audio(text: str, voice: str = "alloy", output_format: str = "mp3") -> bool:
-        return ChannelRegistry.reply_audio(session.client_id, text, voice=voice, output_format=output_format)
+        return ChannelRegistry.reply_audio(
+            session.client_id,
+            sanitize_text_payload(text),
+            voice=voice,
+            output_format=output_format,
+        )
 
     def send_media(media_url_or_path: str, caption: str = "") -> bool:
-        return ChannelRegistry.send_media(session.client_id, media_url_or_path, caption)
+        return ChannelRegistry.send_media(session.client_id, media_url_or_path, sanitize_text_payload(caption))
 
     repl_locals["reply"] = reply
     repl_locals["reply_audio"] = reply_audio

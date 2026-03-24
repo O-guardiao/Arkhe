@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from rlm.plugins.channel_registry import sanitize_text_payload
+
 
 def _tail(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     if limit <= 0:
@@ -277,8 +279,10 @@ def dispatch_operator_prompt(
         target_session = finished_session or session
         target_session.metadata = dict(getattr(target_session, "metadata", {}) or {})
         session.metadata = dict(getattr(session, "metadata", {}) or {})
-        response_text = str(getattr(result, "response", None) if not isinstance(result, dict) else result.get("response", "") or "")
-        error_text = str(
+        response_text = sanitize_text_payload(
+            getattr(result, "response", None) if not isinstance(result, dict) else result.get("response", "") or ""
+        )
+        error_text = sanitize_text_payload(
             (getattr(result, "error_detail", None) if not isinstance(result, dict) else result.get("error_detail"))
             or (getattr(result, "abort_reason", None) if not isinstance(result, dict) else result.get("abort_reason"))
             or ""

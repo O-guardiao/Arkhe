@@ -177,7 +177,7 @@ class RLMSession:
     Args:
         backend: Backend LLM (ex: "openai", "ollama").
         backend_kwargs: Kwargs passados ao backend (model_name etc).
-        max_hot_turns: Quantos turnos recentes ficam no contexto quente. Default 6.
+        max_hot_turns: Quantos turnos recentes ficam no contexto quente. Default 3.
         max_context_tokens: Limiar para disparar compactação. Default 3000.
         rlm_max_iterations: Iterações internas do RLM por turno. Default 4.
         rlm_kwargs: Kwargs extras para o RLM (system_prompt, verbose, etc).
@@ -187,7 +187,7 @@ class RLMSession:
         self,
         backend: ClientBackend = "openai",
         backend_kwargs: dict[str, Any] | None = None,
-        max_hot_turns: int = 6,
+        max_hot_turns: int = 3,
         max_context_tokens: int = 3000,
         rlm_max_iterations: int = 4,
         memory_db_path: str | None = None,
@@ -575,12 +575,12 @@ class RLMSession:
         # Mede tokens do histórico quente atual
         hot_turns = self._state.turns[-self._max_hot_turns:]
         hot_text = " ".join(f"{t.user} {t.assistant}" for t in hot_turns)
-        if estimate_tokens(hot_text) < 2000:
+        if estimate_tokens(hot_text) < 1200:
             return  # Ainda confortável, sem necessidade
 
         # Turnos além da janela quente são candidatos à compactação
         cold_candidates = self._state.turns[:-self._max_hot_turns]
-        if len(cold_candidates) < 3:
+        if len(cold_candidates) < 2:
             return  # Poucos turnos, não vale
 
         self._compact_thread = threading.Thread(

@@ -109,7 +109,7 @@ class TestMultiTurnPersistentEnvironment:
                 assert "history_2" in env.locals
                 assert isinstance(env.locals["history_0"], list)
                 assert len(env.locals["history_0"]) > 0
-                assert env.locals["history"] == env.locals["history_0"]
+                assert env.locals["history"] == env.locals["history_2"]
 
     def test_variable_persistence_across_completions(self):
         """Variables computed in one completion should be available in subsequent ones."""
@@ -189,6 +189,25 @@ class TestMultiTurnPromptAwareness:
                 user_content = " ".join(m.get("content", "") for m in user_messages)
 
                 assert "history" in user_content.lower()
+
+    def test_empty_response_does_not_consume_iteration_budget(self):
+        """A blank model turn should allow one retry before the real iteration is counted."""
+        responses = ["   ", "FINAL(ok)"]
+
+        with patch.object(rlm_module, "get_client") as mock_get_client:
+            mock_lm = create_mock_lm(responses)
+            mock_get_client.return_value = mock_lm
+
+            rlm = RLM(
+                backend="openai",
+                backend_kwargs={"model_name": "test"},
+                max_iterations=1,
+            )
+
+            result = rlm.completion("Handle empty first turn")
+
+            assert result.response == "ok"
+            assert mock_lm.completion.call_count == 2
 
 
 class TestMultiTurnCodeExecution:

@@ -5,8 +5,8 @@ from rlm.utils.prompts import build_multimodal_user_prompt, build_user_prompt
 def test_build_user_prompt_repl_mode_keeps_repl_contract():
     message = build_user_prompt("resolver tarefa", interaction_mode="repl")
     content = message["content"]
-    assert "REPL environment" in content
-    assert "don't just provide a final answer yet" in content
+    assert "use the repl only if needed" in content.lower()
+    assert "finalize as soon as the answer is ready" in content.lower()
 
 
 def test_build_user_prompt_text_mode_removes_repl_guardrails():
@@ -44,3 +44,11 @@ def test_repl_mode_recovery_nudge_preserves_original_contract():
     nudge = rlm._build_recovery_nudge(has_code_blocks=False, has_final=False)
     assert nudge is not None
     assert "```repl```" in nudge["content"]
+
+
+def test_empty_response_nudge_requests_concrete_next_step():
+    rlm = RLM(backend_kwargs={"model_name": "test-model"})
+    nudge = rlm._build_empty_response_nudge()
+    lowered = nudge["content"].lower()
+    assert "empty" in lowered
+    assert "```repl```" in lowered or "final(" in lowered

@@ -1648,6 +1648,83 @@ class LocalREPL(NonIsolatedEnv):
         else:
             self.add_context(context_payload, 0)
 
+    def _is_transient_turn_local(self, key: str, value: Any) -> bool:
+        """Identify scratch locals that should not leak across turns."""
+        if key in {"f", "fh", "file_handle", "handle"}:
+            return True
+
+        if isinstance(value, io.IOBase):
+            return True
+
+        transient_exact = {
+            "answer",
+            "answers",
+            "final_answer",
+            "prompt",
+            "prompts",
+            "response",
+            "responses",
+            "result",
+            "results",
+            "query",
+            "queries",
+            "output",
+            "outputs",
+        }
+        if key in transient_exact:
+            return True
+
+        transient_prefixes = (
+            "prompt_",
+            "response_",
+            "result_",
+            "answer_",
+            "output_",
+            "query_",
+            "tmp_",
+            "temp_",
+        )
+        return key.startswith(transient_prefixes)
+
+    def reset_turn_state(self) -> None:
+        """Remove transient model-created locals while preserving tools and session scaffolding."""
+        preserve_exact = {
+            "context",
+            "history",
+            "reply",
+            "reply_audio",
+            "send_media",
+            "skill_doc",
+            "skill_list",
+            "confirm_exec",
+            "request_handoff",
+            "handoff_roles",
+        }
+        preserve_exact.update(
+            name
+            for name, entry in self.custom_tools.items()
+            if not callable(extract_tool_value(entry))
+        )
+
+        preserved: dict[str, Any] = {}
+        for key, value in self.locals.items():
+            if key in preserve_exact:
+                preserved[key] = value
+                continue
+            if key.startswith(("context_", "history_", "__rlm")):
+                preserved[key] = value
+                continue
+            if callable(value):
+                preserved[key] = value
+                continue
+            if self._is_transient_turn_local(key, value):
+                continue
+
+            preserved[key] = value
+
+        self.locals = preserved
+        self._restore_scaffold()
+
     def _load_codebase_context(self, codebase_path: str):
         """
         Activate codebase analysis mode.
@@ -1775,9 +1852,8 @@ class LocalREPL(NonIsolatedEnv):
         # Store deep copy to avoid reference issues with nested dicts
         self.locals[var_name] = copy.deepcopy(message_history)
 
-        # Alias history_0 as 'history' for convenience
-        if history_index == 0:
-            self.locals["history"] = self.locals[var_name]
+        # Alias latest history as 'history' for convenience
+        self.locals["history"] = self.locals[var_name]
 
         self._history_count = max(self._history_count, history_index + 1)
         self.record_runtime_event(
@@ -1835,8 +1911,9 @@ class LocalREPL(NonIsolatedEnv):
         latest_ctx = f"context_{self._context_count - 1}" if self._context_count > 0 else "context_0"
         if latest_ctx in self.locals:
             self.locals["context"] = self.locals[latest_ctx]
-        if "history_0" in self.locals and not self.compaction:
-            self.locals["history"] = self.locals["history_0"]
+        latest_hist = f"history_{self._history_count - 1}" if self._history_count > 0 else "history_0"
+        if latest_hist in self.locals and not self.compaction:
+            self.locals["history"] = self.locals[latest_hist]
         elif self.compaction and hasattr(self, "_compaction_history"):
             self.locals["history"] = self._compaction_history
 

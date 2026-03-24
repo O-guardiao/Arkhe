@@ -18,6 +18,12 @@ from rlm.core.structured_log import get_logger
 log = get_logger("channels")
 
 
+def sanitize_text_payload(value: object) -> str:
+    """Normalize outbound text so malformed surrogates do not crash UTF-8 encoders."""
+    text = str(value or "")
+    return text.encode("utf-8", errors="replace").decode("utf-8")
+
+
 class ChannelAdapter(abc.ABC):
     """Abstract base class for all messaging channel plugins."""
     
@@ -62,6 +68,7 @@ class ChannelRegistry:
             return False
             
         prefix, target_id = client_id.split(":", 1)
+        message = sanitize_text_payload(message)
         adapter = cls.get_adapter(prefix)
         
         if not adapter:
@@ -107,6 +114,7 @@ class ChannelRegistry:
             return False
 
         prefix, target_id = client_id.split(":", 1)
+        text = sanitize_text_payload(text)
         adapter = cls.get_adapter(prefix)
 
         if not adapter:
@@ -161,6 +169,7 @@ class ChannelRegistry:
             return False
 
         prefix, target_id = client_id.split(":", 1)
+        caption = sanitize_text_payload(caption)
         adapter = cls.get_adapter(prefix)
 
         if not adapter:

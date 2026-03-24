@@ -108,7 +108,7 @@ class TestLocalREPLHistory:
         assert repl.get_history_count() == 2
         assert repl.locals["history_0"] == history1
         assert repl.locals["history_1"] == history2
-        assert repl.locals["history"] == history1  # alias stays on first
+        assert repl.locals["history"] == history2  # alias points to latest
 
         repl.cleanup()
 
@@ -156,6 +156,30 @@ all_contents = [
         result = repl.execute_code(code)
         assert result.stderr == ""
         assert repl.locals["all_contents"] == ["Query 1", "Query 2", "Query 3"]
+
+        repl.cleanup()
+
+    def test_reset_turn_state_removes_transient_locals_only(self):
+        """Cleanup between turns should keep useful state and drop scratch locals."""
+        repl = LocalREPL()
+
+        repl.add_context("Document A")
+        repl.add_history([{"role": "user", "content": "Query 1"}])
+        repl.execute_code(
+            "computed_value = 84\n"
+            "answer = 'scratch'\n"
+            "results = [1, 2, 3]\n"
+            "summary = 'keep me'\n"
+        )
+
+        repl.reset_turn_state()
+
+        assert repl.locals["computed_value"] == 84
+        assert repl.locals["summary"] == "keep me"
+        assert repl.locals["context_0"] == "Document A"
+        assert repl.locals["history_0"][0]["content"] == "Query 1"
+        assert "answer" not in repl.locals
+        assert "results" not in repl.locals
 
         repl.cleanup()
 

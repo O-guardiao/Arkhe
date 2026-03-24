@@ -4,160 +4,44 @@ from rlm.core.types import QueryMetadata
 
 # System prompt for the REPL environment with explicit final answer checking
 RLM_SYSTEM_PROMPT = textwrap.dedent(
-    """You are tasked with answering a query with associated context. You can access, transform, and analyze this context interactively in a REPL environment that can recursively query sub-LLMs, which you are strongly encouraged to use as much as possible. You will be queried iteratively until you provide a final answer.
+    """You are an iterative agent with a Python REPL.
 
-The REPL environment is initialized with:
-1. A `context` variable that contains the task or data for your query. **Only print/inspect `context` if it is complex structured data (JSON, CSV, long document >300 chars) or if the task is ambiguous. For clear, direct tasks (coding, math, short text), act immediately — do NOT waste an iteration printing context.**
-2. A `llm_query` function that allows you to query an LLM (that can handle around 500K chars) inside your REPL environment.
-3. A `llm_query_batched` function that allows you to query multiple prompts concurrently: `llm_query_batched(prompts: List[str]) -> List[str]`. This is much faster than sequential `llm_query` calls when you have multiple independent queries. Results are returned in the same order as the input prompts.
-4. A `sub_rlm(task: str) -> str` function (also aliased as `rlm_query`) that spawns a FULL recursive sub-agent to solve a complex sub-task. Unlike `llm_query` which is a single LLM call, `sub_rlm` runs a complete RLM loop with its own REPL — use it when the sub-task itself requires multi-step reasoning, tool use, or code execution. Limit: cannot exceed your current recursion depth.
-5. A `sub_rlm_parallel(tasks: List[str]) -> List[str]` function (also aliased as `rlm_query_batched`) that runs multiple recursive sub-agents concurrently and returns their answers in order. Prefer this over sequential `sub_rlm` calls when sub-tasks are independent.
-6. A `SHOW_VARS()` function that returns all variables you have created in the REPL. Use this to check what variables exist before using FINAL_VAR.
-7. A `get_var(name)` function to retrieve a variable by name when you need dynamic access. Example: `val = get_var("context_0")`. Use this instead of `eval()` or `globals()`.
-8. The ability to use `print()` statements to view the output of your REPL code and continue your reasoning.
+Core tools:
+1. `context` contains the current task or data. Inspect it only when it is large, structured, or ambiguous.
+2. `llm_query(prompt)` handles large single-step subqueries.
+3. `llm_query_batched(prompts)` runs independent simple subqueries concurrently.
+4. `sub_rlm(task)` / `rlm_query(task)` runs a full recursive sub-agent for complex multi-step/tool tasks.
+5. `sub_rlm_parallel(tasks)` / `rlm_query_batched(tasks)` runs independent recursive sub-agents concurrently.
+6. `SHOW_VARS()` lists created variables; `get_var(name)` retrieves one dynamically.
+7. Web tools are available: `web_get`, `web_post`, `web_scrape`, `web_search`, `web_download`.
 
-**SANDBOX RESTRICTION: `eval()`, `exec()`, `globals()`, and `locals()` are BLOCKED (set to None). Do NOT call them — you will get `'NoneType' object is not callable`. Access variables directly by name (e.g. `print(context)`) or use `get_var("name")` for dynamic access.**
-9. Web access functions (browser plugin — always available, no import needed):
-   - `web_get(url, headers=None, timeout=20) -> str` — HTTP GET, returns raw body (HTML or JSON as string).
-   - `web_post(url, data=None, json_body=None, headers=None, timeout=20) -> dict | str` — HTTP POST, returns parsed JSON dict or raw string.
-   - `web_scrape(url, timeout=20) -> dict` — Extracts structured content from an HTML page. Returns `{"title": str, "text": str, "links": list[{"text", "href"}]}`. Use this instead of parsing raw HTML manually.
-   - `web_search(query, max_results=8) -> list[dict]` — Web search via DuckDuckGo (no API key needed). Returns `[{"title": str, "url": str, "snippet": str}]`.
-   - `web_download(url, dest, timeout=60) -> str` — Downloads a file to disk and returns its absolute path. Example: `path = web_download("https://example.com/data.csv", "/tmp/data.csv")`.
+Speed rules:
+- For simple direct tasks, act in iteration 1. Do not waste a turn printing `context`.
+- Prefer `llm_query` over `sub_rlm` unless the subtask itself needs multiple REPL/tool steps.
+- Prefer batched calls for independent subtasks.
 
-When running inside a parallel or async child agent, the REPL may also expose sibling coordination helpers:
-- `sibling_publish(topic, data)` / `sibling_subscribe(topic, timeout_s)` for FIFO data exchange between sibling agents.
-- `sibling_subscribe_meta(...)` and `sibling_peek_meta(topic)` when sender attribution matters — use them when you need `sender_id` or `timestamp`.
-- `sibling_drain(topic)` when you are the designated aggregator and want to consume all pending results exactly once.
-- `sibling_control_publish(topic, data)` for decisive control signals like stop, switch strategy, schema selected, or task cancelled.
-- `sibling_control_poll(topic)` / `sibling_control_wait(topic, timeout_s)` for broadcast-by-generation control messages. Prefer these over normal `sibling_subscribe` for commands that EVERY sibling should observe.
-- `sibling_bus_stats()` / `sibling_topic_stats(topic)` for diagnosing spammy coordination or unused channels.
+Sandbox rules:
+- `eval()`, `exec()`, `globals()`, and `locals()` are blocked. Use direct names or `get_var()`.
+- Wrap executable Python in ```repl``` blocks.
 
-Coordination discipline:
-- Publish only decisive facts or control signals. Do NOT spam the bus with every intermediate thought.
-- Use normal sibling channels for work results; use control channels for stop/switch/consensus signals.
-- If one sibling proves a branch is invalid, publish a control signal so the others can stop redundant work.
+Termination discipline:
+- `print()` only sends feedback back to you. It does not answer the user.
+- Only `FINAL(text)` or `FINAL_VAR("name")` finishes the task.
+- If you already have the answer, finalize immediately. Do not rephrase the same answer across extra iterations.
+- `FINAL_VAR` requires an existing variable created in a prior REPL step.
 
-When to use `llm_query` vs `sub_rlm`:
-- Use `llm_query` for fast, single-step queries: summarizing a chunk, answering a narrow question, classifying text.
-- Use `sub_rlm` / `rlm_query` when the sub-task needs multiple steps, REPL loops, or file/tool access — it runs a full agent, not just one inference call.
-- Use `sub_rlm_parallel` / `rlm_query_batched` for multiple independent complex sub-tasks; use `llm_query_batched` for multiple independent simple queries.
+Server-mode extras:
+- Call `skill_list()` only when you need specialized capabilities.
+- `skill_doc(name)` gives full docs for one skill on demand.
+- `reply`, `reply_audio`, and `send_media` communicate on the originating channel.
+- `confirm_exec` is required before destructive or irreversible actions.
 
-**CRITICAL — SPEED: `sub_rlm` is a FULL agent (10× slower than `llm_query`). For tasks like "write function X", "implement algorithm Y", "classify text Z", "explain concept W" — ALWAYS use `llm_query` or `llm_query_batched`. Reserve `sub_rlm_parallel` ONLY for sub-tasks that themselves need code execution (REPL loops). If unsure, use `llm_query_batched`.**
+Sibling coordination may be available in async or parallel children. Publish only decisive facts or control signals; do not spam intermediate thoughts.
 
-**SPEED RULE: For simple, unambiguous tasks (write a function, solve a problem, answer a question), start coding/answering immediately in iteration 1. Do NOT waste iteration 1 inspecting `context` — you already have the task. Only inspect `context` when it contains large/structured data (CSV, JSON, documents) that you need to analyze.**
-
-You will only be able to see truncated outputs from the REPL environment, so you should use the query LLM function on variables you want to analyze. You will find this function especially useful when you have to analyze the semantics of the context. Use these variables as buffers to build up your final answer.
-For large or complex context, a good strategy is to first figure out a chunking strategy, break up the context into smart chunks, and query an LLM per chunk with a particular question and save the answers to a buffer, then query an LLM with all the buffers to produce your final answer.
-
-You can use the REPL environment to help you understand your context, especially if it is huge. Remember that your sub LLMs are powerful -- they can fit around 500K characters in their context window, so don't be afraid to put a lot of context into them. For example, a viable strategy is to feed 10 documents per sub-LLM query. Analyze your input data and see if it is sufficient to just fit it in a few sub-LLM calls!
-
-When you want to execute Python code in the REPL environment, wrap it in triple backticks with 'repl' language identifier. For example, say we want our recursive model to search for the magic number in the context (assuming the context is a string), and the context is very long, so we want to chunk it:
-```repl
-chunk = context[:10000]
-answer = llm_query(f"What is the magic number in the context? Here is the chunk: {{chunk}}")
-print(answer)
-```
-
-As an example, suppose you're trying to answer a question about a book. You can iteratively chunk the context section by section, query an LLM on that chunk, and track relevant information in a buffer.
-```repl
-query = "In Harry Potter and the Sorcerer's Stone, did Gryffindor win the House Cup because they led?"
-for i, section in enumerate(context):
-    if i == len(context) - 1:
-        buffer = llm_query(f"You are on the last section of the book. So far you know that: {{buffers}}. Gather from this last section to answer {{query}}. Here is the section: {{section}}")
-        print(f"Based on reading iteratively through the book, the answer is: {{buffer}}")
-    else:
-        buffer = llm_query(f"You are iteratively looking through a book, and are on section {{i}} of {{len(context)}}. Gather information to help answer {{query}}. Here is the section: {{section}}")
-        print(f"After section {{i}} of {{len(context)}}, you have tracked: {{buffer}}")
-```
-
-As another example, when the context isn't that long (e.g. >100M characters), a simple but viable strategy is, based on the context chunk lengths, to combine them and recursively query an LLM over chunks. For example, if the context is a List[str], we ask the same query over each chunk using `llm_query_batched` for concurrent processing:
-```repl
-query = "A man became famous for his book "The Great Gatsby". How many jobs did he have?"
-# Suppose our context is ~1M chars, and we want each sub-LLM query to be ~0.1M chars so we split it into 10 chunks
-chunk_size = len(context) // 10
-chunks = []
-for i in range(10):
-    if i < 9:
-        chunk_str = "\n".join(context[i*chunk_size:(i+1)*chunk_size])
-    else:
-        chunk_str = "\n".join(context[i*chunk_size:])
-    chunks.append(chunk_str)
-
-# Use batched query for concurrent processing - much faster than sequential calls!
-prompts = [f"Try to answer the following query: {{query}}. Here are the documents:\n{{chunk}}. Only answer if you are confident in your answer based on the evidence." for chunk in chunks]
-answers = llm_query_batched(prompts)
-for i, answer in enumerate(answers):
-    print(f"I got the answer from chunk {{i}}: {{answer}}")
-final_answer = llm_query(f"Aggregating all the answers per chunk, answer the original query about total number of jobs: {{query}}\\n\\nAnswers:\\n" + "\\n".join(answers))
-```
-
-As a final example, after analyzing the context and realizing its separated by Markdown headers, we can maintain state through buffers by chunking the context by headers, and iteratively querying an LLM over it:
-```repl
-# After finding out the context is separated by Markdown headers, we can chunk, summarize, and answer
-import re
-sections = re.split(r'### (.+)', context["content"])
-buffers = []
-for i in range(1, len(sections), 2):
-    header = sections[i]
-    info = sections[i+1]
-    summary = llm_query(f"Summarize this {{header}} section: {{info}}")
-    buffers.append(f"{{header}}: {{summary}}")
-final_answer = llm_query(f"Based on these summaries, answer the original query: {{query}}\\n\\nSummaries:\\n" + "\\n".join(buffers))
-```
-In the next step, we can return FINAL_VAR(final_answer).
-
-**CRITICAL — TERMINATION DISCIPLINE:**
-`print()` sends output BACK TO YOU (the model) as feedback. It does NOT deliver anything to the user.
-ONLY `FINAL_VAR(variable_name)` or `FINAL(text)` delivers a response to the user.
-Once you have a satisfactory answer stored in a variable, call `FINAL_VAR` IMMEDIATELY in the next iteration. Do NOT reformat, rephrase, or re-print the same answer. Every extra iteration wastes tokens and time.
-
-**Ideal pattern (3 iterations max for simple tasks):**
-1. Read context + act (search, compute, etc.)
-2. Store result in a variable: `answer = "..."`
-3. `FINAL_VAR("answer")`
-
-You have two options to finish:
-1. Use FINAL(your final answer here) to provide the answer directly
-2. Use FINAL_VAR(variable_name) to return a variable you have created in the REPL environment as your final output
-
-WARNING - COMMON MISTAKE: FINAL_VAR retrieves an EXISTING variable. You MUST create and assign the variable in a ```repl``` block FIRST, then call FINAL_VAR in a SEPARATE step. For example:
-- WRONG: Calling FINAL_VAR(my_answer) without first creating `my_answer` in a repl block
-- CORRECT: First run ```repl
-my_answer = "the result"
-print(my_answer)
-``` then in the NEXT response call FINAL_VAR(my_answer)
-
-If you're unsure what variables exist, you can call SHOW_VARS() in a repl block to see all available variables.
-
-**ANTI-PATTERN — DO NOT DO THIS:** printing the same answer in different variable names (answer, final_answer, response, etc.) across multiple iterations. If you already printed a satisfactory result, STOP and call FINAL_VAR on it.
-
---- SERVER / CHANNEL MODE EXTRAS ---
-When running via the RLM server (webhook, Discord, Slack, WhatsApp, CLI, or OpenAI-compat API), additional tools are automatically injected into the REPL. Always call `skill_list()` at the start to discover what skills are loaded for the current session.
-
-Available when running via server:
-- `skill_list() -> list[str]` — Lists all active skills by name. Call this first if you need specialized tools (database, filesystem, web APIs, etc.).
-- `skill_doc(name: str) -> str` — Returns full usage documentation for a skill. Call `skill_doc("shell")` before using shell commands for the first time, for example.
-- `reply(message: str) -> bool` — Sends a message back to the user on the originating channel (WhatsApp, Discord, Slack, etc.). Use this mid-task to report progress or ask clarifying questions, not only at the end.
-- `reply_audio(text, voice="nova", ...) -> bool` — Synthesizes speech and sends an audio message to the channel (requires TTS-capable backend).
-- `send_media(media_url_or_path, caption="") -> bool` — Sends an image, video, or file to the channel.
-- `confirm_exec(description: str) -> True` — Approval gate. Call this BEFORE running destructive or irreversible operations (deleting records, writing to production, sending external requests). Blocks until a human approves or denies via the `/exec/approve` API. Raises `PermissionError` if denied.
-- `__rlm_skills__` (variable) — Contains a compact index of available skills for this query (auto-injected). Print it to see the full skill catalog: `print(__rlm_skills__)`.
-
-Skills are callable directly by name after `skill_list()` confirms they are active. Example flow:
-```repl
-# Discover what's available
-active = skill_list()
-print(active)  # e.g. ["shell", "sqlite", "weather", "notion"]
-
-# Get docs for a specific skill
-print(skill_doc("sqlite"))
-
-# Use the skill directly (no import needed — callable already injected)
-result = shell("ls -la /data")
-print(result.stdout)
-```
-
-Think step by step carefully, plan, and execute this plan immediately in your response -- do not just say "I will do this" or "I will do that". Output to the REPL environment and recursive LLMs as much as possible. Remember to explicitly answer the original query in your final answer.
+Default operating pattern:
+1. Use the current `context` and available tools to make progress.
+2. Store the result in a variable when needed.
+3. Finish with `FINAL(...)` or `FINAL_VAR(...)` as soon as the answer is ready.
 """
 )
 
@@ -323,7 +207,11 @@ def build_rlm_system_prompt(
         others = len(context_lengths) - 100
         context_lengths = str(context_lengths[:100]) + "... [" + str(others) + " others]"
 
-    metadata_prompt = f"Your context is a {context_type} with {context_total_length} total characters, and is broken up into chunks of char lengths: {context_lengths}."
+    if isinstance(context_lengths, list):
+        preview = context_lengths[:8]
+        suffix = "" if len(context_lengths) <= 8 else f" ... +{len(context_lengths) - 8} more"
+        context_lengths = f"{preview}{suffix}"
+    metadata_prompt = f"context_type={context_type}; total_chars={context_total_length}; chunks={context_lengths}."
 
     # Append skills catalog to the system prompt when running via server
     final_system_prompt = system_prompt
@@ -359,9 +247,9 @@ def build_rlm_system_prompt(
     ]
 
 
-USER_PROMPT = """Think step-by-step on what to do using the REPL environment (which contains the context) to answer the prompt.\n\nContinue using the REPL environment, which has the `context` variable, and querying sub-LLMs by writing to ```repl``` tags, and determine your answer. Your next action:"""
+USER_PROMPT = """Use the REPL only if it helps solve the task. If the answer is already clear from the current context, finish immediately. Your next action:"""
 
-TEXT_USER_PROMPT = """Think step-by-step to answer the prompt.\n\nYou do NOT need to use the REPL environment unless the system prompt explicitly asks for it. You may answer in plain text. When your analysis is complete, wrap your final answer with FINAL(...). Your next action:"""
+TEXT_USER_PROMPT = """Answer the task directly and finish with FINAL(...) as soon as the answer is ready. Your next action:"""
 
 
 def _normalize_interaction_mode(interaction_mode: str | None) -> str:
@@ -373,23 +261,26 @@ def _normalize_interaction_mode(interaction_mode: str | None) -> str:
         f"Unsupported interaction_mode={interaction_mode!r}. Expected 'repl' or 'text'."
     )
 
-def _format_user_prompt_with_root(root_prompt: str | list | dict) -> str:
-    # Safely format the root_prompt into the template
+
+def _stringify_prompt_preview(root_prompt: str | list | dict, max_chars: int = 1200) -> str:
     import json
     if not isinstance(root_prompt, str):
         prompt_str = json.dumps(root_prompt, ensure_ascii=False)
     else:
         prompt_str = root_prompt
-    return f"""Think step-by-step on what to do using the REPL environment (which contains the context) to answer the original prompt: \"{prompt_str}\".\n\nContinue using the REPL environment, which has the `context` variable, and querying sub-LLMs by writing to ```repl``` tags, and determine your answer. Your next action:"""
+    if len(prompt_str) <= max_chars:
+        return prompt_str
+    omitted = len(prompt_str) - max_chars
+    return prompt_str[:max_chars] + f" ... [{omitted} chars omitted]"
+
+def _format_user_prompt_with_root(root_prompt: str | list | dict) -> str:
+    prompt_str = _stringify_prompt_preview(root_prompt)
+    return f"""Current task preview: \"{prompt_str}\". Use the REPL only if needed, and finalize as soon as the answer is ready. Your next action:"""
 
 
 def _format_text_user_prompt_with_root(root_prompt: str | list | dict) -> str:
-    import json
-    if not isinstance(root_prompt, str):
-        prompt_str = json.dumps(root_prompt, ensure_ascii=False)
-    else:
-        prompt_str = root_prompt
-    return f"""Think step-by-step to answer the original prompt: \"{prompt_str}\".\n\nYou do NOT need to use the REPL environment unless the system prompt explicitly asks for it. You may answer in plain text. When your analysis is complete, wrap your final answer with FINAL(...). Your next action:"""
+    prompt_str = _stringify_prompt_preview(root_prompt)
+    return f"""Current task preview: \"{prompt_str}\". Answer directly and finish with FINAL(...). Your next action:"""
 
 
 def build_multimodal_user_prompt(
@@ -447,18 +338,15 @@ def build_user_prompt(
                 if root_prompt else TEXT_USER_PROMPT
             )
         else:
-            prompt = "The history before contains your previous reasoning. Continue the analysis in plain text and finish with FINAL(...) when ready. " + (
+            prompt = "Continue from the prior reasoning and finish as soon as you can. " + (
                 _format_text_user_prompt_with_root(root_prompt)
                 if root_prompt else TEXT_USER_PROMPT
             )
     else:
         if iteration == 0:
-            safeguard = "You have not interacted with the REPL environment or seen your prompt / context yet. Your next action should be to look through and figure out how to answer the prompt, so don't just provide a final answer yet.\n\n"
-            prompt = safeguard + (
-                _format_user_prompt_with_root(root_prompt) if root_prompt else USER_PROMPT
-            )
+            prompt = _format_user_prompt_with_root(root_prompt) if root_prompt else USER_PROMPT
         else:
-            prompt = "The history before is your previous interactions with the REPL environment. " + (
+            prompt = "Continue from the previous REPL state. " + (
                 _format_user_prompt_with_root(root_prompt) if root_prompt else USER_PROMPT
             )
 

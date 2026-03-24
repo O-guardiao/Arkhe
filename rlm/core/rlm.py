@@ -126,6 +126,7 @@ class RLM:
         self.depth = depth
         self.max_depth = max_depth
         self.max_iterations = max_iterations
+        self.max_empty_response_retries = 2
         if interaction_mode not in ("repl", "text"):
             raise ValueError(
                 f"Unsupported interaction_mode={interaction_mode!r}. Expected 'repl' or 'text'."
@@ -259,6 +260,9 @@ class RLM:
                 if self._is_multimodal_content_list(prompt)
                 else prompt
             )
+            reset_turn_state = getattr(environment, "reset_turn_state", None)
+            if callable(reset_turn_state):
+                reset_turn_state()
             environment.add_context(repl_context)
         else:
             env_kwargs = self.environment_kwargs.copy()
@@ -539,6 +543,26 @@ class RLM:
             ),
         }
 
+    def _build_empty_response_nudge(self) -> dict[str, str]:
+        if self.interaction_mode == "text":
+            return {
+                "role": "user",
+                "content": "Your previous response was empty. Reply with actual reasoning or finish with FINAL(...).",
+            }
+        return {
+            "role": "user",
+            "content": (
+                "Your previous response was empty. Do not stay silent. "
+                "Return a ```repl``` block that makes progress or finish with FINAL(...) / FINAL_VAR(...)."
+            ),
+        }
+
+    @staticmethod
+    def _is_empty_iteration_response(response: str | None, *, has_code_blocks: bool, has_final: bool) -> bool:
+        if has_code_blocks or has_final:
+            return False
+        return not (response or "").strip()
+
     def completion(
         self,
         prompt: str | dict[str, Any],
@@ -709,12 +733,14 @@ class RLM:
 
             self.hooks.trigger("completion.started", context={"prompt": str(prompt)[:100]})
 
-            for i in range(self.max_iterations):
+            iteration_index = 0
+            empty_retry_count = 0
+            while iteration_index < self.max_iterations:
                 self._record_environment_event(
                     environment,
                     "iteration.started",
                     {
-                        "iteration": i + 1,
+                        "iteration": iteration_index + 1,
                         "message_count": len(message_history),
                     },
                 )
@@ -730,7 +756,7 @@ class RLM:
                     self._record_environment_event(
                         environment,
                         "completion.cancelled",
-                        {"iteration": i + 1, "source": "environment"},
+                        {"iteration": iteration_index + 1, "source": "environment"},
                     )
                     break
 
@@ -750,7 +776,7 @@ class RLM:
                             environment,
                             "compaction.started",
                             {
-                                "iteration": i + 1,
+                                "iteration": iteration_index + 1,
                                 "message_count": pre_compaction_count,
                             },
                         )
@@ -762,7 +788,7 @@ class RLM:
                             environment,
                             "compaction.completed",
                             {
-                                "iteration": i + 1,
+                                "iteration": iteration_index + 1,
                                 "before": pre_compaction_count,
                                 "after": len(message_history),
                             },
@@ -795,7 +821,7 @@ class RLM:
                 # injeta image_url/audio parts + instrução de ação como única mensagem
                 # de usuário para que o LLM de visão "veja" a imagem diretamente.
                 _mm = getattr(self, "_multimodal_first_content", None)
-                if i == 0 and _mm is not None:
+                if iteration_index == 0 and _mm is not None:
                     current_prompt = message_history + [
                         build_multimodal_user_prompt(
                             _mm,
@@ -809,7 +835,7 @@ class RLM:
                     current_prompt = message_history + [
                         build_user_prompt(
                             root_prompt,
-                            i,
+                            iteration_index,
                             context_count,
                             history_count,
                             interaction_mode=self.interaction_mode,
@@ -830,11 +856,31 @@ class RLM:
                 final_answer = find_final_answer(iteration.response, environment=environment)
                 iteration.final_answer = final_answer
 
+                if self._is_empty_iteration_response(
+                    iteration.response,
+                    has_code_blocks=bool(iteration.code_blocks),
+                    has_final=final_answer is not None,
+                ):
+                    empty_retry_count += 1
+                    self._record_environment_event(
+                        environment,
+                        "iteration.empty_retry",
+                        {
+                            "iteration": iteration_index + 1,
+                            "retry": empty_retry_count,
+                        },
+                    )
+                    if empty_retry_count <= self.max_empty_response_retries:
+                        message_history.append(self._build_empty_response_nudge())
+                        continue
+
+                empty_retry_count = 0
+
                 self._record_environment_event(
                     environment,
                     "iteration.completed",
                     {
-                        "iteration": i + 1,
+                        "iteration": iteration_index + 1,
                         "code_blocks": len(iteration.code_blocks),
                         "has_final": final_answer is not None,
                         "iteration_time_s": iteration.iteration_time,
@@ -847,9 +893,9 @@ class RLM:
 
                 # Evolution 5: Emit event for streaming observers
                 if self.event_bus is not None:
-                    self.event_bus.set_iteration(i)
+                    self.event_bus.set_iteration(iteration_index)
                     self.event_bus.emit("thought", {
-                        "iteration": i + 1,
+                        "iteration": iteration_index + 1,
                         "response_preview": iteration.response[:500] if iteration.response else "",
                         "code_blocks": len(iteration.code_blocks) if iteration.code_blocks else 0,
                         "has_final": final_answer is not None,
@@ -861,19 +907,19 @@ class RLM:
                             })
 
                 # Verbose output for this iteration
-                self.verbose.print_iteration(iteration, i + 1)
+                self.verbose.print_iteration(iteration, iteration_index + 1)
 
                 if final_answer is not None:
                     time_end = time.perf_counter()
                     usage = lm_handler.get_usage_summary()
                     self.verbose.print_final_answer(final_answer)
-                    self.verbose.print_summary(i + 1, time_end - time_start, usage.to_dict())
+                    self.verbose.print_summary(iteration_index + 1, time_end - time_start, usage.to_dict())
 
                     # Evolution 5: Emit final answer event
                     if self.event_bus is not None:
                         self.event_bus.emit("final_answer", {
                             "answer_preview": final_answer[:1000],
-                            "iterations": i + 1,
+                            "iterations": iteration_index + 1,
                             "time": time_end - time_start,
                         })
 
@@ -881,7 +927,7 @@ class RLM:
                         environment,
                         "completion.finalized",
                         {
-                            "iteration": i + 1,
+                            "iteration": iteration_index + 1,
                             "elapsed_s": time_end - time_start,
                             "used_default_answer": False,
                         },
@@ -923,6 +969,7 @@ class RLM:
 
                 # Update message history with the new messages.
                 message_history.extend(new_messages)
+                iteration_index += 1
 
             if cancelled_by_environment:
                 time_end = time.perf_counter()
@@ -945,13 +992,14 @@ class RLM:
             final_answer = self._default_answer(message_history, lm_handler)
             usage = lm_handler.get_usage_summary()
             self.verbose.print_final_answer(final_answer)
-            self.verbose.print_summary(self.max_iterations, time_end - time_start, usage.to_dict())
+            consumed_iterations = max(1, iteration_index)
+            self.verbose.print_summary(consumed_iterations, time_end - time_start, usage.to_dict())
 
             self._record_environment_event(
                 environment,
                 "completion.finalized",
                 {
-                    "iteration": self.max_iterations,
+                    "iteration": consumed_iterations,
                     "elapsed_s": time_end - time_start,
                     "used_default_answer": True,
                 },
@@ -1199,11 +1247,13 @@ class RLM:
         """
         cancelled_by_environment = False
 
-        for i in range(self.max_iterations):
+        iteration_index = 0
+        empty_retry_count = 0
+        while iteration_index < self.max_iterations:
             self._record_environment_event(
                 environment,
                 "iteration.started",
-                {"iteration": i + 1, "message_count": len(message_history)},
+                {"iteration": iteration_index + 1, "message_count": len(message_history)},
             )
 
             if self._cancel_token.is_cancelled:
@@ -1225,7 +1275,7 @@ class RLM:
                     self._record_environment_event(
                         environment,
                         "compaction.started",
-                        {"iteration": i + 1, "message_count": pre_count},
+                        {"iteration": iteration_index + 1, "message_count": pre_count},
                     )
                     compacted = self.compactor.compact(
                         message_history,
@@ -1240,7 +1290,7 @@ class RLM:
                     self._record_environment_event(
                         environment,
                         "compaction.completed",
-                        {"iteration": i + 1, "before": pre_count, "after": len(message_history)},
+                        {"iteration": iteration_index + 1, "before": pre_count, "after": len(message_history)},
                     )
                     self.hooks.trigger("compaction.completed", context=self.compactor.get_stats())
 
@@ -1265,7 +1315,7 @@ class RLM:
             )
 
             _mm = getattr(self, "_multimodal_first_content", None)
-            if i == 0 and _mm is not None:
+            if iteration_index == 0 and _mm is not None:
                 current_prompt = message_history + [
                     build_multimodal_user_prompt(
                         _mm, root_prompt, context_count, history_count,
@@ -1275,7 +1325,7 @@ class RLM:
             else:
                 current_prompt = message_history + [
                     build_user_prompt(
-                        root_prompt, i, context_count, history_count,
+                        root_prompt, iteration_index, context_count, history_count,
                         interaction_mode=self.interaction_mode,
                     )
                 ]
@@ -1292,11 +1342,31 @@ class RLM:
             final_answer = find_final_answer(iteration.response, environment=environment)
             iteration.final_answer = final_answer
 
+            if self._is_empty_iteration_response(
+                iteration.response,
+                has_code_blocks=bool(iteration.code_blocks),
+                has_final=final_answer is not None,
+            ):
+                empty_retry_count += 1
+                self._record_environment_event(
+                    environment,
+                    "iteration.empty_retry",
+                    {
+                        "iteration": iteration_index + 1,
+                        "retry": empty_retry_count,
+                    },
+                )
+                if empty_retry_count <= self.max_empty_response_retries:
+                    message_history.append(self._build_empty_response_nudge())
+                    continue
+
+            empty_retry_count = 0
+
             self._record_environment_event(
                 environment,
                 "iteration.completed",
                 {
-                    "iteration": i + 1,
+                    "iteration": iteration_index + 1,
                     "code_blocks": len(iteration.code_blocks),
                     "has_final": final_answer is not None,
                     "iteration_time_s": iteration.iteration_time,
@@ -1307,9 +1377,9 @@ class RLM:
                 self.logger.log(iteration)
 
             if self.event_bus is not None:
-                self.event_bus.set_iteration(i)
+                self.event_bus.set_iteration(iteration_index)
                 self.event_bus.emit("thought", {
-                    "iteration": i + 1,
+                    "iteration": iteration_index + 1,
                     "response_preview": iteration.response[:500] if iteration.response else "",
                     "code_blocks": len(iteration.code_blocks) if iteration.code_blocks else 0,
                     "has_final": final_answer is not None,
@@ -1320,18 +1390,18 @@ class RLM:
                             "code": cb.code[:300] if hasattr(cb, 'code') else str(cb)[:300],
                         })
 
-            self.verbose.print_iteration(iteration, i + 1)
+            self.verbose.print_iteration(iteration, iteration_index + 1)
 
             if final_answer is not None:
                 time_end = time.perf_counter()
                 usage = lm_handler.get_usage_summary()
                 self.verbose.print_final_answer(final_answer)
-                self.verbose.print_summary(i + 1, time_end - turn_start, usage.to_dict())
+                self.verbose.print_summary(iteration_index + 1, time_end - turn_start, usage.to_dict())
 
                 if self.event_bus is not None:
                     self.event_bus.emit("final_answer", {
                         "answer_preview": final_answer[:1000],
-                        "iterations": i + 1,
+                        "iterations": iteration_index + 1,
                         "time": time_end - turn_start,
                     })
 
@@ -1362,6 +1432,7 @@ class RLM:
             if nudge is not None:
                 new_messages.append(nudge)
             message_history.extend(new_messages)
+            iteration_index += 1
 
         # Esgotou iterações ou foi cancelado
         if cancelled_by_environment:
@@ -1385,13 +1456,14 @@ class RLM:
         if self.persistent and isinstance(environment, SupportsPersistence):
             environment.add_history(message_history)
 
-        self.verbose.print_summary(self.max_iterations, time_end - turn_start, usage.to_dict())
+        consumed_iterations = max(1, iteration_index)
+        self.verbose.print_summary(consumed_iterations, time_end - turn_start, usage.to_dict())
 
         self._record_environment_event(
             environment,
             "completion.finalized",
             {
-                "iteration": self.max_iterations,
+                "iteration": consumed_iterations,
                 "elapsed_s": time_end - turn_start,
                 "used_default_answer": not cancelled_by_environment,
             },
