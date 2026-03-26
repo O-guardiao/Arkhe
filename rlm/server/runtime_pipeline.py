@@ -314,7 +314,7 @@ def dispatch_runtime_prompt_sync(
             query=query_text,
         )
         try:
-            return services.supervisor.execute(session_obj, prompt)
+            return services.supervisor.execute(session_obj, prompt, root_prompt=query_text or None)
         finally:
             services.skill_loader.clear_request_context(skill_ctx_tokens)
 

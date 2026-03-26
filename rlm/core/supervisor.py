@@ -89,6 +89,7 @@ class RLMSupervisor:
         prompt: str | list | dict,
         config: SupervisorConfig | None = None,
         on_complete: Callable[[ExecutionResult], None] | None = None,
+        root_prompt: str | None = None,
     ) -> ExecutionResult:
         """
         Execute RLM.completion() with safety boundaries (blocking).
@@ -151,7 +152,7 @@ class RLMSupervisor:
 
         try:
             # Run the actual completion
-            rlm_result = session.rlm_instance.completion(prompt, mcts_branches=0)
+            rlm_result = session.rlm_instance.completion(prompt, root_prompt=root_prompt, mcts_branches=0)
 
             elapsed = time.perf_counter() - start_time
 
@@ -233,6 +234,7 @@ class RLMSupervisor:
         prompt: str | list | dict,
         config: SupervisorConfig | None = None,
         on_complete: Callable[[ExecutionResult], None] | None = None,
+        root_prompt: str | None = None,
     ) -> str:
         """
         Execute RLM.completion() asynchronously.
@@ -240,7 +242,7 @@ class RLMSupervisor:
         Returns the session_id. Use is_running() and get_result() to check status.
         """
         future = self._executor.submit(
-            self.execute, session, prompt, config, on_complete
+            self.execute, session, prompt, config, on_complete, root_prompt
         )
         with self._lock:
             self._active_futures[session.session_id] = future
