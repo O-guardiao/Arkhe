@@ -47,6 +47,17 @@ def find_final_answer(text: str, environment: "BaseEnv | None" = None) -> str | 
     Returns:
         The final answer string, or None if no final answer pattern is found
     """
+    # Check if FINAL(expr) was called from within REPL code and stored the
+    # evaluated value.  This takes priority over text-pattern matching so that
+    # FINAL(answer) in a repl block returns the *value* of `answer`, not the
+    # literal string "answer".
+    if environment is not None:
+        get_pending = getattr(environment, "get_pending_final", None)
+        if callable(get_pending):
+            pending = get_pending()
+            if isinstance(pending, str):
+                return pending
+
     # Check for FINAL_VAR pattern first - must be at start of line
     final_var_pattern = r"^\s*FINAL_VAR\((.*?)\)"
     match = re.search(final_var_pattern, text, re.MULTILINE | re.DOTALL)

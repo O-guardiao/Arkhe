@@ -293,8 +293,12 @@ class LocalREPL(NonIsolatedEnv):
         # Track LLM calls made during code execution
         self._pending_llm_calls: list[RLMChatCompletion] = []
 
+        # Storage for FINAL(value) called from within REPL code blocks
+        self._pending_final_value: str | None = None
+
         # Add helper functions
         self.globals["FINAL_VAR"] = self._final_var
+        self.globals["FINAL"] = self._final
         self.globals["SHOW_VARS"] = self._show_vars
         self.globals["get_var"] = self._get_var
         self.globals["llm_query"] = self._llm_query
@@ -1474,6 +1478,25 @@ class LocalREPL(NonIsolatedEnv):
     def is_cancel_requested(self) -> bool:
         return bool(self._cancel_event and self._cancel_event.is_set())
 
+    def _final(self, value: Any) -> str:
+        """Store the evaluated value of FINAL(expr) called from within REPL code.
+
+        When the model writes ``FINAL(answer)`` inside a repl block, Python
+        evaluates ``answer`` (the variable) before passing it here, so we
+        receive the actual string value — not the literal name.  We persist
+        it in ``_pending_final_value`` so that ``find_final_answer`` can
+        retrieve it and terminate the loop with the correct content.
+        """
+        from rlm.utils.safe_str import sanitize_text_payload
+        self._pending_final_value = sanitize_text_payload(str(value))
+        return self._pending_final_value
+
+    def get_pending_final(self) -> str | None:
+        """Return and clear the stored FINAL() value set by REPL code execution."""
+        val = self._pending_final_value
+        self._pending_final_value = None
+        return val
+
     def _final_var(self, variable_name: str) -> str:
         """Return the value of a variable as a final answer."""
         variable_name = variable_name.strip().strip("\"'")
@@ -1898,6 +1921,7 @@ class LocalREPL(NonIsolatedEnv):
         which would corrupt the REPL namespace across iterations.
         """
         self.globals["FINAL_VAR"] = self._final_var
+        self.globals["FINAL"] = self._final
         self.globals["SHOW_VARS"] = self._show_vars
         self.globals["llm_query"] = self._llm_query
         self.globals["llm_query_batched"] = self._llm_query_batched

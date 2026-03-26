@@ -343,9 +343,17 @@ class SIFFactory:
             if var_name in repl_locals and not overwrite:
                 existing = repl_locals.get(var_name)
                 if existing is not entry.factory_fn:
-                    sif_log.warn(
-                        f"SIF: colisão de nome '{var_name}' no REPL; skill '{entry.name}' ignorada"
-                    )
+                    if callable(existing):
+                        # A callable is already registered (e.g. injected by MCP
+                        # activation).  The skill is available, just via a different
+                        # pathway — no action needed, log at INFO not WARN.
+                        sif_log.info(
+                            f"SIF: nome '{var_name}' já registrado no REPL (MCP ou outro canal); skill '{entry.name}' SIF ignorada"
+                        )
+                    else:
+                        sif_log.warn(
+                            f"SIF: colisão de nome '{var_name}' no REPL; skill '{entry.name}' ignorada"
+                        )
                 else:
                     sif_log.debug(f"SIF: '{var_name}' já no REPL, pulando (overwrite=False)")
                 continue
