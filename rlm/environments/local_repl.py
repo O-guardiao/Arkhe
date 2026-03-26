@@ -1487,7 +1487,7 @@ class LocalREPL(NonIsolatedEnv):
         it in ``_pending_final_value`` so that ``find_final_answer`` can
         retrieve it and terminate the loop with the correct content.
         """
-        from rlm.utils.safe_str import sanitize_text_payload
+        from rlm.plugins.channel_registry import sanitize_text_payload
         self._pending_final_value = sanitize_text_payload(str(value))
         return self._pending_final_value
 
