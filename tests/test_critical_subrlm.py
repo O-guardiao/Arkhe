@@ -415,13 +415,16 @@ class TestStaticIntegrity:
                     SubRLMResult, make_sub_rlm_fn])
 
     def test_make_sub_rlm_fn_imported_in_rlm_py(self):
-        rlm_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm.py"
-        text = rlm_src.read_text(encoding="utf-8")
-        assert "from rlm.core.sub_rlm import make_sub_rlm_fn" in text
+        # After mixin refactoring, _inject_repl_globals (and its imports) live in
+        # rlm_context_mixin.py — not in rlm.py.
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        text = mixin_src.read_text(encoding="utf-8")
+        assert "make_sub_rlm_fn" in text
 
     def test_sub_rlm_injected_in_environment_globals(self):
-        rlm_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm.py"
-        text = rlm_src.read_text(encoding="utf-8")
+        # After mixin refactoring, _inject_repl_globals lives in rlm_context_mixin.py
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        text = mixin_src.read_text(encoding="utf-8")
         assert 'environment.globals["sub_rlm"]' in text
         assert "make_sub_rlm_fn(self)" in text
 

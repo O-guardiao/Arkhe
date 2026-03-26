@@ -748,16 +748,20 @@ class TestParallelismTiming:
 class TestInjectionInRLMpy:
 
     def test_rlm_py_imports_make_sub_rlm_parallel_fn(self):
-        rlm_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm.py"
-        text = rlm_src.read_text(encoding="utf-8")
+        # After mixin refactoring, _inject_repl_globals (and its imports) live in
+        # rlm_context_mixin.py — not in rlm.py.
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        text = mixin_src.read_text(encoding="utf-8")
         assert "make_sub_rlm_parallel_fn" in text
 
     def test_rlm_py_injects_sub_rlm_parallel(self):
-        rlm_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm.py"
-        text = rlm_src.read_text(encoding="utf-8")
+        # After mixin refactoring, _inject_repl_globals lives in rlm_context_mixin.py
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        text = mixin_src.read_text(encoding="utf-8")
         assert 'environment.globals["sub_rlm_parallel"]' in text
 
     def test_rlm_py_injects_sub_rlm_parallel_detailed(self):
-        rlm_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm.py"
-        text = rlm_src.read_text(encoding="utf-8")
+        # After mixin refactoring, _inject_repl_globals lives in rlm_context_mixin.py
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        text = mixin_src.read_text(encoding="utf-8")
         assert 'environment.globals["sub_rlm_parallel_detailed"]' in text

@@ -647,7 +647,7 @@ class TestRLMSessionChat:
 
     def _make_session(self, responses: list[str]):
         """Cria RLMSession com RLM mockado que retorna responses em sequência."""
-        import rlm.core.rlm as rlm_module
+        import rlm.core.rlm_context_mixin as rlm_module
         from rlm.session import RLMSession
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
@@ -674,7 +674,7 @@ class TestRLMSessionChat:
 
     def test_chat_returns_response(self):
         from rlm.session import RLMSession
-        import rlm.core.rlm as rlm_module
+        import rlm.core.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -698,7 +698,7 @@ class TestRLMSessionChat:
 
     def test_turns_accumulate(self):
         from rlm.session import RLMSession
-        import rlm.core.rlm as rlm_module
+        import rlm.core.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -725,7 +725,7 @@ class TestRLMSessionChat:
     def test_build_prompt_injects_previous_turns(self):
         """_build_prompt deve incluir turnos anteriores no texto gerado."""
         from rlm.session import RLMSession, SessionTurn, SessionState
-        import rlm.core.rlm as rlm_module
+        import rlm.core.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -755,7 +755,7 @@ class TestRLMSessionChat:
     def test_build_prompt_includes_compacted_summary(self):
         """Resumo compactado deve aparecer no prompt quando existir."""
         from rlm.session import RLMSession
-        import rlm.core.rlm as rlm_module
+        import rlm.core.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -782,7 +782,7 @@ class TestRLMSessionChat:
 
     def test_reset_clears_state(self):
         from rlm.session import RLMSession, SessionTurn
-        import rlm.core.rlm as rlm_module
+        import rlm.core.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -958,7 +958,7 @@ class TestPollLogs:
 
     def test_poll_logs_aggregates_from_multiple_handles(self):
         from rlm.session import RLMSession, SessionAsyncHandle
-        import rlm.core.rlm as rlm_module
+        import rlm.core.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -988,7 +988,7 @@ class TestPollLogs:
         assert "log de h2" in all_msgs
 
     def test_poll_logs_empty_handles(self):
-        import rlm.core.rlm as rlm_module
+        import rlm.core.rlm_context_mixin as rlm_module
         from rlm.session import RLMSession
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
