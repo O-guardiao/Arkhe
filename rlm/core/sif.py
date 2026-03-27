@@ -343,19 +343,16 @@ class SIFFactory:
             if var_name in repl_locals and not overwrite:
                 existing = repl_locals.get(var_name)
                 if existing is not entry.factory_fn:
-                    if callable(existing):
-                        # MCP or another channel already registered the name.
-                        # Inject individual impl functions as supplements.
-                        sif_log.info(
-                            f"SIF: nome '{var_name}' já registrado no REPL (MCP ou outro canal); "
-                            f"skill '{entry.name}' SIF principal ignorada"
-                        )
-                        _injected_extra = cls._inject_impl_functions(entry, repl_locals, overwrite)
-                        injected.update(_injected_extra)
-                    else:
-                        sif_log.warn(
-                            f"SIF: colisão de nome '{var_name}' no REPL; skill '{entry.name}' ignorada"
-                        )
+                    # Another channel (MCP, plugin, etc.) already registered
+                    # this name.  Extract individually-named functions from
+                    # the SIF impl and inject them as supplements.
+                    sif_log.info(
+                        f"SIF: nome '{var_name}' já registrado no REPL "
+                        f"(tipo={type(existing).__name__}); "
+                        f"extraindo funções individuais de '{entry.name}'"
+                    )
+                    _injected_extra = cls._inject_impl_functions(entry, repl_locals, overwrite)
+                    injected.update(_injected_extra)
                 else:
                     sif_log.debug(f"SIF: '{var_name}' já no REPL, pulando (overwrite=False)")
                 continue
