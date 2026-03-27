@@ -16,10 +16,15 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from contextlib import closing
 from typing import Any
 import sqlite3
 
 from rlm.core.memory_manager import MultiVectorMemory
+
+
+_RAW_LAYER_PREFIX = "raw::"
+_KNOWLEDGE_LAYER_PREFIX = "kg::"
 
 @dataclass
 class KnowledgeEntry:
@@ -68,6 +73,62 @@ class RLMMemory:
         # Legacy index for fast lookups without querying db every time
         self.session_id = "default_repl"
 
+    def _raw_memory_id(self, key: str) -> str:
+        return f"{_RAW_LAYER_PREFIX}{key}"
+
+    def _knowledge_memory_id(self, key: str) -> str:
+        return f"{_KNOWLEDGE_LAYER_PREFIX}{key}"
+
+    @staticmethod
+    def _public_key(memory_id: str, metadata: dict[str, Any]) -> str:
+        key = metadata.get("key")
+        if isinstance(key, str) and key:
+            return key
+
+        entry = metadata.get("entry")
+        if isinstance(entry, dict):
+            entry_key = entry.get("key")
+            if isinstance(entry_key, str) and entry_key:
+                return entry_key
+
+        if memory_id.startswith(_RAW_LAYER_PREFIX):
+            return memory_id[len(_RAW_LAYER_PREFIX):]
+        if memory_id.startswith(_KNOWLEDGE_LAYER_PREFIX):
+            return memory_id[len(_KNOWLEDGE_LAYER_PREFIX):]
+        return memory_id
+
+    def _get_memory_record(
+        self,
+        key: str,
+        *,
+        layer: str,
+        allow_legacy_untyped: bool = False,
+    ) -> dict[str, Any] | None:
+        if layer == "raw":
+            candidates = (self._raw_memory_id(key), key)
+        else:
+            candidates = (self._knowledge_memory_id(key), key)
+
+        for memory_id in candidates:
+            mem = self.db.get_memory(memory_id)
+            if not mem:
+                continue
+            meta = mem.get("metadata", {})
+            memory_type = meta.get("type")
+            if memory_type == layer:
+                return mem
+            if allow_legacy_untyped and not memory_type:
+                return mem
+        return None
+
+    def _save_knowledge_entry(self, entry: KnowledgeEntry) -> None:
+        self.db.add_memory(
+            session_id=self.session_id,
+            content=entry.analysis,
+            metadata={"type": "knowledge", "key": entry.key, "entry": entry.to_dict()},
+            memory_id=self._knowledge_memory_id(entry.key),
+        )
+
     # =========================================================================
     # LAYER 1: Raw Storage (Lossless)
     # =========================================================================
@@ -78,13 +139,13 @@ class RLMMemory:
             session_id=self.session_id,
             content=content,
             metadata={"type": "raw", "key": key},
-            memory_id=key
+            memory_id=self._raw_memory_id(key)
         )
         return f"Stored {len(content)} chars at key: {key}"
 
     def read(self, key: str, start_line: int | None = None, end_line: int | None = None) -> str | None:
         """Retrieve exact content by key, with optional line range (1-indexed)."""
-        mem = self.db.get_memory(key)
+        mem = self._get_memory_record(key, layer="raw", allow_legacy_untyped=True)
         if not mem:
             return None
             
@@ -194,20 +255,14 @@ class RLMMemory:
         existing = self.get_knowledge(key)
         if existing:
             entry.links = existing.get("links", [])
-            
-        # Store in SQLite VSS Engine!
-        self.db.add_memory(
-            session_id=self.session_id,
-            content=analysis, # Embed the analysis!
-            metadata={"type": "knowledge", "entry": entry.to_dict()},
-            memory_id=key
-        )
+
+        self._save_knowledge_entry(entry)
             
         return f"Stored knowledge for '{key}'"
 
     def get_knowledge(self, key: str) -> dict[str, Any] | None:
         """Retrieve a knowledge entry as a dict."""
-        mem = self.db.get_memory(key)
+        mem = self._get_memory_record(key, layer="knowledge")
         if not mem:
             return None
         
@@ -232,9 +287,8 @@ class RLMMemory:
                 return f"Link {from_key} -[{relation}]-> {to_key} already exists"
                 
         entry.links.append({"relation": relation, "target": to_key})
-        
-        # Re-save
-        self.analyze(from_key, entry.analysis, entry.source_ref, entry.line_range)
+
+        self._save_knowledge_entry(entry)
             
         return f"Created link {from_key} -[{relation}]-> {to_key}"
 
@@ -249,23 +303,27 @@ class RLMMemory:
 
     def list_keys(self, prefix: str = "", layer: str = "both") -> list[str]:
         """List keys in the memory system, optionally filtered by prefix."""
-        with sqlite3.connect(self.db.db_path) as conn:
+        with closing(sqlite3.connect(self.db.db_path)) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT id, metadata FROM memory_chunks").fetchall()
+            rows = conn.execute(
+                "SELECT id, metadata FROM memory_chunks WHERE session_id = ?",
+                (self.session_id,),
+            ).fetchall()
             
-        results = []
+        results: set[str] = set()
         for r in rows:
-            if prefix and not r["id"].startswith(prefix):
-                continue
-                
             try:
                 meta = json.loads(r["metadata"])
                 mtype = meta.get("type")
-            except:
+            except Exception:
+                continue
+
+            public_key = self._public_key(r["id"], meta)
+            if prefix and not public_key.startswith(prefix):
                 continue
                 
             if layer == "both" or mtype == layer:
-                results.append(r["id"])
+                results.add(public_key)
                 
         return sorted(results)
 
@@ -274,11 +332,17 @@ class RLMMemory:
         hybrid_results = self.db.search_hybrid(keyword, limit=10, session_id=self.session_id)
         
         formatted = []
+        seen: set[tuple[str, str]] = set()
         for r in hybrid_results:
             meta = r.get("metadata", {})
             mtype = meta.get("type", "unknown")
+            public_key = self._public_key(r["id"], meta)
+            dedupe_key = (public_key, mtype)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
             formatted.append({
-                "key": r["id"],
+                "key": public_key,
                 "type": mtype,
                 "preview": r["content"][:100] + "...",
                 "match": f"hybrid_score: {r['hybrid_score']}",
@@ -294,8 +358,11 @@ class RLMMemory:
     def status(self) -> str:
         """Get an overview of the memory system status via SQLite stats."""
         try:
-            with sqlite3.connect(self.db.db_path) as conn:
-                count = conn.execute("SELECT COUNT(*) FROM memory_chunks").fetchone()[0]
+            with closing(sqlite3.connect(self.db.db_path)) as conn:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM memory_chunks WHERE session_id = ?",
+                    (self.session_id,),
+                ).fetchone()[0]
                 db_size = os.path.getsize(self.db.db_path) / 1024 / 1024
         except Exception:
             count = 0

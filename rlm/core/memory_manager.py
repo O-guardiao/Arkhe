@@ -3,6 +3,7 @@ import json
 import os
 import uuid
 import math
+from contextlib import closing
 from typing import Any, Callable, List, Dict, Optional
 import time
 
@@ -95,7 +96,7 @@ class MultiVectorMemory:
         self._init_db()
 
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             # Main storage table including vector raw str
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS memory_chunks (
@@ -198,7 +199,7 @@ class MultiVectorMemory:
         embedding = self.get_embedding(content)
         embedding_str = json.dumps(embedding) if embedding else "[]"
 
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute('''
                 INSERT OR REPLACE INTO memory_chunks
                     (id, session_id, content, metadata, embedding, importance_score, is_deprecated)
@@ -226,7 +227,7 @@ class MultiVectorMemory:
             importance_score: Novo score (0.0–1.0).
         """
         importance_score = max(0.0, min(1.0, float(importance_score)))
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
                 "UPDATE memory_chunks SET importance_score = ? WHERE id = ?",
                 (importance_score, memory_id),
@@ -243,7 +244,7 @@ class MultiVectorMemory:
         Args:
             memory_id: ID do chunk a depreciar.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
                 "UPDATE memory_chunks SET is_deprecated = 1 WHERE id = ?",
                 (memory_id,),
@@ -273,7 +274,7 @@ class MultiVectorMemory:
         """
         edge_id = str(uuid.uuid4())
         confidence = max(0.0, min(1.0, float(confidence)))
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
                 '''
                 INSERT OR IGNORE INTO memory_edges (id, from_id, to_id, edge_type, confidence)
@@ -287,7 +288,7 @@ class MultiVectorMemory:
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a memory directly by its ID."""
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM memory_chunks WHERE id = ?", (memory_id,)).fetchone()
             if row:
@@ -324,7 +325,7 @@ class MultiVectorMemory:
         """
         query_embedding = self.get_embedding(query)
         
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             
             # 1. FTS Search

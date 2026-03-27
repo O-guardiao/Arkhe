@@ -253,6 +253,12 @@ class RLMSession:
 
         # Fase 12: Stream ativo (completion_stream generator) — sobrevive entre turnos
         self._active_stream: Any = None
+        self._last_injection_meta = {
+            "retrieved": 0,
+            "injected": 0,
+            "tokens": 0,
+            "budget_pct": 0.0,
+        }
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API
@@ -315,12 +321,7 @@ class RLMSession:
                 pass
 
         # ── 5. Background: salva turno na memória + atualiza cache ───────────
-        threading.Thread(
-            target=self._post_turn_async,
-            args=(user_message, response),
-            daemon=True,
-            name="rlm-memory-post-turn",
-        ).start()
+        self.schedule_post_turn_memory(user_message, response)
 
         # ── 6. Dispara compactação em background se necessário ───────────────
         self._compact_background_if_needed()
@@ -339,6 +340,17 @@ class RLMSession:
     def reset(self) -> None:
         """Zera histórico e resumo. Mantém o RLM persistente ativo."""
         self._state = SessionState()
+        self._last_injection_meta = {
+            "retrieved": 0,
+            "injected": 0,
+            "tokens": 0,
+            "budget_pct": 0.0,
+        }
+        if self._memory_cache is not None:
+            try:
+                self._memory_cache.invalidate()
+            except Exception:
+                pass
         # Fase 12: Fecha stream ativo se houver
         if self._active_stream is not None:
             try:
@@ -580,6 +592,125 @@ class RLMSession:
         except Exception:
             return None
 
+    def _select_memory_chunks(
+        self,
+        query_text: str,
+        *,
+        available_tokens: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        if self._memory is None or not query_text:
+            return [], 0
+
+        cached_chunks: list[dict[str, Any]] = []
+        if self._memory_cache is not None:
+            try:
+                cached_chunks = self._memory_cache.read_sync()
+            except Exception:
+                cached_chunks = []
+
+        if cached_chunks:
+            selected_chunks = cached_chunks
+            tokens_used = sum(
+                max(1, int(len(chunk.get("content", "")) * 0.25))
+                for chunk in selected_chunks
+            )
+            return selected_chunks, tokens_used
+
+        from rlm.core.memory_budget import inject_memory_with_budget
+
+        selected_chunks, tokens_used = inject_memory_with_budget(
+            query=query_text,
+            session_id=self._session_id,
+            memory_manager=self._memory,
+            available_tokens=available_tokens,
+        )
+
+        if selected_chunks and self._memory_cache is not None:
+            try:
+                with self._memory_cache._lock:
+                    self._memory_cache.chunks = list(selected_chunks)
+                    self._memory_cache.last_updated = time.time()
+            except Exception:
+                pass
+
+        return selected_chunks, tokens_used
+
+    def build_memory_block(self, query_text: str, *, available_tokens: int) -> str:
+        self._last_injection_meta = {
+            "retrieved": 0,
+            "injected": 0,
+            "tokens": 0,
+            "budget_pct": 0.0,
+        }
+
+        selected_chunks, tokens_used = self._select_memory_chunks(
+            query_text,
+            available_tokens=available_tokens,
+        )
+        if not selected_chunks:
+            return ""
+
+        from rlm.core.memory_budget import format_memory_block
+
+        mem_block = format_memory_block(selected_chunks)
+        if not mem_block:
+            return ""
+
+        budget_pct = round(tokens_used / max(available_tokens, 1), 4)
+        self._last_injection_meta = {
+            "retrieved": len(selected_chunks),
+            "injected": len(selected_chunks),
+            "tokens": tokens_used,
+            "budget_pct": budget_pct,
+        }
+        return mem_block
+
+    def inject_memory_prompt(
+        self,
+        prompt: Any,
+        query_text: str,
+        *,
+        available_tokens: int = 2500,
+    ) -> Any:
+        mem_block = self.build_memory_block(query_text, available_tokens=available_tokens)
+        if not mem_block:
+            return prompt
+
+        if isinstance(prompt, str):
+            return mem_block + "\n\n" + prompt
+        if isinstance(prompt, list):
+            return [{"role": "system", "content": mem_block}] + list(prompt)
+        return prompt
+
+    def schedule_post_turn_memory(self, user_message: str, assistant_response: str) -> None:
+        if not user_message or not assistant_response:
+            return
+        threading.Thread(
+            target=self._post_turn_async,
+            args=(user_message, assistant_response),
+            daemon=True,
+            name="rlm-memory-post-turn",
+        ).start()
+
+    def _release_memory_runtime(self) -> None:
+        if self._memory_cache is not None:
+            try:
+                from rlm.core.memory_hot_cache import evict_cache
+
+                evict_cache(self._session_id)
+            except Exception:
+                pass
+            self._memory_cache = None
+
+        if self._memory is not None:
+            try:
+                close_fn = getattr(self._memory, "close", None)
+                if callable(close_fn):
+                    close_fn()
+            except Exception:
+                pass
+            self._memory = None
+
     def _build_prompt(self, user_message: str) -> str:
         """
         Monta o prompt completo para o RLM, incluindo:
@@ -596,8 +727,6 @@ class RLMSession:
         parts: list[str] = []
 
         # ── Memórias de longo prazo via budget gate tripartito ───────────────
-        self._last_injection_meta = {"retrieved": 0, "injected": 0, "tokens": 0, "budget_pct": 0.0}
-
         if self._memory is not None:
             try:
                 # Estimativa de tokens disponíveis para o contexto atual
@@ -607,55 +736,12 @@ class RLMSession:
                 user_tokens = estimate_tokens(user_message)
                 # Assume janela de 8k tokens — ajusta baseado no uso atual
                 available_tokens = max(1000, 8000 - summary_tokens - hot_tokens - user_tokens - 200)
-
-                # Tenta cache quente primeiro (síncrono, <1ms)
-                cached_chunks: list = []
-                if self._memory_cache is not None:
-                    try:
-                        cached_chunks = self._memory_cache.read_sync()
-                    except Exception:
-                        pass
-
-                # Se cache vazio (primeiro turno), faz busca direta
-                if not cached_chunks:
-                    from rlm.core.memory_budget import inject_memory_with_budget, format_memory_block, estimate_tokens_from_text
-                    selected_chunks, tokens_used = inject_memory_with_budget(
-                        query=user_message,
-                        session_id=self._session_id,
-                        memory_manager=self._memory,
-                        available_tokens=available_tokens,
-                    )
-                    # Pré-aquece o cache para o próximo turno
-                    if self._memory_cache is not None:
-                        try:
-                            from rlm.core.memory_hot_cache import MemorySessionCache
-                            with self._memory_cache._lock:
-                                self._memory_cache.chunks = selected_chunks
-                                self._memory_cache.last_updated = time.time()
-                        except Exception:
-                            pass
-                else:
-                    # Usa chunks do cache e estima tokens
-                    from rlm.core.memory_budget import format_memory_block, estimate_tokens_from_text
-                    selected_chunks = cached_chunks
-                    tokens_used = sum(
-                        max(1, int(len(c.get("content", "")) * 0.25))
-                        for c in selected_chunks
-                    )
-
-                if selected_chunks:
-                    from rlm.core.memory_budget import format_memory_block
-                    mem_block = format_memory_block(selected_chunks)
-                    if mem_block:
-                        parts.append(mem_block)
-
-                    budget_pct = round(tokens_used / max(available_tokens, 1), 4)
-                    self._last_injection_meta = {
-                        "retrieved": len(selected_chunks),
-                        "injected": len(selected_chunks),
-                        "tokens": tokens_used,
-                        "budget_pct": budget_pct,
-                    }
+                mem_block = self.build_memory_block(
+                    user_message,
+                    available_tokens=available_tokens,
+                )
+                if mem_block:
+                    parts.append(mem_block)
 
             except Exception:
                 # Memória nunca pode travar o prompt — fallback silencioso
@@ -884,25 +970,12 @@ class RLMSession:
             self._active_stream = None
         self._rlm.shutdown_persistent()
         self._rlm.close()
+        self._release_memory_runtime()
 
     def dispose(self) -> None:
         """Fase 10: Unified cleanup — libera RLM, compactor, cache e memória."""
         self._rlm.dispose()
-        # Evicta o hot cache desta sessão do registry global
-        if self._memory_cache is not None:
-            try:
-                from rlm.core.memory_hot_cache import evict_cache
-                evict_cache(self._session_id)
-            except Exception:
-                pass
-            self._memory_cache = None
-        if self._memory is not None:
-            try:
-                if hasattr(self._memory, 'close'):
-                    self._memory.close()
-            except Exception:
-                pass
-            self._memory = None
+        self._release_memory_runtime()
 
     @property
     def _cancel_token(self) -> CancellationToken:

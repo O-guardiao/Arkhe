@@ -66,6 +66,10 @@ def _prepend_memory_block(rlm_session: Any, query_text: str, prompt: Any) -> Any
     if rlm_session is None or not query_text:
         return prompt
     try:
+        inject_prompt = getattr(rlm_session, "inject_memory_prompt", None)
+        if callable(inject_prompt):
+            return inject_prompt(prompt, query_text, available_tokens=2500)
+
         memory = getattr(rlm_session, "_memory", None)
         if memory is None:
             return prompt
@@ -117,6 +121,10 @@ def _fire_post_turn_memory(rlm_session: Any, query_text: str, response_text: str
     Falha silenciosa — nunca propaga exceção nem bloqueia o chamador.
     """
     if rlm_session is None or not query_text or not response_text:
+        return
+    schedule_post_turn = getattr(rlm_session, "schedule_post_turn_memory", None)
+    if callable(schedule_post_turn):
+        schedule_post_turn(query_text, response_text)
         return
     post_turn = getattr(rlm_session, "_post_turn_async", None)
     if not callable(post_turn):
