@@ -17,6 +17,7 @@ o tempo em que o usuário está digitando.
 """
 from __future__ import annotations
 
+import os
 import queue as _queue_mod
 import threading
 import time
@@ -195,6 +196,7 @@ class RLMSession:
         rlm_max_iterations: int = 4,
         memory_db_path: str | None = None,
         session_id: str = "",
+        state_dir: str | None = None,
         **rlm_kwargs: Any,
     ):
         # Lazy import para evitar circular no nível de módulo
@@ -207,6 +209,28 @@ class RLMSession:
             max_iterations=rlm_max_iterations,
             **rlm_kwargs,
         )
+
+        # ── Runtime infrastructure awareness ─────────────────────────────────
+        # Injeta caminhos reais no system prompt para que o agente saiba onde
+        # seus dados persistentes vivem no disco (evita "eu não tenho memória").
+        _effective_state_dir = state_dir or (
+            os.path.dirname(memory_db_path) if memory_db_path else None
+        )
+        _effective_memory_db = memory_db_path or "rlm_memory_v2.db"
+        if _effective_state_dir:
+            infra_block = (
+                "\n\n--- RUNTIME INFRASTRUCTURE ---\n"
+                f"session_id: {session_id or 'anonymous'}\n"
+                f"state_dir: {os.path.abspath(_effective_state_dir)}\n"
+                f"memory_db: {os.path.abspath(_effective_memory_db)}\n"
+                "Your persistent storage lives at state_dir. Files there survive across turns and restarts.\n"
+                "memory_db is a SQLite FTS5 + vector database with your long-term conversational memories.\n"
+                "Use session_memory_search/session_memory_status to query it, or fs_read/fs_ls to inspect the directory.\n"
+                "You also have a GLOBAL Knowledge Base (cross-session). Relevant knowledge is auto-injected into your prompt.\n"
+                "Use kb_search(query) to find persistent knowledge, kb_get_full_context(doc_id) for deep details, kb_status() for stats.\n"
+                "--- END RUNTIME INFRASTRUCTURE ---"
+            )
+            self._rlm.system_prompt = self._rlm.system_prompt.rstrip() + infra_block
         self._state = SessionState()
         self._max_hot_turns = max_hot_turns
         self._compactor = ContextCompactor(
@@ -228,6 +252,22 @@ class RLMSession:
         try:
             from rlm.core.memory_manager import MultiVectorMemory
             self._memory = MultiVectorMemory(db_path=memory_db_path or "rlm_memory_v2.db")
+        except Exception:
+            pass
+
+        # Global Knowledge Base — cross-session persistent memory
+        self._kb: Any = None
+        self._memory_db_path: str = memory_db_path or "rlm_memory_v2.db"
+        try:
+            from rlm.core.knowledge_base import GlobalKnowledgeBase
+            _kb_dir = os.path.join(
+                os.path.dirname(_effective_state_dir), "global"
+            ) if _effective_state_dir else None
+            if _kb_dir:
+                os.makedirs(_kb_dir, exist_ok=True)
+                self._kb = GlobalKnowledgeBase(
+                    db_path=os.path.join(_kb_dir, "knowledge_base.db"),
+                )
         except Exception:
             pass
 
@@ -318,6 +358,11 @@ class RLMSession:
     def memory(self) -> Any:
         """MultiVectorMemory da sessão (pode ser None se init falhou)."""
         return self._memory
+
+    @property
+    def kb(self) -> Any:
+        """GlobalKnowledgeBase cross-session (pode ser None)."""
+        return self._kb
 
     @property
     def session_id(self) -> str:
@@ -773,6 +818,52 @@ class RLMSession:
                 pass
             self._memory = None
 
+    def _consolidate_to_kb(self) -> None:
+        """Consolida nuggets da sessão na Knowledge Base global (síncrono, no close)."""
+        if self._kb is None:
+            return
+        try:
+            from rlm.core.knowledge_consolidator import consolidate_session
+            consolidate_session(
+                memory_db_path=self._memory_db_path,
+                session_id=self._session_id,
+                kb=self._kb,
+            )
+        except Exception:
+            pass  # Consolidação nunca impede o fechamento da sessão
+
+    def _retrieve_from_kb(self, query: str, max_tokens: int = 1200) -> str:
+        """
+        Recuperação progressiva da Knowledge Base cross-session.
+        Retorna bloco formatado com título + sumário dos docs mais relevantes.
+        Contexto completo fica disponível via kb_get_full_context(doc_id).
+        """
+        if self._kb is None:
+            return ""
+        results = self._kb.search_hybrid(query, limit=5)
+        if not results:
+            return ""
+
+        lines = ["[CONHECIMENTO PERSISTENTE — memória cross-session]"]
+        tokens_used = estimate_tokens(lines[0])
+        for doc in results:
+            entry = (
+                f"• {doc['title']} (imp: {doc.get('importance', 0):.2f}, "
+                f"id: {doc['id'][:8]}) — {doc.get('summary', '')}"
+            )
+            entry_tokens = estimate_tokens(entry)
+            if tokens_used + entry_tokens > max_tokens:
+                break
+            lines.append(entry)
+            tokens_used += entry_tokens
+
+        if len(lines) <= 1:
+            return ""
+
+        lines.append("[Para contexto completo: kb_get_full_context(doc_id)]")
+        lines.append("[FIM CONHECIMENTO PERSISTENTE]")
+        return "\n".join(lines)
+
     def _build_prompt(self, user_message: str) -> str:
         """
         Monta o prompt completo para o RLM, incluindo:
@@ -787,6 +878,15 @@ class RLMSession:
           3. Metadados de injeção são salvos em self._last_injection_meta para telemetria
         """
         parts: list[str] = []
+
+        # ── Conhecimento Persistente (cross-session KB) ──────────────────────
+        if self._kb is not None:
+            try:
+                kb_block = self._retrieve_from_kb(user_message)
+                if kb_block:
+                    parts.append(kb_block)
+            except Exception:
+                pass  # KB nunca trava o prompt
 
         # ── Memórias de longo prazo via budget gate tripartito ───────────────
         if self._memory is not None:
@@ -1023,6 +1123,9 @@ class RLMSession:
 
     def close(self) -> None:
         """Fecha a instância RLM interna (chamado por SessionManager.close_session)."""
+        # Consolidação KB — extrai conhecimento da sessão para memória persistente
+        self._consolidate_to_kb()
+
         # Fase 12: Encerra o generator stream ativo antes de fechar o RLM
         if self._active_stream is not None:
             try:

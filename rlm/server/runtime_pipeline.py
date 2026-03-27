@@ -212,6 +212,23 @@ def _apply_repl_injections(
                 "Session memory tools injection failed: %s", _exc
             )
 
+        # Knowledge Base tools — cross-session persistent memory
+        try:
+            from rlm.tools.kb_tools import get_kb_tools
+            _kb_tools = get_kb_tools(_rlm_session)
+            for _name, _fn in _kb_tools.items():
+                repl_locals[_name] = _fn
+            if _kb_tools:
+                import logging as _logging
+                _logging.getLogger("rlm.skill_loader").info(
+                    "KB tools injected → %s", list(_kb_tools.keys())
+                )
+        except Exception as _exc:
+            import logging as _logging
+            _logging.getLogger("rlm.skill_loader").warning(
+                "KB tools injection failed: %s", _exc
+            )
+
     services.skill_loader.activate_all(
         services.eligible_skills,
         repl_locals,

@@ -372,6 +372,7 @@ class SessionManager:
             rlm_max_iterations=rlm_max_iterations,
             memory_db_path=memory_db,
             session_id=session.session_id,
+            state_dir=session.state_dir,
             **raw,
         )
 

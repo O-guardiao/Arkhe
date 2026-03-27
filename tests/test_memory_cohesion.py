@@ -143,6 +143,76 @@ class TestRLMSessionMemoryLifecycle:
             assert session._memory_cache.last_updated == 0.0
 
 
+class TestRuntimeInfrastructureAwareness:
+    """O agente precisa saber onde seus dados persistentes vivem no disco."""
+
+    def test_state_dir_injected_in_system_prompt(self):
+        from rlm.session import RLMSession
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_rlm = MagicMock()
+            fake_rlm.system_prompt = "base prompt"
+            with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+                session = RLMSession(
+                    memory_db_path=f"{tmpdir}/memory.db",
+                    session_id="sess-infra",
+                    state_dir=tmpdir,
+                )
+
+            prompt = session._rlm.system_prompt
+            assert "--- RUNTIME INFRASTRUCTURE ---" in prompt
+            assert "sess-infra" in prompt
+            assert tmpdir.replace("\\", "/") in prompt.replace("\\", "/") or tmpdir in prompt
+            assert "memory.db" in prompt
+            assert "--- END RUNTIME INFRASTRUCTURE ---" in prompt
+
+    def test_state_dir_derived_from_memory_db_path(self):
+        from rlm.session import RLMSession
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/memory.db"
+            fake_rlm = MagicMock()
+            fake_rlm.system_prompt = "base prompt"
+            with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+                session = RLMSession(
+                    memory_db_path=db_path,
+                    session_id="sess-derive",
+                )
+
+            prompt = session._rlm.system_prompt
+            assert "--- RUNTIME INFRASTRUCTURE ---" in prompt
+            assert "sess-derive" in prompt
+
+    def test_no_infra_block_without_state_dir(self):
+        from rlm.session import RLMSession
+
+        fake_rlm = MagicMock()
+        fake_rlm.system_prompt = "base prompt"
+        with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+            session = RLMSession(
+                session_id="sess-no-infra",
+            )
+
+        prompt = session._rlm.system_prompt
+        assert "RUNTIME INFRASTRUCTURE" not in prompt
+
+    def test_infra_block_mentions_tools(self):
+        from rlm.session import RLMSession
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_rlm = MagicMock()
+            fake_rlm.system_prompt = "base prompt"
+            with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+                session = RLMSession(
+                    memory_db_path=f"{tmpdir}/memory.db",
+                    state_dir=tmpdir,
+                )
+
+            prompt = session._rlm.system_prompt
+            assert "session_memory_search" in prompt
+            assert "fs_read" in prompt or "fs_ls" in prompt
+
+
 class TestSupervisorTelemetryDelegation:
     def test_supervisor_uses_session_telemetry_contract(self):
         completion = SimpleNamespace(response="ok", usage_summary=None)
