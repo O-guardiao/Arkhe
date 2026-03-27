@@ -298,6 +298,14 @@ def dispatch_runtime_prompt_sync(
     prompt, plugins_to_load = services.event_router.route(client_id, prepared_payload)
     query_text = _extract_query_text(prompt).strip()
 
+    # Sanitize: lone surrogates (e.g. from terminal locale mismatch) break
+    # JSON serialization in the OpenAI client (ensure_ascii=False path).
+    # Replace them early so every downstream consumer sees clean UTF-8 strings.
+    from rlm.plugins.channel_registry import sanitize_text_payload as _sanitize_input
+    query_text = _sanitize_input(query_text)
+    if isinstance(prompt, str):
+        prompt = _sanitize_input(prompt)
+
     from rlm.core.security import auditor as security_auditor
 
     if query_text:
