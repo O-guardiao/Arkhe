@@ -344,12 +344,14 @@ class SIFFactory:
                 existing = repl_locals.get(var_name)
                 if existing is not entry.factory_fn:
                     if callable(existing):
-                        # A callable is already registered (e.g. injected by MCP
-                        # activation).  The skill is available, just via a different
-                        # pathway — no action needed, log at INFO not WARN.
+                        # MCP or another channel already registered the name.
+                        # Inject individual impl functions as supplements.
                         sif_log.info(
-                            f"SIF: nome '{var_name}' já registrado no REPL (MCP ou outro canal); skill '{entry.name}' SIF ignorada"
+                            f"SIF: nome '{var_name}' já registrado no REPL (MCP ou outro canal); "
+                            f"skill '{entry.name}' SIF principal ignorada"
                         )
+                        _injected_extra = cls._inject_impl_functions(entry, repl_locals, overwrite)
+                        injected.update(_injected_extra)
                     else:
                         sif_log.warn(
                             f"SIF: colisão de nome '{var_name}' no REPL; skill '{entry.name}' ignorada"
@@ -366,6 +368,51 @@ class SIFFactory:
                 sif_log.info(f"SIF Factory: injetou `{var_name}()` no REPL")
 
         return injected
+
+    @classmethod
+    def _inject_impl_functions(
+        cls,
+        entry: SIFEntry,
+        repl_locals: dict,
+        overwrite: bool = False,
+    ) -> dict[str, Callable]:
+        """
+        When the main SIF name collides (e.g. MCP already registered 'filesystem'),
+        extract individually-named functions from the impl block and inject them
+        separately (e.g. fs_read, fs_write, fs_ls).
+        """
+        if not entry.has_impl:
+            return {}
+        try:
+            code = textwrap.dedent(entry.impl)
+            tree = ast.parse(code)
+            fn_names = [
+                node.name for node in ast.walk(tree)
+                if isinstance(node, ast.FunctionDef) and node.name != entry.runtime_name
+            ]
+            if not fn_names:
+                return {}
+            ns: dict[str, Any] = {"__builtins__": _SAFE_BUILTINS}
+            exec(compile(code, f"<sif:{entry.name}:extras>", "exec"), ns, ns)  # noqa: S102
+            extra_injected: dict[str, Callable] = {}
+            for fn_name in fn_names:
+                fn = ns.get(fn_name)
+                if fn is None or not callable(fn):
+                    continue
+                if fn_name in repl_locals and not overwrite:
+                    sif_log.debug(f"SIF extra: '{fn_name}' já existe no REPL, pulando")
+                    continue
+                wrapped = cls._wrap_callable(entry, fn, "impl-extra")
+                repl_locals[fn_name] = wrapped
+                extra_injected[fn_name] = wrapped
+            if extra_injected:
+                sif_log.info(
+                    f"SIF Factory: injetou funções extras de '{entry.name}' → {list(extra_injected.keys())}"
+                )
+            return extra_injected
+        except Exception as exc:
+            sif_log.warn(f"SIF extra inject for '{entry.name}' failed: {exc}")
+            return {}
 
     @classmethod
     def get_stats(cls) -> dict[str, dict[str, Any]]:

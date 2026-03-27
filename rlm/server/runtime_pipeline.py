@@ -198,10 +198,19 @@ def _apply_repl_injections(
     if _rlm_session is not None:
         try:
             from rlm.tools.session_memory_tools import get_session_memory_tools
-            for _name, _fn in get_session_memory_tools(_rlm_session).items():
+            _session_tools = get_session_memory_tools(_rlm_session)
+            for _name, _fn in _session_tools.items():
                 repl_locals[_name] = _fn
-        except Exception:
-            pass
+            if _session_tools:
+                import logging as _logging
+                _logging.getLogger("rlm.skill_loader").info(
+                    "Session memory tools injected → %s", list(_session_tools.keys())
+                )
+        except Exception as _exc:
+            import logging as _logging
+            _logging.getLogger("rlm.skill_loader").warning(
+                "Session memory tools injection failed: %s", _exc
+            )
 
     services.skill_loader.activate_all(
         services.eligible_skills,
