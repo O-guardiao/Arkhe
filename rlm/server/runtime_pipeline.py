@@ -70,10 +70,10 @@ def _prepend_memory_block(rlm_session: Any, query_text: str, prompt: Any) -> Any
         if callable(inject_prompt):
             return inject_prompt(prompt, query_text, available_tokens=2500)
 
-        memory = getattr(rlm_session, "_memory", None)
+        memory = getattr(rlm_session, "memory", None) or getattr(rlm_session, "_memory", None)
         if memory is None:
             return prompt
-        session_id: str = getattr(rlm_session, "_session_id", "")
+        session_id: str = getattr(rlm_session, "session_id", "") or getattr(rlm_session, "_session_id", "")
         memory_cache = getattr(rlm_session, "_memory_cache", None)
 
         cached_chunks: list = []
@@ -192,6 +192,16 @@ def _apply_repl_injections(
     repl_locals["reply"] = reply
     repl_locals["reply_audio"] = reply_audio
     repl_locals["send_media"] = send_media
+
+    # Session memory tools — expose conversational long-term memory to the REPL
+    _rlm_session = getattr(session, "rlm_instance", None)
+    if _rlm_session is not None:
+        try:
+            from rlm.tools.session_memory_tools import get_session_memory_tools
+            for _name, _fn in get_session_memory_tools(_rlm_session).items():
+                repl_locals[_name] = _fn
+        except Exception:
+            pass
 
     services.skill_loader.activate_all(
         services.eligible_skills,

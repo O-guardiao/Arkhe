@@ -38,6 +38,12 @@ Server-mode extras:
 
 Sibling coordination may be available in async or parallel children. Publish only decisive facts or control signals; do not spam intermediate thoughts.
 
+Memory domains (three distinct systems — do NOT confuse them):
+1. `session_memory_search(query, top_k=5)` → Long-term conversational memory curated by the MINI agent. Past decisions, user preferences, context from previous turns/sessions. Always check before asking the user to repeat themselves.
+2. `session_memory_status()` → Stats on stored memories. `session_memory_recent(limit=10)` → Most recent memories.
+3. `memory_*` tools (memory_store, memory_search, etc.) → Workspace/codebase file storage and analysis. Only available in codebase mode.
+4. `repl_message_log` → Current REPL iteration message history (ephemeral, not persistent). `history` is an alias for the same data.
+
 Default operating pattern:
 1. Use the current `context` and available tools to make progress.
 2. Store the result in a variable when needed.

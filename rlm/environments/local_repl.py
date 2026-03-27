@@ -271,7 +271,8 @@ class LocalREPL(NonIsolatedEnv):
 
         if compaction:
             self._compaction_history: list[Any] = []
-            self.locals["history"] = self._compaction_history
+            self.locals["repl_message_log"] = self._compaction_history
+            self.locals["history"] = self._compaction_history  # backward compat alias
 
         # Load context if provided
         if context_payload is not None:
@@ -1875,7 +1876,8 @@ class LocalREPL(NonIsolatedEnv):
         # Store deep copy to avoid reference issues with nested dicts
         self.locals[var_name] = copy.deepcopy(message_history)
 
-        # Alias latest history as 'history' for convenience
+        # Alias latest history as 'repl_message_log' (primary) + 'history' (backward compat)
+        self.locals["repl_message_log"] = self.locals[var_name]
         self.locals["history"] = self.locals[var_name]
 
         self._history_count = max(self._history_count, history_index + 1)
@@ -1937,9 +1939,11 @@ class LocalREPL(NonIsolatedEnv):
             self.locals["context"] = self.locals[latest_ctx]
         latest_hist = f"history_{self._history_count - 1}" if self._history_count > 0 else "history_0"
         if latest_hist in self.locals and not self.compaction:
-            self.locals["history"] = self.locals[latest_hist]
+            self.locals["repl_message_log"] = self.locals[latest_hist]
+            self.locals["history"] = self.locals[latest_hist]  # backward compat
         elif self.compaction and hasattr(self, "_compaction_history"):
-            self.locals["history"] = self._compaction_history
+            self.locals["repl_message_log"] = self._compaction_history
+            self.locals["history"] = self._compaction_history  # backward compat
 
     def execute_code(self, code: str) -> REPLResult:
         """Execute code in the persistent namespace and return result."""

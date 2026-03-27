@@ -314,6 +314,21 @@ class RLMSession:
         """Retorna o resumo compactado do histórico antigo, se houver."""
         return self._state.compacted_summary
 
+    @property
+    def memory(self) -> Any:
+        """MultiVectorMemory da sessão (pode ser None se init falhou)."""
+        return self._memory
+
+    @property
+    def session_id(self) -> str:
+        """ID único desta sessão."""
+        return self._session_id
+
+    @property
+    def telemetry(self) -> Any:
+        """TurnTelemetryStore desta sessão (pode ser None)."""
+        return self._telemetry
+
     def reset(self) -> None:
         """Zera histórico e resumo. Mantém o RLM persistente ativo."""
         self._state = SessionState()
