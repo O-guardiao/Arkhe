@@ -26,6 +26,7 @@ from rlm.core.memory_manager import MultiVectorMemory
 _RAW_LAYER_PREFIX = "raw::"
 _KNOWLEDGE_LAYER_PREFIX = "kg::"
 
+
 @dataclass
 class KnowledgeEntry:
     """A node in the Knowledge Graph (Layer 2)."""
@@ -33,7 +34,7 @@ class KnowledgeEntry:
     analysis: str
     source_ref: str | None = None
     line_range: tuple[int, int] | None = None
-    links: list[dict[str, str]] = None  # [{"relation": "depends_on", "target": "utils"}]
+    links: list[dict[str, str]] | None = None  # [{"relation": "depends_on", "target": "utils"}]
     timestamp: str = ""
 
     def __post_init__(self):
@@ -56,10 +57,11 @@ class KnowledgeEntry:
 class RLMMemory:
     """
     SQLite-based persistent memory system for code analysis and context retention.
-    Acts as a wrapper over MultiVectorMemory to preserve the REPL tooling interface.
+    Acts as a workspace-scoped wrapper over MultiVectorMemory to preserve the
+    REPL tooling interface without conflating it with RLMSession conversational memory.
     """
 
-    def __init__(self, memory_dir: str, enable_embeddings: bool = True):
+    def __init__(self, memory_dir: str, enable_embeddings: bool = True, *, scope_name: str | None = None):
         self.base_dir = os.path.abspath(memory_dir)
         os.makedirs(self.base_dir, exist_ok=True)
         
@@ -70,8 +72,21 @@ class RLMMemory:
         # Initialize the underlying hybrid engine
         self.db = MultiVectorMemory(db_path=db_path)
         
-        # Legacy index for fast lookups without querying db every time
-        self.session_id = "default_repl"
+        self.scope_kind = "workspace"
+        self.scope_name = self._normalize_scope_name(scope_name or self._default_scope_name())
+        self.scope_id = f"{self.scope_kind}::{self.scope_name}"
+        self.session_id = self.scope_id
+
+    def _default_scope_name(self) -> str:
+        if os.path.basename(self.base_dir) == ".rlm_memory":
+            parent = os.path.dirname(self.base_dir)
+            return os.path.basename(parent) or "workspace"
+        return os.path.basename(self.base_dir) or "workspace"
+
+    @staticmethod
+    def _normalize_scope_name(scope_name: str) -> str:
+        cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in scope_name.strip())
+        return cleaned or "workspace"
 
     def _raw_memory_id(self, key: str) -> str:
         return f"{_RAW_LAYER_PREFIX}{key}"
@@ -278,8 +293,12 @@ class RLMMemory:
             # Create a placeholder if it doesn't exist
             self.analyze(from_key, f"Auto-created to link to {to_key}")
             entry_dict = self.get_knowledge(from_key)
+        if not entry_dict:
+            return f"Error: could not create knowledge node for {from_key}"
             
         entry = KnowledgeEntry.from_dict(entry_dict)
+        if entry.links is None:
+            entry.links = []
         
         # Check if link already exists
         for link in entry.links:
@@ -370,6 +389,7 @@ class RLMMemory:
             
         return (
             f"🧠 RLM Memory Status (V2 MultiVector)\n"
+            f"Scope: {self.scope_id}\n"
             f"Location: {self.db.db_path}\n"
             f"Total Nodes: {count} entries ({db_size:.2f} MB)\n"
             f"Engine: SQLite FTS5 + Python RRF Vectors"

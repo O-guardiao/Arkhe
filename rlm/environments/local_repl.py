@@ -1765,7 +1765,7 @@ class LocalREPL(NonIsolatedEnv):
             self._memory = self._parent_memory
         else:
             memory_dir = os.path.join(codebase_path, ".rlm_memory")
-            self._memory = RLMMemory(memory_dir)
+            self._memory = RLMMemory(memory_dir, scope_name=os.path.basename(os.path.abspath(codebase_path)))
 
         # Inject sandboxed codebase tools into globals
         tools = get_codebase_tools(codebase_path)
@@ -2169,7 +2169,7 @@ class LocalREPL(NonIsolatedEnv):
 
             # Re-initialize memory
             memory_dir = os.path.join(codebase_path, ".rlm_memory")
-            self._memory = RLMMemory(memory_dir)
+            self._memory = RLMMemory(memory_dir, scope_name=os.path.basename(os.path.abspath(codebase_path)))
             memory_tools = get_memory_tools(self._memory, codebase_path, llm_query_batched_fn=self._llm_query_batched)
             for name, func in memory_tools.items():
                 self.globals[name] = func

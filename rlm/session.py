@@ -253,12 +253,8 @@ class RLMSession:
 
         # Fase 12: Stream ativo (completion_stream generator) — sobrevive entre turnos
         self._active_stream: Any = None
-        self._last_injection_meta = {
-            "retrieved": 0,
-            "injected": 0,
-            "tokens": 0,
-            "budget_pct": 0.0,
-        }
+        self._last_injection_meta = self._empty_injection_meta()
+        self._memory_injection_pending = False
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API
@@ -274,12 +270,7 @@ class RLMSession:
         Telemetria de tokens/latência/memória é registrada em JSONL.
         """
         # ── 1. Telemetria: marca início do turno ────────────────────────────
-        tel = None
-        if self._telemetry is not None:
-            try:
-                tel = self._telemetry.start_turn()
-            except Exception:
-                pass
+        tel = self.start_turn_telemetry(user_message)
 
         t_start = time.perf_counter()
         self._record_recursive_message("user", user_message, metadata={"source": "chat"})
@@ -304,21 +295,7 @@ class RLMSession:
         self._state.total_turns += 1
 
         # ── 4. Finaliza telemetria ───────────────────────────────────────────
-        if tel is not None and self._telemetry is not None:
-            try:
-                # Recupera metadados de memória injetada do prompt (armazenados em cache)
-                _injected = getattr(self, "_last_injection_meta", {})
-                self._telemetry.finish_turn(
-                    tel,
-                    completion=completion,
-                    memory_chunks_retrieved=_injected.get("retrieved", 0),
-                    memory_chunks_injected=_injected.get("injected", 0),
-                    memory_tokens_injected=_injected.get("tokens", 0),
-                    memory_budget_used_pct=_injected.get("budget_pct", 0.0),
-                    compaction_triggered=False,  # atualizado após compaction abaixo
-                )
-            except Exception:
-                pass
+        self.finish_turn_telemetry(tel, completion=completion, compaction_triggered=False)
 
         # ── 5. Background: salva turno na memória + atualiza cache ───────────
         self.schedule_post_turn_memory(user_message, response)
@@ -340,12 +317,8 @@ class RLMSession:
     def reset(self) -> None:
         """Zera histórico e resumo. Mantém o RLM persistente ativo."""
         self._state = SessionState()
-        self._last_injection_meta = {
-            "retrieved": 0,
-            "injected": 0,
-            "tokens": 0,
-            "budget_pct": 0.0,
-        }
+        self._last_injection_meta = self._empty_injection_meta()
+        self._memory_injection_pending = False
         if self._memory_cache is not None:
             try:
                 self._memory_cache.invalidate()
@@ -592,6 +565,82 @@ class RLMSession:
         except Exception:
             return None
 
+    @staticmethod
+    def _empty_injection_meta() -> dict[str, Any]:
+        return {
+            "query": None,
+            "retrieved": 0,
+            "injected": 0,
+            "tokens": 0,
+            "budget_pct": 0.0,
+        }
+
+    def _stage_memory_injection_meta(
+        self,
+        *,
+        query_text: str | None,
+        retrieved: int = 0,
+        injected: int = 0,
+        tokens: int = 0,
+        budget_pct: float = 0.0,
+    ) -> None:
+        self._last_injection_meta = {
+            "query": query_text,
+            "retrieved": retrieved,
+            "injected": injected,
+            "tokens": tokens,
+            "budget_pct": budget_pct,
+        }
+        self._memory_injection_pending = True
+
+    def _consume_memory_injection_meta(self) -> dict[str, Any]:
+        if not self._memory_injection_pending:
+            return self._empty_injection_meta()
+
+        injected = dict(self._last_injection_meta)
+        self._last_injection_meta = self._empty_injection_meta()
+        self._memory_injection_pending = False
+        return injected
+
+    def start_turn_telemetry(self, query_text: str | None = None) -> Any | None:
+        if query_text is not None:
+            pending_query = self._last_injection_meta.get("query")
+            if pending_query != query_text:
+                self._last_injection_meta = self._empty_injection_meta()
+                self._memory_injection_pending = False
+
+        if self._telemetry is None:
+            return None
+        try:
+            return self._telemetry.start_turn()
+        except Exception:
+            return None
+
+    def finish_turn_telemetry(
+        self,
+        tel: Any | None,
+        *,
+        completion: Any | None = None,
+        compaction_triggered: bool = False,
+    ) -> None:
+        if tel is None or self._telemetry is None:
+            self._consume_memory_injection_meta()
+            return
+
+        try:
+            injected = self._consume_memory_injection_meta()
+            self._telemetry.finish_turn(
+                tel,
+                completion=completion,
+                memory_chunks_retrieved=injected.get("retrieved", 0),
+                memory_chunks_injected=injected.get("injected", 0),
+                memory_tokens_injected=injected.get("tokens", 0),
+                memory_budget_used_pct=injected.get("budget_pct", 0.0),
+                compaction_triggered=compaction_triggered,
+            )
+        except Exception:
+            pass
+
     def _select_memory_chunks(
         self,
         query_text: str,
@@ -636,12 +685,7 @@ class RLMSession:
         return selected_chunks, tokens_used
 
     def build_memory_block(self, query_text: str, *, available_tokens: int) -> str:
-        self._last_injection_meta = {
-            "retrieved": 0,
-            "injected": 0,
-            "tokens": 0,
-            "budget_pct": 0.0,
-        }
+        self._stage_memory_injection_meta(query_text=query_text)
 
         selected_chunks, tokens_used = self._select_memory_chunks(
             query_text,
@@ -657,12 +701,13 @@ class RLMSession:
             return ""
 
         budget_pct = round(tokens_used / max(available_tokens, 1), 4)
-        self._last_injection_meta = {
-            "retrieved": len(selected_chunks),
-            "injected": len(selected_chunks),
-            "tokens": tokens_used,
-            "budget_pct": budget_pct,
-        }
+        self._stage_memory_injection_meta(
+            query_text=query_text,
+            retrieved=len(selected_chunks),
+            injected=len(selected_chunks),
+            tokens=tokens_used,
+            budget_pct=budget_pct,
+        )
         return mem_block
 
     def inject_memory_prompt(
@@ -693,6 +738,8 @@ class RLMSession:
         ).start()
 
     def _release_memory_runtime(self) -> None:
+        self._last_injection_meta = self._empty_injection_meta()
+        self._memory_injection_pending = False
         if self._memory_cache is not None:
             try:
                 from rlm.core.memory_hot_cache import evict_cache

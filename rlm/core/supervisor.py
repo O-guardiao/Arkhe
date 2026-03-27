@@ -143,6 +143,18 @@ class RLMSupervisor:
         session.status = "running"
         start_time = time.perf_counter()
         result = ExecutionResult(session_id=session.session_id, status="running")
+        rlm_result = None
+        telemetry_turn = None
+
+        start_turn_telemetry = getattr(session.rlm_instance, "start_turn_telemetry", None)
+        if callable(start_turn_telemetry):
+            try:
+                query_hint = root_prompt if isinstance(root_prompt, str) and root_prompt else None
+                if query_hint is None and isinstance(prompt, str):
+                    query_hint = prompt
+                telemetry_turn = start_turn_telemetry(query_hint)
+            except Exception:
+                telemetry_turn = None
 
         # Setup timeout timer
         timeout_timer = threading.Timer(cfg.max_execution_time, self._on_timeout, 
@@ -225,6 +237,17 @@ class RLMSupervisor:
 
             if on_complete:
                 on_complete(result)
+
+            finish_turn_telemetry = getattr(session.rlm_instance, "finish_turn_telemetry", None)
+            if callable(finish_turn_telemetry):
+                try:
+                    finish_turn_telemetry(
+                        telemetry_turn,
+                        completion=rlm_result,
+                        compaction_triggered=False,
+                    )
+                except Exception:
+                    pass
 
         return result
 

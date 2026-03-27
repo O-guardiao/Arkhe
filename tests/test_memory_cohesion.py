@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from rlm.core.supervisor import RLMSupervisor
 from rlm.server.runtime_pipeline import _fire_post_turn_memory, _prepend_memory_block
 from rlm.tools.memory import RLMMemory
 
@@ -46,6 +48,14 @@ class TestRLMMemoryLayerIsolation:
             results = mem.search("specification")
             assert results
             assert all(result["key"] == "docs/spec.md" for result in results)
+
+    def test_workspace_scope_is_explicit(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mem = RLMMemory(memory_dir=tmpdir, enable_embeddings=False, scope_name="repo-main")
+
+            assert mem.scope_kind == "workspace"
+            assert mem.session_id == "workspace::repo-main"
+            assert "Scope: workspace::repo-main" in mem.status()
 
 
 class TestRuntimePipelineMemoryDelegation:
@@ -100,3 +110,31 @@ class TestRLMSessionMemoryLifecycle:
 
             assert session._memory_cache.read_sync() == []
             assert session._memory_cache.last_updated == 0.0
+
+
+class TestSupervisorTelemetryDelegation:
+    def test_supervisor_uses_session_telemetry_contract(self):
+        completion = SimpleNamespace(response="ok", usage_summary=None)
+        rlm_session = MagicMock()
+        rlm_session.max_iterations = 4
+        rlm_session.completion.return_value = completion
+        rlm_session.start_turn_telemetry.return_value = "turn-1"
+
+        session = SimpleNamespace(
+            session_id="sess-telemetry",
+            status="idle",
+            total_tokens_used=0,
+            total_completions=0,
+            last_error="",
+            rlm_instance=rlm_session,
+        )
+
+        result = RLMSupervisor().execute(session, "hello", root_prompt="hello")
+
+        assert result.status == "completed"
+        rlm_session.start_turn_telemetry.assert_called_once_with("hello")
+        rlm_session.finish_turn_telemetry.assert_called_once_with(
+            "turn-1",
+            completion=completion,
+            compaction_triggered=False,
+        )
