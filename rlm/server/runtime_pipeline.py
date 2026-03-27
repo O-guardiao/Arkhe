@@ -38,6 +38,97 @@ class RuntimeDispatchRejected(RuntimeError):
         self.payload = payload or {"error": detail}
 
 
+# ---------------------------------------------------------------------------
+# Memory bridge — conecta o pipeline de memória de RLMSession.chat()
+# aos canais de servidor (webchat, telegram, slack, discord, whatsapp, API).
+#
+# O Supervisor chama session.rlm_instance.completion() diretamente,
+# contornando RLMSession.chat() e portanto o budget gate + mini agent.
+# Estas duas funções restauram esse comportamento sem alterar a arquitetura
+# do Supervisor nem das gateways de canal.
+# ---------------------------------------------------------------------------
+
+import threading as _threading
+
+
+def _prepend_memory_block(rlm_session: Any, query_text: str, prompt: Any) -> Any:
+    """
+    Injeta memórias relevantes de longo prazo no prompt via budget gate tripartito.
+
+    Tenta ler do hot cache primeiro (síncrono, <1 ms). Se o cache estiver
+    vazio (primeiro turno da sessão), executa busca direta via
+    ``inject_memory_with_budget``.  Falha silenciosa — nunca trava o prompt.
+
+    Returns:
+        Prompt enriquecido com bloco de memória, ou o prompt original se não
+        houver memórias relevantes ou se qualquer etapa falhar.
+    """
+    if rlm_session is None or not query_text:
+        return prompt
+    try:
+        memory = getattr(rlm_session, "_memory", None)
+        if memory is None:
+            return prompt
+        session_id: str = getattr(rlm_session, "_session_id", "")
+        memory_cache = getattr(rlm_session, "_memory_cache", None)
+
+        cached_chunks: list = []
+        if memory_cache is not None:
+            try:
+                cached_chunks = memory_cache.read_sync()
+            except Exception:
+                pass
+
+        if cached_chunks:
+            selected_chunks = cached_chunks
+        else:
+            from rlm.core.memory_budget import inject_memory_with_budget
+            selected_chunks, _ = inject_memory_with_budget(
+                query=query_text,
+                session_id=session_id,
+                memory_manager=memory,
+                available_tokens=2500,
+            )
+
+        if not selected_chunks:
+            return prompt
+
+        from rlm.core.memory_budget import format_memory_block
+        mem_block = format_memory_block(selected_chunks)
+        if not mem_block:
+            return prompt
+
+        if isinstance(prompt, str):
+            return mem_block + "\n\n" + prompt
+        if isinstance(prompt, list):
+            # Chat-format: insere como mensagem de sistema no início
+            return [{"role": "system", "content": mem_block}] + list(prompt)
+        return prompt
+    except Exception:
+        return prompt
+
+
+def _fire_post_turn_memory(rlm_session: Any, query_text: str, response_text: str) -> None:
+    """
+    Dispara o mini agent de memória em daemon thread após o turno.
+
+    Extrai nuggets memorizáveis, avalia importância, persiste no
+    MultiVectorMemory e agenda atualização do hot cache para o próximo turno.
+    Falha silenciosa — nunca propaga exceção nem bloqueia o chamador.
+    """
+    if rlm_session is None or not query_text or not response_text:
+        return
+    post_turn = getattr(rlm_session, "_post_turn_async", None)
+    if not callable(post_turn):
+        return
+    _threading.Thread(
+        target=post_turn,
+        args=(query_text, response_text),
+        daemon=True,
+        name="rlm-memory-post-turn-chan",
+    ).start()
+
+
 def _extract_query_text(prompt: str | list[dict[str, Any]] | dict[str, Any]) -> str:
     if isinstance(prompt, str):
         return prompt
@@ -298,6 +389,16 @@ def dispatch_runtime_prompt_sync(
         dynamic_skill_context=dynamic_skill_context,
     )
 
+    # --- Memory bridge: injeta memórias de longo prazo no prompt -----------
+    # Ativa o budget gate tripartito para TODOS os canais (webchat, telegram,
+    # slack, discord, whatsapp, REST API, TUI) sem alterar o Supervisor nem
+    # as gateways de canal. RLMSession.chat() faz isso internamente; aqui
+    # replicamos apenas a injeção, mantendo o Supervisor intacto.
+    _rlm_session = getattr(session_obj, "rlm_instance", None)
+    if query_text:
+        prompt = _prepend_memory_block(_rlm_session, query_text, prompt)
+    # -----------------------------------------------------------------------
+
     if record_conversation and query_text:
         _record_recursive_message(session_obj, "user", query_text, origin=source_name)
 
@@ -374,6 +475,13 @@ def dispatch_runtime_prompt_sync(
                     "retried": role_outcome.retried,
                 },
             )
+
+    # --- Memory bridge: persiste nuggets do turno em background ------------
+    # Roda após role_orchestrator para capturar a resposta final (pode ter
+    # sido modificada por handoff/escalation). Daemon thread — nunca bloqueia.
+    if result.status == "completed" and query_text and result.response:
+        _fire_post_turn_memory(_rlm_session, query_text, result.response)
+    # -----------------------------------------------------------------------
 
     services.session_manager.update_session(session_obj)
     services.session_manager.log_event(
