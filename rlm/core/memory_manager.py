@@ -104,7 +104,9 @@ class MultiVectorMemory:
                     content TEXT,
                     metadata TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    embedding TEXT
+                    embedding TEXT,
+                    importance_score REAL DEFAULT 0.5,
+                    is_deprecated INTEGER DEFAULT 0
                 )
             ''')
             # Full Text Search virtual table
@@ -115,7 +117,44 @@ class MultiVectorMemory:
                     tokenize="porter"
                 )
             ''')
+            # Grafo de relações entre chunks (construído pelo mini agent)
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS memory_edges (
+                    id TEXT PRIMARY KEY,
+                    from_id TEXT NOT NULL,
+                    to_id TEXT NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    confidence REAL DEFAULT 1.0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (from_id) REFERENCES memory_chunks(id),
+                    FOREIGN KEY (to_id) REFERENCES memory_chunks(id)
+                )
+            ''')
+            conn.execute(
+                'CREATE INDEX IF NOT EXISTS idx_edges_from ON memory_edges(from_id)'
+            )
+            conn.execute(
+                'CREATE INDEX IF NOT EXISTS idx_edges_to ON memory_edges(to_id)'
+            )
             conn.commit()
+            # Migração segura: adiciona colunas em DBs criados antes desta versão
+            self._migrate_db(conn)
+
+    def _migrate_db(self, conn: sqlite3.Connection) -> None:
+        """
+        Adiciona colunas opcionais ausentes em bancos criados antes desta versão.
+        Usa try/except por coluna — ignora OperationalError se a coluna já existe.
+        """
+        migrations = [
+            "ALTER TABLE memory_chunks ADD COLUMN importance_score REAL DEFAULT 0.5",
+            "ALTER TABLE memory_chunks ADD COLUMN is_deprecated INTEGER DEFAULT 0",
+        ]
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # coluna já existe — ignorar é o comportamento correto
 
     def get_embedding(self, text: str) -> List[float]:
         try:
@@ -130,32 +169,121 @@ class MultiVectorMemory:
             mem_log.error(f"Failed to generate embedding: {e}")
             return []
 
-    def add_memory(self, session_id: str, content: str, metadata: dict = None, memory_id: str = None) -> str:
-        """Adds a new memory fragment, generating its embedding and FTS index."""
+    def add_memory(
+        self,
+        session_id: str,
+        content: str,
+        metadata: Optional[dict] = None,
+        memory_id: Optional[str] = None,
+        importance_score: float = 0.5,
+    ) -> str:
+        """
+        Adds a new memory fragment, generating its embedding and FTS index.
+
+        Args:
+            session_id: Identificador da sessão que originou esta memória.
+            content: Texto do fragmento de memória.
+            metadata: Metadados opcionais (dict serializável em JSON).
+            memory_id: ID explícito. Se None, um UUID é gerado.
+            importance_score: Score de importância 0.0–1.0 (padrão 0.5).
+                              Idealmente atribuído pelo memory_mini_agent.
+        """
         if not memory_id:
             memory_id = str(uuid.uuid4())
         meta_str = json.dumps(metadata) if metadata else "{}"
-        
+
+        # Garante que importance_score esteja dentro do intervalo válido
+        importance_score = max(0.0, min(1.0, float(importance_score)))
+
         embedding = self.get_embedding(content)
         embedding_str = json.dumps(embedding) if embedding else "[]"
-        
+
         with sqlite3.connect(self.db_path) as conn:
             conn.execute('''
-                INSERT OR REPLACE INTO memory_chunks (id, session_id, content, metadata, embedding)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (memory_id, session_id, content, meta_str, embedding_str))
-            
+                INSERT OR REPLACE INTO memory_chunks
+                    (id, session_id, content, metadata, embedding, importance_score, is_deprecated)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
+            ''', (memory_id, session_id, content, meta_str, embedding_str, importance_score))
+
             conn.execute('DELETE FROM memory_fts WHERE id = ?', (memory_id,))
-            
+
             conn.execute('''
                 INSERT INTO memory_fts (id, content)
                 VALUES (?, ?)
             ''', (memory_id, content))
-            
+
             conn.commit()
-            
-        mem_log.debug(f"Added memory chunk {memory_id} for session {session_id}")
+
+        mem_log.debug(f"Added memory chunk {memory_id} (importance={importance_score:.2f}) for session {session_id}")
         return memory_id
+
+    def update_importance(self, memory_id: str, importance_score: float) -> None:
+        """
+        Atualiza o score de importância de um chunk existente.
+
+        Args:
+            memory_id: ID do chunk a atualizar.
+            importance_score: Novo score (0.0–1.0).
+        """
+        importance_score = max(0.0, min(1.0, float(importance_score)))
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE memory_chunks SET importance_score = ? WHERE id = ?",
+                (importance_score, memory_id),
+            )
+            conn.commit()
+
+    def deprecate(self, memory_id: str) -> None:
+        """
+        Marca um chunk como depreciado (is_deprecated = 1).
+
+        Chunks depreciados são excluídos das buscas mas não deletados fisicamente,
+        preservando o histórico do grafo de memória.
+
+        Args:
+            memory_id: ID do chunk a depreciar.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE memory_chunks SET is_deprecated = 1 WHERE id = ?",
+                (memory_id,),
+            )
+            conn.commit()
+        mem_log.debug(f"Deprecated memory chunk {memory_id}")
+
+    def add_edge(
+        self,
+        from_id: str,
+        to_id: str,
+        edge_type: str,
+        confidence: float = 1.0,
+    ) -> str:
+        """
+        Adiciona uma aresta tipada ao grafo de memória.
+
+        Args:
+            from_id: ID do chunk de origem (geralmente o chunk existente).
+            to_id: ID do chunk de destino (geralmente o chunk novo).
+            edge_type: Tipo da relação — um de: "contradicts", "extends",
+                       "updates", "causes", "fixes".
+            confidence: Confiança da aresta (0.0–1.0).
+
+        Returns:
+            ID da aresta criada.
+        """
+        edge_id = str(uuid.uuid4())
+        confidence = max(0.0, min(1.0, float(confidence)))
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                '''
+                INSERT OR IGNORE INTO memory_edges (id, from_id, to_id, edge_type, confidence)
+                VALUES (?, ?, ?, ?, ?)
+                ''',
+                (edge_id, from_id, to_id, edge_type, confidence),
+            )
+            conn.commit()
+        mem_log.debug(f"Added edge {from_id} --[{edge_type}]--> {to_id}")
+        return edge_id
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a memory directly by its ID."""
@@ -218,10 +346,10 @@ class MultiVectorMemory:
                 fts_ranks[row['id']] = idx + 1
                 
             # 2. Vector Search (Python side filtering based on session constraint)
-            sql_vec = "SELECT id, content, metadata, embedding, session_id, timestamp FROM memory_chunks"
+            sql_vec = "SELECT id, content, metadata, embedding, session_id, timestamp, importance_score FROM memory_chunks WHERE is_deprecated = 0"
             params = []
             if session_id:
-                sql_vec += " WHERE session_id = ?"
+                sql_vec += " AND session_id = ?"
                 params.append(session_id)
                 
             all_chunks = conn.execute(sql_vec, params).fetchall()
@@ -287,7 +415,8 @@ class MultiVectorMemory:
                     "metadata": json.loads(row["metadata"]),
                     "session_id": row["session_id"],
                     "timestamp": row["timestamp"],
-                    "hybrid_score": round(score, 4)
+                    "hybrid_score": round(score, 4),
+                    "importance_score": round(float(row["importance_score"] or 0.5), 4),
                 })
                 
         return final_results

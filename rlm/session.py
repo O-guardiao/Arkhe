@@ -29,6 +29,9 @@ from rlm.core.types import ClientBackend
 from rlm.core.control_flow import ReentrancyBarrier
 from rlm.core.cancellation import CancellationToken
 
+# Pipeline de memória expandido (importação lazy nas classes para evitar circular)
+# TurnTelemetryStore, MemorySessionCache, inject_memory_with_budget
+
 
 @dataclass
 class SessionTurn:
@@ -228,6 +231,26 @@ class RLMSession:
         except Exception:
             pass
 
+        # Telemetria de turno — rastreia tokens, latência, memória injetada
+        self._telemetry: Any = None
+        try:
+            from rlm.core.turn_telemetry import TurnTelemetryStore
+            _model_name = (backend_kwargs or {}).get("model_name", backend)
+            self._telemetry = TurnTelemetryStore(
+                session_id=self._session_id,
+                model_name=str(_model_name),
+            )
+        except Exception:
+            pass
+
+        # Cache quente de memória — leitura síncrona <1ms, atualização em background
+        self._memory_cache: Any = None
+        try:
+            from rlm.core.memory_hot_cache import get_or_create_cache
+            self._memory_cache = get_or_create_cache(self._session_id)
+        except Exception:
+            pass
+
         # Fase 12: Stream ativo (completion_stream generator) — sobrevive entre turnos
         self._active_stream: Any = None
 
@@ -240,15 +263,25 @@ class RLMSession:
         Envia uma mensagem ao RLM e recebe a resposta.
 
         O contexto de turnos anteriores é injetado automaticamente.
+        Memórias relevantes de longo prazo são injetadas via budget gate tripartito.
         Compactação de turnos antigos roda em background após cada turno.
+        Telemetria de tokens/latência/memória é registrada em JSONL.
         """
+        # ── 1. Telemetria: marca início do turno ────────────────────────────
+        tel = None
+        if self._telemetry is not None:
+            try:
+                tel = self._telemetry.start_turn()
+            except Exception:
+                pass
+
         t_start = time.perf_counter()
         self._record_recursive_message("user", user_message, metadata={"source": "chat"})
 
-        # Monta prompt com contexto da sessão
+        # ── 2. Monta prompt com memória injetada via budget gate ─────────────
         prompt = self._build_prompt(user_message)
 
-        # Chama o RLM
+        # ── 3. Executa o RLM ─────────────────────────────────────────────────
         completion = self._rlm.completion(prompt)
         response = completion.response
 
@@ -264,7 +297,32 @@ class RLMSession:
         self._state.turns.append(SessionTurn(user_message, response, elapsed))
         self._state.total_turns += 1
 
-        # Dispara compactação em background se necessário
+        # ── 4. Finaliza telemetria ───────────────────────────────────────────
+        if tel is not None and self._telemetry is not None:
+            try:
+                # Recupera metadados de memória injetada do prompt (armazenados em cache)
+                _injected = getattr(self, "_last_injection_meta", {})
+                self._telemetry.finish_turn(
+                    tel,
+                    completion=completion,
+                    memory_chunks_retrieved=_injected.get("retrieved", 0),
+                    memory_chunks_injected=_injected.get("injected", 0),
+                    memory_tokens_injected=_injected.get("tokens", 0),
+                    memory_budget_used_pct=_injected.get("budget_pct", 0.0),
+                    compaction_triggered=False,  # atualizado após compaction abaixo
+                )
+            except Exception:
+                pass
+
+        # ── 5. Background: salva turno na memória + atualiza cache ───────────
+        threading.Thread(
+            target=self._post_turn_async,
+            args=(user_message, response),
+            daemon=True,
+            name="rlm-memory-post-turn",
+        ).start()
+
+        # ── 6. Dispara compactação em background se necessário ───────────────
         self._compact_background_if_needed()
 
         return response
@@ -525,26 +583,85 @@ class RLMSession:
     def _build_prompt(self, user_message: str) -> str:
         """
         Monta o prompt completo para o RLM, incluindo:
-          - Memórias relevantes de longo prazo (se disponível)
+          - Memórias relevantes de longo prazo via budget gate tripartito
           - Resumo de turnos compactados (se houver)
           - Últimos max_hot_turns turnos completos (fast lane)
           - Mensagem atual do usuário
+
+        Estratégia de memória:
+          1. Tenta ler do hot cache (síncrono, <1ms) — chunks do turno anterior
+          2. Se cache vazio (primeiro turno), faz busca direta via inject_memory_with_budget
+          3. Metadados de injeção são salvos em self._last_injection_meta para telemetria
         """
         parts: list[str] = []
 
-        # Memórias de longo prazo — recupera chunks relevantes antes do contexto quente
+        # ── Memórias de longo prazo via budget gate tripartito ───────────────
+        self._last_injection_meta = {"retrieved": 0, "injected": 0, "tokens": 0, "budget_pct": 0.0}
+
         if self._memory is not None:
             try:
-                relevant = self._memory.search_hybrid(
-                    user_message, limit=3, session_id=self._session_id
-                )
-                if relevant:
-                    mem_lines = "\n".join(f"  - {m['content'][:300]}" for m in relevant)
-                    parts.append(f"[MEMÓRIAS DE LONGO PRAZO]\n{mem_lines}\n[FIM]")
+                # Estimativa de tokens disponíveis para o contexto atual
+                hot_text = " ".join(f"{t.user} {t.assistant}" for t in self._state.turns[-self._max_hot_turns:])
+                summary_tokens = estimate_tokens(self._state.compacted_summary)
+                hot_tokens = estimate_tokens(hot_text)
+                user_tokens = estimate_tokens(user_message)
+                # Assume janela de 8k tokens — ajusta baseado no uso atual
+                available_tokens = max(1000, 8000 - summary_tokens - hot_tokens - user_tokens - 200)
+
+                # Tenta cache quente primeiro (síncrono, <1ms)
+                cached_chunks: list = []
+                if self._memory_cache is not None:
+                    try:
+                        cached_chunks = self._memory_cache.read_sync()
+                    except Exception:
+                        pass
+
+                # Se cache vazio (primeiro turno), faz busca direta
+                if not cached_chunks:
+                    from rlm.core.memory_budget import inject_memory_with_budget, format_memory_block, estimate_tokens_from_text
+                    selected_chunks, tokens_used = inject_memory_with_budget(
+                        query=user_message,
+                        session_id=self._session_id,
+                        memory_manager=self._memory,
+                        available_tokens=available_tokens,
+                    )
+                    # Pré-aquece o cache para o próximo turno
+                    if self._memory_cache is not None:
+                        try:
+                            from rlm.core.memory_hot_cache import MemorySessionCache
+                            with self._memory_cache._lock:
+                                self._memory_cache.chunks = selected_chunks
+                                self._memory_cache.last_updated = time.time()
+                        except Exception:
+                            pass
+                else:
+                    # Usa chunks do cache e estima tokens
+                    from rlm.core.memory_budget import format_memory_block, estimate_tokens_from_text
+                    selected_chunks = cached_chunks
+                    tokens_used = sum(
+                        max(1, int(len(c.get("content", "")) * 0.25))
+                        for c in selected_chunks
+                    )
+
+                if selected_chunks:
+                    from rlm.core.memory_budget import format_memory_block
+                    mem_block = format_memory_block(selected_chunks)
+                    if mem_block:
+                        parts.append(mem_block)
+
+                    budget_pct = round(tokens_used / max(available_tokens, 1), 4)
+                    self._last_injection_meta = {
+                        "retrieved": len(selected_chunks),
+                        "injected": len(selected_chunks),
+                        "tokens": tokens_used,
+                        "budget_pct": budget_pct,
+                    }
+
             except Exception:
+                # Memória nunca pode travar o prompt — fallback silencioso
                 pass
 
-        # Resumo de turnos antigos (cold lane)
+        # ── Resumo de turnos antigos (cold lane) ─────────────────────────────
         if self._state.compacted_summary:
             parts.append(
                 f"[HISTÓRICO ANTERIOR COMPACTADO — {self._state.compacted_turn_count} turnos]\n"
@@ -552,16 +669,91 @@ class RLMSession:
                 f"[FIM DO HISTÓRICO COMPACTADO]"
             )
 
-        # Turnos recentes (fast lane)
+        # ── Turnos recentes (fast lane) ───────────────────────────────────────
         hot_turns = self._state.turns[-self._max_hot_turns:]
         for t in hot_turns:
             parts.append(f"Usuário: {t.user}")
             parts.append(f"Assistente: {t.assistant}")
 
-        # Mensagem atual
+        # ── Mensagem atual ────────────────────────────────────────────────────
         parts.append(f"Usuário: {user_message}")
 
         return "\n\n".join(parts)
+
+    def _post_turn_async(self, user_message: str, assistant_response: str) -> None:
+        """
+        Executado em daemon thread após cada turno. Responsabilidades:
+          1. Extrai "nuggets" memorizáveis do turno via GPT-4.1-nano (mini agent)
+          2. Avalia a importância de cada nugget (mini agent)
+          3. Salva nuggets com importance_score no MultiVectorMemory
+          4. Detecta relações (contradicts/extends/updates) com memórias recentes
+          5. Agenda atualização do hot cache para o próximo turno
+
+        Falha silenciosa total — nunca propaga exceção.
+        """
+        if self._memory is None:
+            return
+
+        try:
+            from rlm.core.memory_mini_agent import (
+                extract_memory_nuggets,
+                assign_importance,
+                identify_edge,
+            )
+
+            # 1. Extrai nuggets do turno
+            nuggets = extract_memory_nuggets(user_message, assistant_response)
+
+            if nuggets:
+                # 2. Para cada nugget: avalia importância + salva
+                saved_ids: list[str] = []
+                for nugget in nuggets:
+                    if not nugget or not nugget.strip():
+                        continue
+                    importance = assign_importance(nugget)
+                    memory_id = self._memory.add_memory(
+                        session_id=self._session_id,
+                        content=nugget,
+                        metadata={
+                            "source": "mini_agent",
+                            "turn": self._state.total_turns,
+                            "model": "gpt-4.1-nano",
+                        },
+                        importance_score=importance,
+                    )
+                    saved_ids.append(memory_id)
+
+                # 3. Detecta arestas entre nuggets novos e memórias recentes
+                # (apenas entre os nuggets recém-salvos — evita O(n²) em toda a memória)
+                if len(saved_ids) > 1:
+                    try:
+                        for i in range(len(saved_ids) - 1):
+                            from_id = saved_ids[i]
+                            to_id = saved_ids[i + 1]
+                            from_content = nuggets[i]
+                            to_content = nuggets[i + 1]
+                            edge_type = identify_edge(from_content, to_content)
+                            if edge_type is not None:
+                                self._memory.add_edge(from_id, to_id, edge_type)
+                                # Se a nova memória contradiz a anterior, depreca a antiga
+                                if edge_type in ("contradicts", "updates"):
+                                    self._memory.deprecate(from_id)
+                    except Exception:
+                        pass  # grafo de arestas nunca bloqueia o salvamento
+
+        except Exception:
+            pass  # extração de nuggets nunca bloqueia nada
+
+        # 4. Agenda atualização do hot cache para o próximo turno
+        if self._memory_cache is not None:
+            try:
+                self._memory_cache.schedule_update(
+                    query=user_message,
+                    memory_manager=self._memory,
+                    available_tokens=8000,
+                )
+            except Exception:
+                pass
 
     def _compact_background_if_needed(self) -> None:
         """
@@ -660,6 +852,7 @@ class RLMSession:
                         session_id=self._session_id,
                         content=combined[:2000],
                         metadata={"source": "compaction", "turn_count": len(turns)},
+                        importance_score=0.6,  # compactações têm importância média-alta
                     )
                 except Exception:
                     pass  # memória nunca trava o compactor
@@ -693,8 +886,16 @@ class RLMSession:
         self._rlm.close()
 
     def dispose(self) -> None:
-        """Fase 10: Unified cleanup — libera RLM, compactor, e memória."""
+        """Fase 10: Unified cleanup — libera RLM, compactor, cache e memória."""
         self._rlm.dispose()
+        # Evicta o hot cache desta sessão do registry global
+        if self._memory_cache is not None:
+            try:
+                from rlm.core.memory_hot_cache import evict_cache
+                evict_cache(self._session_id)
+            except Exception:
+                pass
+            self._memory_cache = None
         if self._memory is not None:
             try:
                 if hasattr(self._memory, 'close'):
