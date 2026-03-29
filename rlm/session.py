@@ -274,7 +274,8 @@ class RLMSession:
         # ObsidianBridge — synced materialized view of KB (optional)
         self._obsidian_bridge: Any = None
         try:
-            vault_path = os.environ.get("ARKHE_VAULT_PATH", "")
+            _default_vault = os.path.join(os.path.expanduser("~"), ".arkhe", "vault")
+            vault_path = os.environ.get("ARKHE_VAULT_PATH", "") or _default_vault
             if vault_path and self._kb is not None:
                 from rlm.core.obsidian_bridge import ObsidianBridge
                 self._obsidian_bridge = ObsidianBridge(
