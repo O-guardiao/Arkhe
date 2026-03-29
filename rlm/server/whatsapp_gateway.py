@@ -43,10 +43,14 @@ from starlette.background import BackgroundTask
 
 from rlm.logging import get_runtime_logger
 from rlm.server.auth_helpers import build_internal_auth_headers
+from rlm.server.dedup import MessageDedup
 
 log = get_runtime_logger("whatsapp_gateway")
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
+
+# Dedup global — Meta re-entrega webhooks se 200 demora
+_whatsapp_dedup = MessageDedup(ttl_s=300.0, max_entries=10_000)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +188,11 @@ async def _handle_message(
     wa_id = message.get("from", "")
     msg_id = message.get("id", "")
     from_name = contact_map.get(wa_id, wa_id)
+
+    # Dedup — Meta pode re-entregar o mesmo webhook
+    if msg_id and _whatsapp_dedup.is_duplicate(msg_id):
+        log.debug("WhatsApp mensagem duplicada descartada", msg_id=msg_id)
+        return
 
     # Statuses (entregue, lido) — não são mensagens, apenas log
     if msg_type == "status":

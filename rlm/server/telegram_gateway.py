@@ -54,6 +54,8 @@ from urllib import request as urllib_request
 
 from rlm.core.types import ClientBackend
 from rlm.logging import get_runtime_logger
+from rlm.server.backoff import GATEWAY_RECONNECT, compute_backoff, sleep_sync
+from rlm.server.heartbeat import SyncHeartbeat
 
 logger = get_runtime_logger("telegram_gateway")
 
@@ -404,24 +406,19 @@ class TelegramGateway:
 
         # Processar via RLM em thread separada (não bloqueia polling)
         def process_and_reply():
-            done_event: threading.Event | None = None
             try:
+                hb = None
                 if self.config.typing_feedback:
-                    # Manter "typing..." durante processamento
-                    def keep_typing():
-                        assert done_event is not None
-                        while not done_event.is_set():
-                            _send_typing(self.token, chat_id)
-                            done_event.wait(timeout=4.0)
-
-                    done_event = threading.Event()
-                    typing_thread = threading.Thread(target=keep_typing, daemon=True)
-                    typing_thread.start()
+                    hb = SyncHeartbeat(
+                        action=lambda: _send_typing(self.token, chat_id),
+                        interval_s=4.0,
+                    )
+                    hb.start()
 
                 response = self._process_message(chat_id, text, username)
 
-                if self.config.typing_feedback and done_event is not None:
-                    done_event.set()
+                if hb is not None:
+                    hb.dispose()
 
                 self._stats["messages_processed"] += 1
 
@@ -503,9 +500,11 @@ class TelegramGateway:
                 break
             except Exception as e:
                 self._error_count += 1
+                delay = compute_backoff(GATEWAY_RECONNECT, self._error_count)
                 logger.error(
                     "Erro no polling do Telegram",
                     error_count=self._error_count,
+                    backoff_s=round(delay, 1),
                     error=str(e),
                     traceback=traceback.format_exc(),
                 )
@@ -515,7 +514,7 @@ class TelegramGateway:
                         max_consecutive_errors=self.config.max_consecutive_errors,
                     )
                     break
-                time.sleep(self.config.error_backoff_s)
+                sleep_sync(delay)  # exponential backoff com jitter
 
         self._running = False
         logger.info("Gateway encerrado", messages_processed=self._stats["messages_processed"])

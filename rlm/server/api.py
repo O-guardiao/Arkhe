@@ -45,6 +45,8 @@ from rlm.server.openai_compat import create_openai_compat_router
 from rlm.server.runtime_pipeline import RuntimeDispatchRejected, RuntimeDispatchServices, dispatch_runtime_prompt_sync
 from rlm.server.auth_helpers import configured_tokens, require_token
 from rlm.server.ws_server import RLMEventBus, start_ws_server
+from rlm.server.drain import DrainGuard
+from rlm.server.health_monitor import HealthMonitor
 from rlm.plugins import PluginLoader
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
@@ -273,13 +275,33 @@ async def lifespan(app: FastAPI):
     else:
         gateway_log.warn("WebSocket observability unavailable (missing dependency or startup failure)")
     gateway_log.info("✓ WebChat: GET /webchat")
+
+    # DrainGuard + Health Monitor
+    app.state.drain_guard = DrainGuard(event_bus=app.state.event_bus)
+    app.state.health_monitor = HealthMonitor(
+        event_bus=app.state.event_bus, interval_s=30.0,
+    )
+    app.state.health_monitor.register("api", lambda: True)
+    app.state.health_monitor.start()
+    gateway_log.info("✓ Health Monitor started")
+
     gateway_log.info("Ready to receive events.")
 
     yield  # --- App is running ---
 
     # --- Shutdown ---
     gateway_log.info("Shutting down...")
+
+    # Fase 1: Drain — rejeita novos requests, espera ativos
+    app.state.drain_guard.start_draining()
+    _drain_timeout = int(os.environ.get("RLM_DRAIN_TIMEOUT", "30"))
+    app.state.drain_guard.wait_active(timeout=_drain_timeout)
+
+    # Fase 2: Parar monitoramento e scheduler
+    app.state.health_monitor.dispose()
     app.state.scheduler.stop()
+
+    # Fase 3: Cleanup de recursos
     app.state.skill_loader.deactivate_all()
     app.state.supervisor.shutdown()
     app.state.session_manager.close_all()
@@ -313,6 +335,37 @@ if _cors_origins:
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "X-Hook-Token"],
     )
+
+# ---------------------------------------------------------------------------
+# Drain Middleware — rejeita novos requests com 503 durante drain
+# ---------------------------------------------------------------------------
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse as StarletteJSONResponse
+
+
+class DrainMiddleware(BaseHTTPMiddleware):
+    """Rejeita requests com 503 durante graceful drain (exceto /health)."""
+
+    async def dispatch(self, request: Request, call_next):
+        # /health sempre passa — necessário para probes externos
+        if request.url.path == "/health":
+            return await call_next(request)
+
+        drain_guard = getattr(request.app.state, "drain_guard", None)
+        if drain_guard is not None and not drain_guard.enter_request():
+            return StarletteJSONResponse(
+                status_code=503,
+                content={"detail": "Server is draining — try again later"},
+            )
+        try:
+            return await call_next(request)
+        finally:
+            if drain_guard is not None:
+                drain_guard.exit_request()
+
+
+app.add_middleware(DrainMiddleware)
 
 # ---------------------------------------------------------------------------
 # Optional routers (condicionais via env vars)
@@ -742,22 +795,28 @@ async def get_exec_record(request_id: str, request: Request):
 
 @app.get("/health")
 async def health_check(request: Request):
-    """Health check with system status."""
+    """Health check with system status and component health."""
     _require_admin_api_auth(request)
     sm: SessionManager = request.app.state.session_manager
     supervisor: RLMSupervisor = request.app.state.supervisor
     loader: PluginLoader = request.app.state.plugin_loader
+    monitor: HealthMonitor = request.app.state.health_monitor
 
     active_sessions = sm.list_sessions(status="idle") + sm.list_sessions(status="running")
     running = supervisor.get_active_sessions()
 
+    health_report = monitor.get_health_report()
+
     return {
-        "status": "online",
+        "status": health_report["status"],
         "engine": "RLM Automation Gateway v2.0",
+        "uptime_s": health_report["uptime_s"],
         "active_sessions": len(active_sessions),
         "running_executions": len(running),
         "plugins_available": len(loader.list_available()),
         "model": os.environ.get("RLM_MODEL", "gpt-4o-mini"),
+        "draining": request.app.state.drain_guard.is_draining,
+        "components": health_report["components"],
     }
 
 

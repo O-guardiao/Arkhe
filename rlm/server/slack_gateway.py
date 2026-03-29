@@ -49,10 +49,14 @@ from starlette.background import BackgroundTask
 
 from rlm.logging import get_runtime_logger
 from rlm.server.auth_helpers import build_internal_auth_headers
+from rlm.server.dedup import MessageDedup
 
 log = get_runtime_logger("slack_gateway")
 
 router = APIRouter(prefix="/slack", tags=["slack"])
+
+# Dedup global — Slack pode re-entregar eventos em 3s
+_slack_dedup = MessageDedup(ttl_s=300.0, max_entries=10_000)
 
 # Tolerância de timestamp: 5 minutos (padrão Slack)
 _TIMESTAMP_TOLERANCE_S = 300
@@ -201,6 +205,12 @@ async def _process_slack_event(
     if bot_id:
         return
     if slack_app_id and user_id == slack_app_id:
+        return
+
+    # Dedup — Slack pode re-entregar se 200 demorar
+    event_id = payload.get("event_id", "") or event.get("client_msg_id", "")
+    if event_id and _slack_dedup.is_duplicate(event_id):
+        log.debug("Slack evento duplicado descartado", event_id=event_id)
         return
 
     text = event.get("text", "").strip()
