@@ -285,6 +285,31 @@ async def lifespan(app: FastAPI):
     app.state.health_monitor.start()
     gateway_log.info("✓ Health Monitor started")
 
+    # Telegram Gateway (bridge mode) — inicia como thread daemon se token definido
+    app.state.telegram_gateway = None
+    _tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if _tg_token:
+        try:
+            from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig as TGConfig
+            _tg_api_url = f"http://127.0.0.1:{os.environ.get('RLM_API_PORT', os.environ.get('PORT', '8000'))}"
+            _tg_config = TGConfig(
+                bot_token=_tg_token,
+                api_base_url=_tg_api_url,
+                api_timeout_s=int(os.environ.get("RLM_TG_API_TIMEOUT", "120")),
+                max_requests_per_min=int(os.environ.get("RLM_RATE_LIMIT", "10")),
+            )
+            _tg_allowed = os.environ.get("RLM_ALLOWED_CHATS", "").strip()
+            if _tg_allowed:
+                _tg_config.allowed_chat_ids = [int(x.strip()) for x in _tg_allowed.split(",") if x.strip()]
+            _tg_gw = TelegramGateway(config=_tg_config)
+            _tg_gw.run_in_thread()
+            app.state.telegram_gateway = _tg_gw
+            gateway_log.info(f"✓ Telegram Gateway started (bridge → {_tg_api_url})")
+        except Exception as e:
+            gateway_log.error(f"Telegram Gateway failed to start: {e}")
+    else:
+        gateway_log.info("• Telegram Gateway: disabled (TELEGRAM_BOT_TOKEN not set)")
+
     gateway_log.info("Ready to receive events.")
 
     yield  # --- App is running ---
@@ -297,7 +322,10 @@ async def lifespan(app: FastAPI):
     _drain_timeout = int(os.environ.get("RLM_DRAIN_TIMEOUT", "30"))
     app.state.drain_guard.wait_active(timeout=_drain_timeout)
 
-    # Fase 2: Parar monitoramento e scheduler
+    # Fase 2: Parar Telegram Gateway, monitoramento e scheduler
+    if app.state.telegram_gateway is not None:
+        app.state.telegram_gateway.stop()
+        gateway_log.info("Telegram Gateway stopped")
     app.state.health_monitor.dispose()
     app.state.scheduler.stop()
 

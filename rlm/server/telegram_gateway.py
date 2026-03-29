@@ -1,41 +1,24 @@
 """
 Telegram Gateway — rlm/server/telegram_gateway.py
 
-Conecta o Telegram Bot como canal de entrada/saída para um agente RLM.
+**Bridge Architecture**: thin client que faz long-polling do Telegram e
+encaminha mensagens para o RLM API Server via HTTP POST /webhook/telegram:{chat_id}.
 
-Arquitetura:
-    Telegram update → TelegramGateway.poll() → RLM.completion(msg) → reply
+Toda lógica pesada (Skills, Supervisor, Security Auditor, SIF, EventBus,
+sessões persistentes SQLite) fica no api.py. Este módulo só faz:
+    1. Long-polling do Telegram
+    2. Filtragem local (rate limit, access control, comandos /help /status /reset)
+    3. POST payload para o api.py
+    4. Envio da resposta de volta ao Telegram
 
-Funcionalidades:
-    - Long-polling de mensagens (sem webhook necessário)
-    - Sessão persistente por chat_id (contexto preservado entre mensagens)
-    - Comandos especiais: /reset, /status, /help
-    - Feedback de "digitando..." enquanto o RLM processa
-    - Truncagem automática de respostas longas (limite Telegram: 4096 chars)
-    - Isolamento de sessões: cada chat_id tem seu próprio contexto RLM
-    - Graceful shutdown via Ctrl+C
-
-Uso:
-    # Configurar variáveis de ambiente
-    export TELEGRAM_BOT_TOKEN="123456:ABC..."
-    export OPENAI_API_KEY="sk-..."
-
-    # Iniciar gateway
-    from rlm.server.telegram_gateway import TelegramGateway
-    from rlm.core.rlm import RLM
-
-    rlm = RLM(backend="openai", backend_kwargs={"model_name": "gpt-4o"},
-              max_depth=2, persistent=False)
-    gw = TelegramGateway(rlm=rlm)
-    gw.run()  # inicia loop de polling
-
-    # Ou via CLI:
-    # python -m rlm.server.telegram_gateway
+Pode rodar:
+    - Embutido no api.py (thread daemon no lifespan) — modo padrão
+    - Standalone: python -m rlm.server.telegram_gateway
 
 Segurança:
     - ALLOWED_CHAT_IDS: lista de chat_ids autorizados (vazio = todos)
-    - MAX_MESSAGE_LENGTH: trunca inputs muito longos
-    - Rate limiting por chat_id: MAX_REQUESTS_PER_MIN
+    - Rate limiting local por chat_id
+    - Auth via X-RLM-Token no POST para api.py
 """
 from __future__ import annotations
 
@@ -47,12 +30,10 @@ import time
 import traceback
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any
 from urllib import error as urllib_error
-from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from rlm.core.types import ClientBackend
 from rlm.logging import get_runtime_logger
 from rlm.server.backoff import GATEWAY_RECONNECT, compute_backoff, sleep_sync
 from rlm.server.heartbeat import SyncHeartbeat
@@ -71,10 +52,9 @@ class GatewayConfig:
     # Bot
     bot_token: str = ""                      # TELEGRAM_BOT_TOKEN
 
-    # Sessão RLM
-    max_depth: int = 2                       # profundidade máxima do RLM filho
-    persistent_per_chat: bool = True         # reutiliza contexto RLM por chat_id
-    max_iterations: int = 30                  # max iterações por resposta
+    # Bridge — API endpoint
+    api_base_url: str = "http://127.0.0.1:8000"  # RLM API Server
+    api_timeout_s: int = 120                      # timeout do POST (LLM pode demorar)
 
     # Segurança
     allowed_chat_ids: list[int] = field(default_factory=list)  # vazio = todos
@@ -86,7 +66,6 @@ class GatewayConfig:
 
     # Polling
     poll_timeout_s: int = 30                 # long-polling timeout
-    error_backoff_s: float = 5.0             # espera após erro de rede
     max_consecutive_errors: int = 10         # erros antes de parar
 
     # Resposta
@@ -129,11 +108,18 @@ def _send_message(token: str, chat_id: int, text: str, parse_mode: str = "Markdo
     MAX = 4000
     if len(text) > MAX:
         text = text[:MAX - 50] + "\n\n[... resposta truncada ...]"
-    return _tg_request(token, "sendMessage", {
+    result = _tg_request(token, "sendMessage", {
         "chat_id": chat_id,
         "text": text,
         "parse_mode": parse_mode,
     })
+    # Fallback: se Markdown falhar (caracteres não escapados), reenvia como texto puro
+    if not result.get("ok") and parse_mode == "Markdown":
+        return _tg_request(token, "sendMessage", {
+            "chat_id": chat_id,
+            "text": text,
+        })
+    return result
 
 
 def _send_typing(token: str, chat_id: int):
@@ -157,43 +143,6 @@ def _get_updates(token: str, offset: int | None, timeout_s: int) -> list[dict]:
     if result.get("ok"):
         return result.get("result", [])
     return []
-
-
-# ---------------------------------------------------------------------------
-# Session Manager — contexto RLM por chat_id
-# ---------------------------------------------------------------------------
-
-class SessionManager:
-    """
-    Mantém uma instância RLM por chat_id com opção de persistência.
-
-    Cada chat_id recebe um RLM separado com contexto isolado.
-    Quando persistent_per_chat=True, o ambiente REPL é reutilizado entre
-    mensagens do mesmo chat (memória de conversação no contexto REPL).
-    """
-
-    def __init__(self, rlm_factory, config: GatewayConfig):
-        self._factory = rlm_factory   # callable() → nova instância RLM
-        self._config = config
-        self._sessions: dict[int, Any] = {}   # chat_id → RLM instance
-        self._lock = threading.Lock()
-
-    def get_or_create(self, chat_id: int) -> Any:
-        with self._lock:
-            if chat_id not in self._sessions:
-                logger.debug("Criando nova sessão RLM", chat_id=chat_id)
-                self._sessions[chat_id] = self._factory()
-            return self._sessions[chat_id]
-
-    def reset(self, chat_id: int):
-        with self._lock:
-            if chat_id in self._sessions:
-                del self._sessions[chat_id]
-                logger.info("Sessão resetada", chat_id=chat_id)
-
-    def session_count(self) -> int:
-        with self._lock:
-            return len(self._sessions)
 
 
 # ---------------------------------------------------------------------------
@@ -223,34 +172,72 @@ class RateLimiter:
 
 
 # ---------------------------------------------------------------------------
-# Gateway principal
+# Bridge HTTP Client — POST para api.py /webhook
+# ---------------------------------------------------------------------------
+
+def _build_auth_headers() -> dict[str, str]:
+    """Constrói headers de autenticação para o POST interno."""
+    from rlm.server.auth_helpers import build_internal_auth_headers
+    return build_internal_auth_headers()
+
+
+def _bridge_post(
+    api_base_url: str,
+    client_id: str,
+    payload: dict,
+    timeout_s: int = 120,
+) -> dict:
+    """
+    Envia payload para POST /webhook/{client_id} do api.py e retorna resposta.
+
+    Returns:
+        dict com a resposta JSON do api.py ou {"error": "..."} em caso de falha.
+    """
+    url = f"{api_base_url.rstrip('/')}/webhook/{client_id}"
+    headers = _build_auth_headers()
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib_request.Request(url, data=body, headers=headers, method="POST")
+
+    try:
+        with urllib_request.urlopen(req, timeout=timeout_s) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib_error.HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="replace")
+        logger.error(
+            "Bridge POST failed",
+            url=url,
+            status_code=e.code,
+            body_preview=error_body[:300],
+        )
+        return {"error": f"HTTP {e.code}", "detail": error_body[:300]}
+    except Exception as e:
+        logger.error("Bridge POST exception", url=url, error=str(e))
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Gateway principal (thin client)
 # ---------------------------------------------------------------------------
 
 class TelegramGateway:
     """
-    Gateway que conecta Telegram Bot ao RLM via long-polling.
+    Thin client: long-polling → bridge HTTP → api.py → resposta → Telegram.
 
-    Cada mensagem recebida é processada pelo RLM e a resposta é enviada de volta.
-    Comandos especiais (/reset, /status, /help) são tratados diretamente.
+    Toda inferência RLM é delegada ao api.py que tem:
+    - SessionManager SQLite (persistência + event log)
+    - Supervisor (timeout, max_errors)
+    - SkillLoader (52+ skills + SIF)
+    - Security Auditor
+    - EventBus (observabilidade via WebSocket)
+    - Hooks
 
     Args:
-        rlm:          Instância RLM configurada (ou callable factory)
-        config:       GatewayConfig com opções de comportamento
-        bot_token:    Token do bot (override de config.bot_token e TELEGRAM_BOT_TOKEN)
-
-    Uso básico:
-        from rlm.core.rlm import RLM
-        from rlm.server.telegram_gateway import TelegramGateway
-
-        rlm = RLM(backend="openai", backend_kwargs={"model_name": "gpt-4o"},
-                  persistent=True)
-        gw = TelegramGateway(rlm=rlm)
-        gw.run()
+        config:    GatewayConfig com token, API URL, rate limits, etc.
+        bot_token: Token do bot (override de config.bot_token e TELEGRAM_BOT_TOKEN)
     """
 
     def __init__(
         self,
-        rlm: Any,
         config: GatewayConfig | None = None,
         bot_token: str | None = None,
     ):
@@ -268,19 +255,7 @@ class TelegramGateway:
                 "Defina TELEGRAM_BOT_TOKEN ou passe bot_token="
             )
 
-        # RLM: pode ser instância ou factory callable
-        if callable(rlm) and not hasattr(rlm, "completion"):
-            # É uma factory
-            self._rlm_factory = rlm
-        else:
-            # É uma instância — factory retorna sempre a mesma (sem persistência por chat)
-            _rlm_instance = rlm
-            self._rlm_factory = lambda: _rlm_instance
-
-        # Sessões isoladas por chat_id
-        self._sessions = SessionManager(self._rlm_factory, self.config)
-
-        # Rate limiting
+        # Rate limiting local (protege Telegram API e api.py)
         self._rate_limiter = RateLimiter(
             max_per_window=self.config.max_requests_per_min,
             window_s=self.config.rate_window_s,
@@ -296,10 +271,11 @@ class TelegramGateway:
             "messages_received": 0,
             "messages_processed": 0,
             "errors": 0,
+            "bridge_errors": 0,
             "start_time": 0.0,
         }
 
-    # ── Comandos especiais ────────────────────────────────────────────────
+    # ── Comandos locais ───────────────────────────────────────────────────
 
     def _handle_command(self, chat_id: int, command: str, username: str) -> str | None:
         """Retorna resposta de comando ou None se não for comando."""
@@ -307,56 +283,75 @@ class TelegramGateway:
 
         if cmd == "start" or cmd == "help":
             return (
-                "🤖 *RLM Agent* — Agente de IA recursivo\n\n"
+                "🤖 *Arkhe Agent* — Agente de IA recursivo\n\n"
                 "Envie qualquer mensagem e o agente processará sua solicitação.\n\n"
                 "Comandos disponíveis:\n"
                 "• /reset — Reinicia o contexto da conversa\n"
-                "• /status — Mostra estatísticas do agente\n"
+                "• /status — Mostra estatísticas do gateway\n"
                 "• /help — Esta mensagem\n\n"
-                "_Powered by RLM (Recursive Language Model) — MIT_"
+                "_Powered by RLM Engine — Bridge Mode_"
             )
         elif cmd == "reset":
-            self._sessions.reset(chat_id)
-            return "✅ Contexto da conversa reiniciado."
+            # Envia comando de reset via bridge — o api.py controla sessões
+            result = _bridge_post(
+                self.config.api_base_url,
+                f"telegram:{chat_id}",
+                {"text": "/reset", "from_user": username, "chat_id": chat_id, "command": "reset"},
+                timeout_s=15,
+            )
+            if "error" not in result:
+                return "✅ Sessão reiniciada no servidor."
+            return "✅ Comando de reset enviado."
         elif cmd == "status":
             uptime = time.time() - self._stats["start_time"]
             return (
-                f"📊 *Status do Agente*\n\n"
-                f"• Sessões ativas: {self._sessions.session_count()}\n"
+                f"📊 *Status do Gateway*\n\n"
+                f"• Modo: Bridge → {self.config.api_base_url}\n"
                 f"• Mensagens recebidas: {self._stats['messages_received']}\n"
-                f"• Mensagens processadas: {self._stats['messages_processed']}\n"
-                f"• Erros: {self._stats['errors']}\n"
+                f"• Processadas (via API): {self._stats['messages_processed']}\n"
+                f"• Erros bridge: {self._stats['bridge_errors']}\n"
+                f"• Erros totais: {self._stats['errors']}\n"
                 f"• Uptime: {int(uptime // 60)}min {int(uptime % 60)}s"
             )
         return None
 
-    # ── Processamento de mensagem ─────────────────────────────────────────
+    # ── Bridge: encaminha para api.py ─────────────────────────────────────
 
-    def _process_message(self, chat_id: int, text: str, username: str) -> str:
-        """Passa a mensagem pelo RLM e retorna a resposta."""
-        # Truncar inputs muito longos
+    def _process_via_bridge(self, chat_id: int, text: str, username: str) -> str:
+        """Encaminha mensagem para o api.py via HTTP e retorna a resposta."""
         if len(text) > self.config.max_message_length:
-            text = text[: self.config.max_message_length] + "\n[... mensagem truncada ...]"
+            text = text[: self.config.max_message_length] + "\n[... truncada ...]"
 
-        rlm_instance = self._sessions.get_or_create(chat_id)
+        client_id = f"telegram:{chat_id}"
+        payload = {
+            "text": text,
+            "from_user": username,
+            "chat_id": chat_id,
+        }
 
-        try:
-            # Suporta RLMSession conversacional (.chat) e bare RLM (.completion)
-            if hasattr(rlm_instance, "chat"):
-                return rlm_instance.chat(text)
-            result = rlm_instance.completion(text)
-            # RLMChatCompletion tem .response ou é string diretamente
-            if hasattr(result, "response"):
-                return result.response
-            return str(result)
-        except Exception as e:
-            logger.error(
-                "Erro no RLM ao processar mensagem",
-                chat_id=chat_id,
-                error=str(e),
-                traceback=traceback.format_exc(),
-            )
-            return f"⚠️ Erro ao processar: {type(e).__name__}: {e}"
+        result = _bridge_post(
+            self.config.api_base_url,
+            client_id,
+            payload,
+            timeout_s=self.config.api_timeout_s,
+        )
+
+        if "error" in result:
+            self._stats["bridge_errors"] += 1
+            error_detail = result.get("detail", result["error"])
+            logger.error("Bridge response error", chat_id=chat_id, error=error_detail)
+            return f"⚠️ Erro no servidor: {error_detail[:200]}"
+
+        # Extrair resposta do resultado do api.py
+        # O dispatch_runtime_prompt_sync retorna dict com chave "response"
+        response = result.get("response", "")
+        if not response:
+            # Fallback: tenta outras chaves comuns
+            response = result.get("result", result.get("output", ""))
+        if not response:
+            response = json.dumps(result, ensure_ascii=False, indent=2)
+
+        return str(response)
 
     # ── Handler de update ────────────────────────────────────────────────
 
@@ -393,18 +388,18 @@ class TelegramGateway:
             )
             return
 
-        # Comandos especiais
+        # Comandos locais
         if text.startswith("/"):
             resp = self._handle_command(chat_id, text, username)
             if resp:
                 _send_message(self.token, chat_id, resp)
                 return
 
-        # Feedback visual de processamento
+        # Feedback visual
         if self.config.typing_feedback:
             _send_typing(self.token, chat_id)
 
-        # Processar via RLM em thread separada (não bloqueia polling)
+        # Processar via bridge em thread separada (não bloqueia polling)
         def process_and_reply():
             try:
                 hb = None
@@ -415,7 +410,7 @@ class TelegramGateway:
                     )
                     hb.start()
 
-                response = self._process_message(chat_id, text, username)
+                response = self._process_via_bridge(chat_id, text, username)
 
                 if hb is not None:
                     hb.dispose()
@@ -423,7 +418,7 @@ class TelegramGateway:
                 self._stats["messages_processed"] += 1
 
                 if self.config.log_messages:
-                    logger.info("Mensagem enviada", username=username, chat_id=chat_id, text_preview=response[:100])
+                    logger.info("Resposta enviada", username=username, chat_id=chat_id, text_preview=response[:100])
 
                 _send_message(self.token, chat_id, response)
 
@@ -478,24 +473,30 @@ class TelegramGateway:
             raise RuntimeError(f"Token inválido ou sem conexão: {me.get('description')}")
 
         bot_name = me["result"].get("username", "?")
-        logger.info("Telegram Gateway iniciado", bot_name=bot_name)
-        logger.info("Configuração de sessão", persistent_per_chat=self.config.persistent_per_chat)
-        logger.info("Configuração de rate limit", max_requests_per_min=self.config.max_requests_per_min)
+        logger.info(
+            "Telegram Gateway iniciado (bridge mode)",
+            bot_name=bot_name,
+            api_url=self.config.api_base_url,
+        )
+        logger.info("Rate limit", max_requests_per_min=self.config.max_requests_per_min)
 
-        # Graceful shutdown
-        def _shutdown(sig, frame):
-            logger.info("Shutdown solicitado...")
-            self._running = False
-
-        signal.signal(signal.SIGINT, _shutdown)
-        signal.signal(signal.SIGTERM, _shutdown)
+        # Graceful shutdown (apenas quando rodando standalone na main thread)
+        if until_stopped:
+            try:
+                def _shutdown(sig, frame):
+                    logger.info("Shutdown solicitado...")
+                    self._running = False
+                signal.signal(signal.SIGINT, _shutdown)
+                signal.signal(signal.SIGTERM, _shutdown)
+            except ValueError:
+                pass  # signal only works in main thread
 
         logger.info("Aguardando mensagens... (Ctrl+C para parar)")
 
         while self._running and until_stopped:
             try:
                 self.poll_once()
-                self._error_count = 0  # reset após sucesso
+                self._error_count = 0
             except KeyboardInterrupt:
                 break
             except Exception as e:
@@ -514,10 +515,16 @@ class TelegramGateway:
                         max_consecutive_errors=self.config.max_consecutive_errors,
                     )
                     break
-                sleep_sync(delay)  # exponential backoff com jitter
+                sleep_sync(delay)
 
         self._running = False
         logger.info("Gateway encerrado", messages_processed=self._stats["messages_processed"])
+
+    def run_in_thread(self) -> threading.Thread:
+        """Inicia o gateway em thread daemon. Retorna a thread."""
+        t = threading.Thread(target=self.run, daemon=True, name="telegram-gateway")
+        t.start()
+        return t
 
     def stop(self):
         """Para o loop de polling."""
@@ -530,31 +537,21 @@ class TelegramGateway:
 
 def main():
     """
-    Entrypoint CLI.
+    Entrypoint CLI standalone.
 
     Variáveis de ambiente necessárias:
-        TELEGRAM_BOT_TOKEN   — token do bot
-        OPENAI_API_KEY       — ou outro backend
+        TELEGRAM_BOT_TOKEN       — token do bot
 
     Variáveis opcionais:
-        RLM_BACKEND          — "openai" (padrão), "anthropic", etc.
-        RLM_MODEL            — nome do modelo (padrão: "gpt-4o")
-        RLM_MAX_DEPTH        — profundidade máxima (padrão: 2)
-        RLM_ALLOWED_CHATS    — lista CSV de chat_ids permitidos (vazio = todos)
-        RLM_RATE_LIMIT       — máx requisições/min por chat (padrão: 10)
+        RLM_API_URL              — URL do api.py (padrão: http://127.0.0.1:8000)
+        RLM_INTERNAL_TOKEN       — token auth para POST /webhook (ou RLM_WS_TOKEN/RLM_API_TOKEN)
+        RLM_ALLOWED_CHATS        — lista CSV de chat_ids permitidos (vazio = todos)
+        RLM_RATE_LIMIT           — máx requisições/min por chat (padrão: 10)
+        RLM_TG_API_TIMEOUT       — timeout do POST para api.py em segundos (padrão: 120)
     """
-    # Lazy import evita erro se RLM não está no path
-    try:
-        from rlm.core.rlm import RLM
-    except ImportError as e:
-        print(f"Erro: não foi possível importar RLM — {e}")
-        print("Execute dentro do virtualenv do rlm-main.")
-        raise SystemExit(1)
-
-    backend = os.environ.get("RLM_BACKEND", "openai")
-    model = os.environ.get("RLM_MODEL", "gpt-4o")
-    max_depth = int(os.environ.get("RLM_MAX_DEPTH", "2"))
+    api_url = os.environ.get("RLM_API_URL", "http://127.0.0.1:8000")
     rate_limit = int(os.environ.get("RLM_RATE_LIMIT", "10"))
+    api_timeout = int(os.environ.get("RLM_TG_API_TIMEOUT", "120"))
 
     allowed_raw = os.environ.get("RLM_ALLOWED_CHATS", "")
     allowed_chats: list[int] = (
@@ -562,22 +559,14 @@ def main():
         if allowed_raw else []
     )
 
-    # Cada chat_id recebe sua própria instância RLM (fábrica)
-    def rlm_factory():
-        return RLM(
-            backend=cast(ClientBackend, backend),
-            backend_kwargs={"model_name": model},
-            max_depth=max_depth,
-            persistent=True,  # contexto persistente dentro de cada sessão
-        )
-
     config = GatewayConfig(
+        api_base_url=api_url,
+        api_timeout_s=api_timeout,
         allowed_chat_ids=allowed_chats,
         max_requests_per_min=rate_limit,
-        persistent_per_chat=True,
     )
 
-    gw = TelegramGateway(rlm=rlm_factory, config=config)
+    gw = TelegramGateway(config=config)
     gw.run()
 
 

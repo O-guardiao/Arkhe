@@ -355,6 +355,8 @@ class TestTelegramGatewayConfig:
         assert cfg.max_response_length == 4000
         assert cfg.typing_feedback is True
         assert cfg.allowed_chat_ids == []
+        assert cfg.api_base_url == "http://127.0.0.1:8000"
+        assert cfg.api_timeout_s == 120
 
     def test_rate_limiter_allows_within_limit(self):
         from rlm.server.telegram_gateway import RateLimiter
@@ -396,39 +398,34 @@ class TestTelegramGatewayCommands:
 
     def _make_gateway(self):
         from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
-        mock_rlm = MagicMock()
-        mock_rlm.completion.return_value = MagicMock(response="OK")
-        with patch("rlm.server.telegram_gateway._tg_request",
-                   return_value={"ok": True, "result": {"username": "testbot"}}):
-            gw = TelegramGateway(rlm=mock_rlm, bot_token="fake:TOKEN")
+        cfg = GatewayConfig(bot_token="fake:TOKEN")
+        gw = TelegramGateway(config=cfg)
         return gw
 
     def test_help_command_returns_string(self):
         gw = self._make_gateway()
         resp = gw._handle_command(chat_id=1, command="/help", username="user")
         assert resp is not None
-        assert "RLM" in resp or "help" in resp.lower() or "Agente" in resp
+        assert "Arkhe" in resp or "help" in resp.lower() or "Agente" in resp
 
     def test_start_command_returns_string(self):
         gw = self._make_gateway()
         resp = gw._handle_command(chat_id=1, command="/start", username="user")
         assert resp is not None
 
-    def test_reset_command_resets_session(self):
+    def test_reset_command_calls_bridge(self):
         gw = self._make_gateway()
-        # Criar sessão
-        gw._sessions.get_or_create(chat_id=42)
-        assert gw._sessions.session_count() == 1
-        resp = gw._handle_command(chat_id=42, command="/reset", username="user")
-        assert "reiniciado" in resp.lower() or "reset" in resp.lower()
-        assert gw._sessions.session_count() == 0
+        with patch("rlm.server.telegram_gateway._bridge_post", return_value={"status": "ok"}) as mock_bridge:
+            resp = gw._handle_command(chat_id=42, command="/reset", username="user")
+        assert "reiniciada" in resp.lower() or "reset" in resp.lower()
+        mock_bridge.assert_called_once()
 
     def test_status_command_returns_stats(self):
         gw = self._make_gateway()
         gw._stats["start_time"] = time.time() - 120
         resp = gw._handle_command(chat_id=1, command="/status", username="user")
         assert resp is not None
-        assert "Sessões" in resp or "Status" in resp
+        assert "Bridge" in resp or "Status" in resp or "bridge" in resp.lower()
 
     def test_unknown_command_returns_none(self):
         gw = self._make_gateway()
