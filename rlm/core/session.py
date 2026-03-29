@@ -76,6 +76,7 @@ class SessionManager:
             "backend_kwargs": {"model_name": "gpt-4o-mini"},
             "environment": "local",
             "max_iterations": 30,
+            "max_depth": 3,
             "persistent": True,
             "verbose": True,
         }

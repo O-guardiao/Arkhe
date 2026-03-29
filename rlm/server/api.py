@@ -161,6 +161,7 @@ async def lifespan(app: FastAPI):
         "backend_kwargs": {"model_name": os.environ.get("RLM_MODEL", "gpt-4o-mini")},
         "environment": "local",
         "max_iterations": int(os.environ.get("RLM_MAX_ITERATIONS", "30")),
+        "max_depth": int(os.environ.get("RLM_MAX_DEPTH", "3")),
         "persistent": True,
         "verbose": True,
         "event_bus": app.state.event_bus,
