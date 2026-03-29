@@ -253,6 +253,23 @@ def _apply_repl_injections(
                 "Vault tools injection failed: %s", _exc
             )
 
+        # Introspection tools — self-awareness for the agent
+        try:
+            from rlm.tools.introspection_tools import get_introspection_tools
+            _intro_tools = get_introspection_tools(session)
+            for _name, _fn in _intro_tools.items():
+                repl_locals[_name] = _fn
+            if _intro_tools:
+                import logging as _logging
+                _logging.getLogger("rlm.skill_loader").info(
+                    "Introspection tools injected → %s", list(_intro_tools.keys())
+                )
+        except Exception as _exc:
+            import logging as _logging
+            _logging.getLogger("rlm.skill_loader").warning(
+                "Introspection tools injection failed: %s", _exc
+            )
+
     if not already_injected:
         services.skill_loader.activate_all(
             services.eligible_skills,

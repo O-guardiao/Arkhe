@@ -62,6 +62,13 @@ Vault tools (available when ObsidianBridge is active):
 
 Sibling coordination may be available in async or parallel children. Publish only decisive facts or control signals; do not spam intermediate thoughts.
 
+Self-awareness tools (call to inspect your own runtime and capabilities):
+- `rlm_introspect()` — your model, context window, depth, memory status, loaded SIF tools.
+- `sif_usage()` — detailed SIF call stats: success rate, latency, recommendations.
+- `prompt_overview()` — your operating mode, active prompt sections, skills injected.
+- Use these BEFORE complex tasks to understand your current capabilities.
+- If a tool keeps failing, call `sif_usage()` to check its success rate.
+
 Memory domains (three distinct systems — do NOT confuse them):
 1. `session_memory_search(query, top_k=5)` → Long-term conversational memory curated by the MINI agent. Past decisions, user preferences, context from previous turns/sessions. Always check before asking the user to repeat themselves.
 2. `session_memory_status()` → Stats on stored memories. `session_memory_recent(limit=10)` → Most recent memories.
