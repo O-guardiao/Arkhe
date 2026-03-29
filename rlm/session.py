@@ -271,6 +271,19 @@ class RLMSession:
         except Exception:
             pass
 
+        # ObsidianBridge — synced materialized view of KB (optional)
+        self._obsidian_bridge: Any = None
+        try:
+            vault_path = os.environ.get("ARKHE_VAULT_PATH", "")
+            if vault_path and self._kb is not None:
+                from rlm.core.obsidian_bridge import ObsidianBridge
+                self._obsidian_bridge = ObsidianBridge(
+                    vault_path=vault_path, kb=self._kb
+                )
+                self._kb.register_hook(self._obsidian_bridge.handle_kb_event)
+        except Exception:
+            pass
+
         # Telemetria de turno — rastreia tokens, latência, memória injetada
         self._telemetry: Any = None
         try:

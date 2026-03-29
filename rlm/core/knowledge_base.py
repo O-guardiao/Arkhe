@@ -109,8 +109,29 @@ class GlobalKnowledgeBase:
         self.db_path = db_path
         self.embedding_model = embedding_model
         self._client = _get_embedding_client()
+        self._hooks: List[Any] = []
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
         self._init_db()
+
+    def register_hook(self, handler: Any) -> None:
+        """Registra handler que recebe (event_type, *args) em mutações."""
+        if handler not in self._hooks:
+            self._hooks.append(handler)
+
+    def unregister_hook(self, handler: Any) -> None:
+        """Remove handler de hooks."""
+        try:
+            self._hooks.remove(handler)
+        except ValueError:
+            pass
+
+    def _fire_hooks(self, event_type: str, *args: Any) -> None:
+        """Dispara evento para todos os hooks registrados."""
+        for hook in self._hooks:
+            try:
+                hook(event_type, *args)
+            except Exception as exc:
+                _log.warn(f"KB hook falhou ({event_type}): {exc}")
 
     def _init_db(self) -> None:
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -205,6 +226,7 @@ class GlobalKnowledgeBase:
             conn.commit()
 
         _log.debug(f"KB: added doc '{doc_id}' — '{title[:60]}' (importance={importance:.2f})")
+        self._fire_hooks("doc_created", doc_id)
         return doc_id
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
@@ -276,6 +298,7 @@ class GlobalKnowledgeBase:
                 (doc_id, new_title, new_summary, " ".join(new_tags if isinstance(new_tags, list) else [])),
             )
             conn.commit()
+        self._fire_hooks("doc_updated", doc_id)
         return True
 
     def deprecate_document(self, doc_id: str, superseded_by: Optional[str] = None) -> bool:
@@ -465,6 +488,7 @@ class GlobalKnowledgeBase:
                 (edge_id, from_id, to_id, edge_type, confidence),
             )
             conn.commit()
+        self._fire_hooks("edge_created", from_id, to_id, edge_type)
         return edge_id
 
     def get_related(self, doc_id: str) -> List[Dict[str, Any]]:

@@ -225,3 +225,12 @@ def _split_body(body: str) -> tuple[str, str]:
         return summary, full_context
 
     return body.strip()[:500], body.strip()
+
+
+# ---------------------------------------------------------------------------
+# Backward compat — re-export ObsidianBridge for new callers
+# ---------------------------------------------------------------------------
+try:
+    from rlm.core.obsidian_bridge import ObsidianBridge  # noqa: F401
+except ImportError:
+    pass
