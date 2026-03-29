@@ -546,12 +546,20 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
 
     Args:
         parent: instância RLM pai que será usada como base de configuração.
+                Aceita também RLMSession — o wrapper é removido automaticamente.
         _rlm_cls: classe RLM a instanciar (injectável para testes). Se None,
                   importa `rlm.core.rlm.RLM` em runtime (evita circular import).
 
     Returns:
         Função sub_rlm pronta para injeção no namespace REPL.
     """
+    # Unwrap RLMSession → RLM core.  No pipeline do servidor,
+    # orchestrate_roles passa session.rlm_instance (RLMSession) mas
+    # sub_rlm precisa do RLM real (.depth, .max_depth, .backend etc).
+    if not isinstance(getattr(parent, "depth", None), int):
+        _inner = getattr(parent, "_rlm", None)
+        if _inner is not None and isinstance(getattr(_inner, "depth", None), int):
+            parent = _inner
 
     def sub_rlm(
         task: str,
