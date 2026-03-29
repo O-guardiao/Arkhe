@@ -834,3 +834,131 @@ class TestVaultTools:
     def test_vault_moc_nonexistent(self, tools):
         result = tools["vault_moc"]("nonexistent_domain_xyz")
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# TestRichSessionLog — _export_session_to_vault produz nota rica
+# ---------------------------------------------------------------------------
+
+
+class TestRichSessionLog:
+    """Verifica que export_session_log recebe prompt, iterations, final_output, kb_docs."""
+
+    def test_session_log_contains_rich_fields(self, bridge, vault_path):
+        """Nota gerada deve incluir prompt, iterações REPL e output final."""
+        session_data = {
+            "session_id": "rich-session-001",
+            "model": "qwen3.5",
+            "prompt": "Calcule a raiz de 144",
+            "iterations": [
+                {"repl_code": "import math\nmath.sqrt(144)", "output": "12.0"},
+                {"repl_code": "print('done')", "output": "done"},
+            ],
+            "final_output": "A raiz quadrada de 144 é 12.",
+            "kb_docs_created": ["doc_abc", "doc_def"],
+        }
+        filepath = bridge.export_session_log(session_data)
+        content = open(filepath, encoding="utf-8").read()
+
+        # Prompt original
+        assert "Calcule a raiz de 144" in content
+        # Iterações REPL
+        assert "math.sqrt(144)" in content
+        assert "12.0" in content
+        assert "print('done')" in content
+        # Output final
+        assert "A raiz quadrada de 144 é 12." in content
+        # KB docs linkados
+        assert "[[doc_abc]]" in content
+        assert "[[doc_def]]" in content
+
+    def test_session_log_empty_iterations(self, bridge):
+        """Sem iterações, nota deve ainda conter prompt e output."""
+        session_data = {
+            "session_id": "empty-iter-002",
+            "prompt": "Olá mundo",
+            "iterations": [],
+            "final_output": "Resposta simples",
+        }
+        filepath = bridge.export_session_log(session_data)
+        content = open(filepath, encoding="utf-8").read()
+        assert "Olá mundo" in content
+        assert "Resposta simples" in content
+        assert "Iteração" not in content  # nenhum bloco REPL
+
+    def test_session_log_no_prompt(self, bridge):
+        """Sem prompt, seção 'Prompt Original' não aparece."""
+        session_data = {
+            "session_id": "no-prompt-003",
+            "prompt": "",
+            "final_output": "Resultado",
+        }
+        filepath = bridge.export_session_log(session_data)
+        content = open(filepath, encoding="utf-8").read()
+        assert "Prompt Original" not in content
+        assert "Resultado" in content
+
+
+# ---------------------------------------------------------------------------
+# TestMCTSExportOnClose — export_mcts_archive gera nota no vault
+# ---------------------------------------------------------------------------
+
+
+class TestMCTSExportOnClose:
+    """Verifica que export_mcts_archive cria nota com branches no vault/mcts/."""
+
+    def test_mcts_archive_creates_note(self, bridge, vault_path):
+        branches = [
+            {
+                "branch_id": 1,
+                "total_score": 8.5,
+                "final_code": "x = 42",
+                "steps": ["step1", "step2"],
+                "pruned_reason": None,
+                "strategy_name": "best_first",
+            },
+            {
+                "branch_id": 2,
+                "total_score": 3.2,
+                "final_code": "x = 0",
+                "steps": ["step1"],
+                "pruned_reason": "low_score",
+                "strategy_name": "best_first",
+            },
+        ]
+        filepath = bridge.export_mcts_archive("mcts-sess-001", branches)
+        assert os.path.exists(filepath)
+        content = open(filepath, encoding="utf-8").read()
+
+        # Metadata
+        assert "mcts-sess-001" in content
+        assert "branches: 2" in content
+        # Winner branch
+        assert "x = 42" in content
+        assert "8.5" in content
+        # Pruned branch
+        assert "PODADO" in content
+        assert "low_score" in content
+        # Mermaid tree (2 branches → mermaid gerado)
+        assert "mermaid" in content
+
+    def test_mcts_archive_single_branch_no_mermaid(self, bridge):
+        branches = [
+            {
+                "branch_id": 1,
+                "total_score": 9.0,
+                "final_code": "result = True",
+                "steps": [],
+            },
+        ]
+        filepath = bridge.export_mcts_archive("single-001", branches)
+        content = open(filepath, encoding="utf-8").read()
+        assert "result = True" in content
+        # Com 1 branch, mermaid normalmente não é gerado
+        assert "9.0" in content
+
+    def test_mcts_archive_in_mcts_dir(self, bridge, vault_path):
+        branches = [{"branch_id": 0, "total_score": 5.0, "final_code": "pass"}]
+        filepath = bridge.export_mcts_archive("dir-test-001", branches)
+        mcts_dir = os.path.join(vault_path, "mcts")
+        assert filepath.startswith(mcts_dir)

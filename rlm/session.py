@@ -831,20 +831,25 @@ class RLMSession:
                 pass
             self._memory = None
 
-    def _consolidate_to_kb(self) -> None:
-        """Consolida nuggets da sessão na Knowledge Base global (síncrono, no close)."""
+    def _consolidate_to_kb(self) -> list[str]:
+        """Consolida nuggets da sessão na Knowledge Base global (síncrono, no close).
+
+        Returns:
+            Lista de doc_ids criados/atualizados, vazia em caso de erro.
+        """
         if self._kb is None:
-            return
+            return []
         try:
             from rlm.core.knowledge_consolidator import consolidate_session
-            consolidate_session(
+            doc_ids = consolidate_session(
                 memory_db_path=self._memory_db_path,
                 session_id=self._session_id,
                 kb=self._kb,
                 obsidian_bridge=self._obsidian_bridge,
             )
+            return doc_ids or []
         except Exception:
-            pass  # Consolidação nunca impede o fechamento da sessão
+            return []  # Consolidação nunca impede o fechamento da sessão
 
     def _retrieve_from_kb(self, query: str, max_tokens: int = 1200) -> str:
         """
@@ -1138,10 +1143,10 @@ class RLMSession:
     def close(self) -> None:
         """Fecha a instância RLM interna (chamado por SessionManager.close_session)."""
         # Consolidação KB — extrai conhecimento da sessão para memória persistente
-        self._consolidate_to_kb()
+        kb_doc_ids = self._consolidate_to_kb()
 
         # Obsidian vault — session audit log + MOCs + graph
-        self._export_session_to_vault()
+        self._export_session_to_vault(kb_doc_ids=kb_doc_ids)
 
         # Fase 12: Encerra o generator stream ativo antes de fechar o RLM
         if self._active_stream is not None:
@@ -1154,12 +1159,37 @@ class RLMSession:
         self._rlm.close()
         self._release_memory_runtime()
 
-    def _export_session_to_vault(self) -> None:
-        """Exporta audit log da sessão + regenera MOCs/graph no vault."""
+    def _export_session_to_vault(self, *, kb_doc_ids: list[str] | None = None) -> None:
+        """Exporta audit log da sessão + regenera MOCs/graph no vault.
+
+        Padrão VS Code: buffer+flush no dispose — acumula dados durante
+        o ciclo de vida e exporta tudo ao fechar (telemetryService.ts,
+        chatDebugServiceImpl.ts).
+        """
         bridge = self._obsidian_bridge
         if bridge is None:
             return
+
+        # ── 1. Session audit log (rico) ──────────────────────────────────
         try:
+            # Prompt / final output dos turnos acumulados
+            turns = self._state.turns
+            prompt = turns[0].user if turns else ""
+            final_output = turns[-1].assistant if turns else ""
+
+            # Iterations do execution timeline (REPL blocks executados)
+            iterations: list[dict] = []
+            env = getattr(self._rlm, "_persistent_env", None)
+            if env is not None:
+                timeline = getattr(env, "_execution_timeline", None)
+                if timeline is not None:
+                    for ev in timeline.recent(limit=200, event_type="code_executed"):
+                        data = ev.get("data", {})
+                        iterations.append({
+                            "repl_code": data.get("code", ""),
+                            "output": data.get("stdout", "") or data.get("result", ""),
+                        })
+
             session_data = {
                 "session_id": self._session_id,
                 "client_id": getattr(self, "client_id", ""),
@@ -1168,10 +1198,37 @@ class RLMSession:
                 "total_completions": getattr(self._rlm, "_iteration_count", 0),
                 "total_tokens_used": getattr(self._rlm, "_total_tokens", 0),
                 "model": getattr(self._rlm, "_model_name", "unknown"),
+                "prompt": prompt,
+                "iterations": iterations,
+                "final_output": final_output,
+                "kb_docs_created": kb_doc_ids or [],
             }
             bridge.export_session_log(session_data)
         except Exception:
             pass
+
+        # ── 2. MCTS archives → vault (flush acumulado) ───────────────────
+        try:
+            env = getattr(self._rlm, "_persistent_env", None)
+            mcts_archives = getattr(env, "_mcts_archives", None) if env else None
+            if mcts_archives:
+                for _key, archive in mcts_archives.items():
+                    branches = []
+                    for br in archive.sample(20):
+                        branches.append({
+                            "branch_id": getattr(br, "branch_id", 0),
+                            "total_score": getattr(br, "total_score", 0),
+                            "final_code": getattr(br, "final_code", ""),
+                            "steps": getattr(br, "steps", []),
+                            "pruned_reason": getattr(br, "pruned_reason", None),
+                            "strategy_name": getattr(br, "strategy_name", None),
+                        })
+                    if branches:
+                        bridge.export_mcts_archive(self._session_id, branches)
+        except Exception:
+            pass
+
+        # ── 3. MOCs + knowledge graph ────────────────────────────────────
         try:
             bridge.regenerate_mocs()
         except Exception:
