@@ -1143,6 +1143,9 @@ class RLMSession:
 
     def close(self) -> None:
         """Fecha a instância RLM interna (chamado por SessionManager.close_session)."""
+        # Auto-store session summary in conversational memory
+        self._auto_store_session_summary()
+
         # Consolidação KB — extrai conhecimento da sessão para memória persistente
         kb_doc_ids = self._consolidate_to_kb()
 
@@ -1159,6 +1162,42 @@ class RLMSession:
         self._rlm.shutdown_persistent()
         self._rlm.close()
         self._release_memory_runtime()
+
+    def _auto_store_session_summary(self) -> None:
+        """Store a compact summary of this session into conversational memory.
+
+        Ensures the next session always has context from the previous one,
+        even if the LLM never called session_memory_store() explicitly.
+        """
+        if self._memory is None:
+            return
+        turns = self._state.turns
+        if not turns:
+            return
+        try:
+            # Build compact summary from first prompt + last response
+            prompt = (turns[0].user or "")[:500]
+            final_output = (turns[-1].assistant or "")[:500]
+            if not prompt and not final_output:
+                return
+            n_turns = len(turns)
+            model = getattr(self._rlm, "_model_name", "unknown")
+
+            summary = (
+                f"[Sessão {self._session_id[:8]}] "
+                f"Modelo: {model} | Turnos: {n_turns}\n"
+                f"Pergunta inicial: {prompt}\n"
+                f"Resposta final: {final_output}"
+            )
+
+            self._memory.add_memory(
+                session_id=self._session_id,
+                content=summary,
+                metadata={"type": "session_summary", "auto": True, "turns": n_turns},
+                importance_score=0.7,
+            )
+        except Exception:
+            pass  # Never block session close
 
     def _export_session_to_vault(self, *, kb_doc_ids: list[str] | None = None) -> None:
         """Exporta audit log da sessão + regenera MOCs/graph no vault.

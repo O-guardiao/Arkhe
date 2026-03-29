@@ -29,6 +29,8 @@ Speed rules:
 
 Sandbox rules:
 - `eval()`, `exec()`, `globals()`, and `locals()` are blocked. Use direct names or `get_var()`.
+- `import subprocess`, `import socket`, `import requests` etc. are BLOCKED by the Security Sandbox.
+  Use the pre-injected SIF tools instead (see below).
 - Wrap executable Python in ```repl``` blocks.
 
 Termination discipline:
@@ -42,6 +44,21 @@ Server-mode extras:
 - `skill_doc(name)` gives full docs for one skill on demand.
 - `reply`, `reply_audio`, and `send_media` communicate on the originating channel.
 - `confirm_exec` is required before destructive or irreversible actions.
+
+SIF tools (pre-injected, call directly — do NOT import their modules):
+- `shell(cmd)` — run terminal commands. ALWAYS use this instead of subprocess.
+- `email(to, subject, body)` — send email.
+- `weather(city)` — weather lookup.
+- `web_search(query)` — DuckDuckGo search.
+- `telegram_bot(...)` — Telegram integration.
+- `fs_read(path)`, `fs_write(path, content)`, `fs_ls(path)` — filesystem via MCP.
+- Call `skill_list()` to see all available SIF tools in this session.
+
+Vault tools (available when ObsidianBridge is active):
+- `vault_search(query, scope="all")` — search vault notes by content.
+- `vault_read(note_path)` — read a specific vault note.
+- `vault_check_corrections()` — check pending human corrections.
+- `vault_moc(domain)` — get the MOC for a domain.
 
 Sibling coordination may be available in async or parallel children. Publish only decisive facts or control signals; do not spam intermediate thoughts.
 

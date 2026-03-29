@@ -169,7 +169,14 @@ def _apply_repl_injections(
     plugins_to_load: list[str],
     dynamic_skill_context: str,
 ) -> None:
-    """Inject all server-mode callables into the REPL namespace."""
+    """Inject all server-mode callables into the REPL namespace.
+
+    Uses a sentinel key ``__rlm_injected__`` to skip full re-injection on
+    subsequent turns of the same session.  Only lightweight updates (skill
+    context, dynamic plugins) run again.
+    """
+    already_injected = repl_locals.get("__rlm_injected__", False)
+
     if plugins_to_load:
         services.plugin_loader.inject_multiple(plugins_to_load, repl_locals)
 
@@ -195,7 +202,7 @@ def _apply_repl_injections(
 
     # Session memory tools — expose conversational long-term memory to the REPL
     _rlm_session = getattr(session, "rlm_instance", None)
-    if _rlm_session is not None:
+    if _rlm_session is not None and not already_injected:
         try:
             from rlm.tools.session_memory_tools import get_session_memory_tools
             _session_tools = get_session_memory_tools(_rlm_session)
@@ -246,20 +253,22 @@ def _apply_repl_injections(
                 "Vault tools injection failed: %s", _exc
             )
 
-    services.skill_loader.activate_all(
-        services.eligible_skills,
-        repl_locals,
-        activation_scope=session.session_id,
-    )
+    if not already_injected:
+        services.skill_loader.activate_all(
+            services.eligible_skills,
+            repl_locals,
+            activation_scope=session.session_id,
+        )
     if dynamic_skill_context:
         repl_locals["__rlm_skills__"] = dynamic_skill_context
     elif services.skill_context:
         repl_locals["__rlm_skills__"] = services.skill_context
 
-    services.skill_loader.inject_sif_callables(services.eligible_skills, repl_locals)
-    skill_doc_fn, skill_list_fn = services.skill_loader.build_skill_doc_fn(services.eligible_skills)
-    repl_locals["skill_doc"] = skill_doc_fn
-    repl_locals["skill_list"] = skill_list_fn
+    if not already_injected:
+        services.skill_loader.inject_sif_callables(services.eligible_skills, repl_locals)
+        skill_doc_fn, skill_list_fn = services.skill_loader.build_skill_doc_fn(services.eligible_skills)
+        repl_locals["skill_doc"] = skill_doc_fn
+        repl_locals["skill_list"] = skill_list_fn
 
     approval_gate = services.exec_approval
     if approval_gate is not None:
@@ -303,6 +312,8 @@ def _apply_repl_injections(
         task_sink=_handoff_task_sink,
     )
     repl_locals["handoff_roles"] = list(VALID_HANDOFF_ROLES)
+
+    repl_locals["__rlm_injected__"] = True
 
 
 def _prepare_repl_locals(
