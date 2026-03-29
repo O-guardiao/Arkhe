@@ -841,6 +841,7 @@ class RLMSession:
                 memory_db_path=self._memory_db_path,
                 session_id=self._session_id,
                 kb=self._kb,
+                obsidian_bridge=self._obsidian_bridge,
             )
         except Exception:
             pass  # Consolidação nunca impede o fechamento da sessão
@@ -1139,6 +1140,9 @@ class RLMSession:
         # Consolidação KB — extrai conhecimento da sessão para memória persistente
         self._consolidate_to_kb()
 
+        # Obsidian vault — session audit log + MOCs + graph
+        self._export_session_to_vault()
+
         # Fase 12: Encerra o generator stream ativo antes de fechar o RLM
         if self._active_stream is not None:
             try:
@@ -1149,6 +1153,33 @@ class RLMSession:
         self._rlm.shutdown_persistent()
         self._rlm.close()
         self._release_memory_runtime()
+
+    def _export_session_to_vault(self) -> None:
+        """Exporta audit log da sessão + regenera MOCs/graph no vault."""
+        bridge = self._obsidian_bridge
+        if bridge is None:
+            return
+        try:
+            session_data = {
+                "session_id": self._session_id,
+                "client_id": getattr(self, "client_id", ""),
+                "created_at": getattr(self, "_created_at", ""),
+                "status": "completed",
+                "total_completions": getattr(self._rlm, "_iteration_count", 0),
+                "total_tokens_used": getattr(self._rlm, "_total_tokens", 0),
+                "model": getattr(self._rlm, "_model_name", "unknown"),
+            }
+            bridge.export_session_log(session_data)
+        except Exception:
+            pass
+        try:
+            bridge.regenerate_mocs()
+        except Exception:
+            pass
+        try:
+            bridge.export_knowledge_graph()
+        except Exception:
+            pass
 
     def dispose(self) -> None:
         """Fase 10: Unified cleanup — libera RLM, compactor, cache e memória."""

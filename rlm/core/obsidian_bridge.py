@@ -987,6 +987,152 @@ class ObsidianBridge:
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # MCTS Archive Export (Phase 3)
+    # ------------------------------------------------------------------
+
+    def export_mcts_archive(self, session_id: str, branches: List[Dict[str, Any]]) -> str:
+        """
+        Exporta resultados MCTS como nota Obsidian em vault/mcts/.
+
+        Args:
+            session_id: ID da sessão que rodou MCTS.
+            branches: Lista de dicts com keys: branch_id, total_score, steps,
+                      final_code, pruned_reason (opt), strategy_name (opt).
+        Returns:
+            Caminho do arquivo criado.
+        """
+        mcts_dir = os.path.join(self.vault_path, "mcts")
+        os.makedirs(mcts_dir, exist_ok=True)
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"mcts_{timestamp}_{session_id[:8]}.md"
+        filepath = os.path.join(mcts_dir, filename)
+
+        best = max(branches, key=lambda b: b.get("total_score", 0)) if branches else {}
+        strategy = best.get("strategy_name", "unknown")
+
+        lines = [
+            "---",
+            f'title: "MCTS Exploration: {session_id[:12]}"',
+            f"session: {session_id}",
+            f"branches: {len(branches)}",
+            f"best_score: {best.get('total_score', 0):.1f}",
+            f"strategy: {strategy}",
+            f"created: {time.strftime('%Y-%m-%dT%H:%M:%S')}",
+            "---",
+            "",
+            f"# Exploração MCTS: {session_id[:12]}",
+            "",
+        ]
+
+        # Branch details
+        for b in sorted(branches, key=lambda x: x.get("total_score", 0), reverse=True):
+            bid = b.get("branch_id", "?")
+            score = b.get("total_score", 0)
+            is_best = bid == best.get("branch_id")
+            pruned = b.get("pruned_reason")
+            marker = " ⭐ WINNER" if is_best else ""
+            if pruned:
+                marker = f" ✂️ PODADO: {pruned}"
+            lines.append(f"## Branch {bid} (score: {score:.1f}){marker}")
+            code = b.get("final_code", "")
+            if code:
+                lines += ["```python", code[:1000], "```"]
+            steps = b.get("steps", [])
+            if steps:
+                lines.append(f"Steps: {len(steps)}")
+            lines.append("")
+
+        # Mermaid tree
+        if len(branches) > 1:
+            lines += ["## Árvore de Decisão", "```mermaid", "graph TD"]
+            lines.append('    R["Root"]')
+            for b in branches:
+                bid = b.get("branch_id", 0)
+                score = b.get("total_score", 0)
+                pruned = b.get("pruned_reason")
+                label = f"B{bid} ({score:.1f})"
+                if pruned:
+                    label += " ✂️"
+                nid = f"B{bid}"
+                lines.append(f'    R --> {nid}["{label}"]')
+                is_best = bid == best.get("branch_id")
+                if is_best:
+                    lines.append(f"    style {nid} fill:#4CAF50")
+                elif pruned:
+                    lines.append(f"    style {nid} fill:#ccc")
+            lines += ["```", ""]
+
+        content = "\n".join(lines)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        _log.debug(f"MCTS archive exported: {filepath}")
+        return filepath
+
+    # ------------------------------------------------------------------
+    # Dashboard (Phase 4)
+    # ------------------------------------------------------------------
+
+    def generate_dashboard(self) -> str:
+        """Gera vault/_dashboard.md com queries Dataview e estatísticas."""
+        filepath = os.path.join(self.vault_path, "_dashboard.md")
+        stats = self.kb.stats()
+
+        lines = [
+            "---",
+            "title: Arkhe Knowledge Dashboard",
+            "auto_generated: true",
+            f"updated: {time.strftime('%Y-%m-%dT%H:%M:%S')}",
+            "---",
+            "",
+            "# 📊 Arkhe Knowledge Dashboard",
+            "",
+            "## Estatísticas",
+            f"- **Documentos ativos:** {stats.get('active_documents', 0)}",
+            f"- **Total edges:** {stats.get('total_edges', 0)}",
+            f"- **Domínios:** {len(stats.get('domains', {}))}",
+            "",
+            "## Documentos por Domínio",
+            "```dataview",
+            'TABLE length(rows) as "Docs"',
+            'FROM "conhecimento"',
+            "GROUP BY domain",
+            "```",
+            "",
+            "## Top 10 por Importância",
+            "```dataview",
+            "TABLE importance, domain, updated",
+            'FROM "conhecimento"',
+            "SORT importance DESC",
+            "LIMIT 10",
+            "```",
+            "",
+            "## Conflitos Pendentes",
+            "```dataview",
+            "LIST",
+            'FROM "conflitos"',
+            'WHERE !contains(status, "resolvido")',
+            "```",
+            "",
+            "## Sessões Recentes",
+            "```dataview",
+            "TABLE total_completions, total_tokens, status",
+            'FROM "sessoes"',
+            "SORT started DESC",
+            "LIMIT 20",
+            "```",
+            "",
+            "## Knowledge Graph",
+            "![[knowledge_graph]]",
+            "",
+        ]
+
+        content = "\n".join(lines)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        return filepath
+
 
 # ---------------------------------------------------------------------------
 # CLI entry point
@@ -996,7 +1142,7 @@ if __name__ == "__main__":
     import sys
 
     def _usage():
-        print("Usage: python -m rlm.core.obsidian_bridge [--sync|--export-all|--mocs|--graph]")
+        print("Usage: python -m rlm.core.obsidian_bridge [--sync|--export-all|--mocs|--graph|--dashboard]")
         sys.exit(1)
 
     if len(sys.argv) < 2:
@@ -1023,5 +1169,8 @@ if __name__ == "__main__":
     elif cmd == "--graph":
         path = bridge.export_knowledge_graph()
         print(f"Graph exported to {path}")
+    elif cmd == "--dashboard":
+        path = bridge.generate_dashboard()
+        print(f"Dashboard exported to {path}")
     else:
         _usage()

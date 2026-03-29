@@ -231,10 +231,18 @@ def build_full_context(
 # Main consolidation pipeline
 # ---------------------------------------------------------------------------
 
+# Threshold: score alto mas não alto o suficiente → possível conflito
+CONFLICT_SCORE_FLOOR: float = 0.55
+"""Score mínimo para considerar que dois docs falam do mesmo tema."""
+
+
 def consolidate_session(
     session_id: str,
     memory_db_path: str,
-    knowledge_base: Any,  # GlobalKnowledgeBase
+    knowledge_base: Any = None,  # GlobalKnowledgeBase
+    *,
+    kb: Any = None,
+    obsidian_bridge: Any = None,
 ) -> List[str]:
     """
     Pipeline principal: consolida nuggets de uma sessão em documentos do KB.
@@ -243,10 +251,13 @@ def consolidate_session(
         session_id: ID da sessão a consolidar.
         memory_db_path: Caminho do memory.db da sessão.
         knowledge_base: Instância de GlobalKnowledgeBase.
+        kb: Alias para knowledge_base (backward compat).
+        obsidian_bridge: ObsidianBridge instance para sinalizar conflitos.
 
     Returns:
         Lista de doc_ids criados ou atualizados no KB.
     """
+    knowledge_base = knowledge_base or kb
     try:
         # 1. Coleta nuggets
         nuggets = collect_session_nuggets(session_id, memory_db_path)
@@ -294,6 +305,22 @@ def consolidate_session(
                     _log.info(f"KB merge: '{fields['title'][:50]}' → doc existente '{existing['id']}'")
                     # Merge: atualiza documento existente
                     existing_full = knowledge_base.get_document(existing["id"])
+                elif CONFLICT_SCORE_FLOOR <= tripartite < MERGE_SIMILARITY_THRESHOLD:
+                    # Score no limiar → possível conflito semântico
+                    if obsidian_bridge is not None:
+                        try:
+                            obsidian_bridge.on_consolidation_conflict(
+                                doc_a_id=existing["id"],
+                                doc_b_id=f"new:{fields['title'][:40]}",
+                                merge_score=tripartite,
+                                divergence=(
+                                    f"Novo: {fields.get('summary', '')[:200]}\n\n"
+                                    f"Existente: {existing.get('summary', '')[:200]}"
+                                ),
+                            )
+                        except Exception:
+                            pass
+                    continue
                     if existing_full:
                         merged_context = existing_full.get("full_context", "") + "\n\n---\n\n" + full_ctx
                         merged_sessions = list(set(

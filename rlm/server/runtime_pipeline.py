@@ -229,6 +229,23 @@ def _apply_repl_injections(
                 "KB tools injection failed: %s", _exc
             )
 
+        # Vault tools — Obsidian vault search / read / corrections
+        try:
+            from rlm.tools.vault_tools import get_vault_tools
+            _vault_tools = get_vault_tools(_rlm_session)
+            for _name, _fn in _vault_tools.items():
+                repl_locals[_name] = _fn
+            if _vault_tools:
+                import logging as _logging
+                _logging.getLogger("rlm.skill_loader").info(
+                    "Vault tools injected → %s", list(_vault_tools.keys())
+                )
+        except Exception as _exc:
+            import logging as _logging
+            _logging.getLogger("rlm.skill_loader").warning(
+                "Vault tools injection failed: %s", _exc
+            )
+
     services.skill_loader.activate_all(
         services.eligible_skills,
         repl_locals,

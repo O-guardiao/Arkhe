@@ -631,3 +631,206 @@ class TestBackwardCompat:
     def test_obsidian_mirror_re_exports_bridge(self):
         from rlm.core.obsidian_mirror import ObsidianBridge
         assert ObsidianBridge is not None
+
+
+# ===========================================================================
+# 14. Consolidation Conflict Detection (Phase 2)
+# ===========================================================================
+
+
+class TestConsolidationConflict:
+
+    def test_creates_conflict_note(self, bridge, kb, vault_path):
+        doc_a = kb.add_document(title="DocA", summary="Sum A", full_context="ctxA",
+                                tags=["t"], domain="d", importance=0.5, source_sessions=["s1"])
+        doc_b = kb.add_document(title="DocB", summary="Sum B", full_context="ctxB",
+                                tags=["t"], domain="d", importance=0.5, source_sessions=["s2"])
+        path = bridge.on_consolidation_conflict(doc_a, doc_b, 0.65, "Different details")
+        assert os.path.isfile(path)
+        content = open(path, encoding="utf-8").read()
+        assert "merge_score: 0.650" in content
+        assert "DocA" in content
+        assert "DocB" in content
+        assert "Divergência" in content
+
+    def test_conflict_note_in_conflitos_dir(self, bridge, kb, vault_path):
+        doc_a = kb.add_document(title="X", summary="s", full_context="c",
+                                tags=[], domain="d", importance=0.5, source_sessions=["s"])
+        doc_b = kb.add_document(title="Y", summary="s", full_context="c",
+                                tags=[], domain="d", importance=0.5, source_sessions=["s"])
+        path = bridge.on_consolidation_conflict(doc_a, doc_b, 0.60)
+        assert os.path.dirname(path) == os.path.join(vault_path, "conflitos")
+
+    def test_conflict_without_divergence(self, bridge, kb, vault_path):
+        doc_a = kb.add_document(title="A", summary="s", full_context="c",
+                                tags=[], domain="d", importance=0.5, source_sessions=["s"])
+        doc_b = kb.add_document(title="B", summary="s", full_context="c",
+                                tags=[], domain="d", importance=0.5, source_sessions=["s"])
+        path = bridge.on_consolidation_conflict(doc_a, doc_b, 0.60)
+        content = open(path, encoding="utf-8").read()
+        assert "Divergência" not in content
+
+
+# ===========================================================================
+# 15. MCTS Archive Export (Phase 3)
+# ===========================================================================
+
+
+class TestMCTSArchive:
+
+    def test_creates_mcts_file(self, bridge, vault_path):
+        branches = [
+            {"branch_id": 0, "total_score": 3.5, "final_code": "print(1)", "steps": [1, 2]},
+            {"branch_id": 1, "total_score": 7.0, "final_code": "print(2)", "strategy_name": "greedy"},
+        ]
+        path = bridge.export_mcts_archive("sess-1234-abcd", branches)
+        assert os.path.isfile(path)
+        assert os.path.dirname(path) == os.path.join(vault_path, "mcts")
+
+    def test_mcts_frontmatter(self, bridge):
+        branches = [
+            {"branch_id": 0, "total_score": 5.0, "strategy_name": "adaptive"},
+        ]
+        path = bridge.export_mcts_archive("test-session", branches)
+        content = open(path, encoding="utf-8").read()
+        assert "session: test-session" in content
+        assert "branches: 1" in content
+        assert "best_score: 5.0" in content
+
+    def test_mcts_winner_marker(self, bridge):
+        branches = [
+            {"branch_id": 0, "total_score": 2.0},
+            {"branch_id": 1, "total_score": 9.0},
+        ]
+        path = bridge.export_mcts_archive("s1", branches)
+        content = open(path, encoding="utf-8").read()
+        assert "WINNER" in content
+
+    def test_mcts_pruned_branch(self, bridge):
+        branches = [
+            {"branch_id": 0, "total_score": 1.0, "pruned_reason": "low quality"},
+            {"branch_id": 1, "total_score": 5.0},
+        ]
+        path = bridge.export_mcts_archive("s2", branches)
+        content = open(path, encoding="utf-8").read()
+        assert "PODADO" in content
+        assert "low quality" in content
+
+    def test_mcts_mermaid_tree(self, bridge):
+        branches = [
+            {"branch_id": 0, "total_score": 3.0},
+            {"branch_id": 1, "total_score": 6.0},
+        ]
+        path = bridge.export_mcts_archive("s3", branches)
+        content = open(path, encoding="utf-8").read()
+        assert "```mermaid" in content
+        assert "graph TD" in content
+
+    def test_mcts_single_branch_no_mermaid(self, bridge):
+        branches = [{"branch_id": 0, "total_score": 5.0}]
+        path = bridge.export_mcts_archive("s4", branches)
+        content = open(path, encoding="utf-8").read()
+        assert "```mermaid" not in content
+
+
+# ===========================================================================
+# 16. Dashboard (Phase 4)
+# ===========================================================================
+
+
+class TestDashboard:
+
+    def test_creates_dashboard_file(self, bridge, vault_path):
+        path = bridge.generate_dashboard()
+        assert os.path.isfile(path)
+        assert path == os.path.join(vault_path, "_dashboard.md")
+
+    def test_dashboard_has_dataview(self, bridge):
+        path = bridge.generate_dashboard()
+        content = open(path, encoding="utf-8").read()
+        assert "```dataview" in content
+
+    def test_dashboard_stats(self, bridge, kb):
+        kb.add_document(title="T", summary="s", full_context="c",
+                        tags=[], domain="test", importance=0.5, source_sessions=["s1"])
+        path = bridge.generate_dashboard()
+        content = open(path, encoding="utf-8").read()
+        assert "Documentos ativos" in content
+
+    def test_dashboard_idempotent(self, bridge):
+        p1 = bridge.generate_dashboard()
+        p2 = bridge.generate_dashboard()
+        assert p1 == p2
+        assert os.path.isfile(p1)
+
+
+# ===========================================================================
+# 17. Vault Tools (Phase 4)
+# ===========================================================================
+
+
+class TestVaultTools:
+
+    @pytest.fixture
+    def tools(self, bridge):
+        """Simula vault tools com um fake rlm_session."""
+        from rlm.tools.vault_tools import get_vault_tools
+
+        class FakeSession:
+            _obsidian_bridge = bridge
+
+        return get_vault_tools(FakeSession())
+
+    def test_returns_four_tools(self, tools):
+        assert "vault_search" in tools
+        assert "vault_read" in tools
+        assert "vault_check_corrections" in tools
+        assert "vault_moc" in tools
+
+    def test_no_bridge_returns_empty(self):
+        from rlm.tools.vault_tools import get_vault_tools
+
+        class NoSession:
+            pass
+
+        assert get_vault_tools(NoSession()) == {}
+
+    def test_vault_search_finds_note(self, tools, bridge, vault_path, kb, sample_doc_id):
+        bridge.on_doc_created(sample_doc_id)
+        results = tools["vault_search"]("Partition", scope="conhecimento")
+        assert any("Partition" in r.get("title", "") for r in results)
+
+    def test_vault_search_invalid_scope(self, tools):
+        results = tools["vault_search"]("q", scope="invalid")
+        assert results[0].get("error")
+
+    def test_vault_search_no_results(self, tools):
+        results = tools["vault_search"]("xyznonexistent")
+        assert results[0].get("info")
+
+    def test_vault_read_existing_note(self, tools, bridge, vault_path, kb, sample_doc_id):
+        bridge.on_doc_created(sample_doc_id)
+        # Find the file first
+        conhecimento_dir = os.path.join(vault_path, "conhecimento")
+        files = os.listdir(conhecimento_dir)
+        md_files = [f for f in files if f.endswith(".md")]
+        assert md_files
+        result = tools["vault_read"](f"conhecimento/{md_files[0]}")
+        assert "content" in result
+
+    def test_vault_read_not_found(self, tools):
+        result = tools["vault_read"]("nonexistent/file.md")
+        assert "error" in result
+
+    def test_vault_read_path_traversal_blocked(self, tools):
+        result = tools["vault_read"]("../../etc/passwd")
+        assert result.get("error") == "Invalid path"
+
+    def test_vault_check_corrections(self, tools):
+        result = tools["vault_check_corrections"]()
+        assert "pending_corrections" in result
+        assert "pending_conflicts" in result
+
+    def test_vault_moc_nonexistent(self, tools):
+        result = tools["vault_moc"]("nonexistent_domain_xyz")
+        assert "error" in result
