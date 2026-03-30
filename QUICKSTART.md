@@ -1,429 +1,392 @@
-# Arkhe — Guia de Uso Pessoal (Windows)
+# Arkhe — QuickStart Seguro
 
-Guia passo-a-passo para configurar o Arkhe como assistente pessoal no Windows.
+Guia curto para colocar o Arkhe no ar sem repetir os erros mais comuns de deploy local: modelo único caro, portas expostas sem controle e daemon brigando com start manual.
 
 ---
 
-## Pré-requisitos
+## Objetivo
 
-- **Python 3.11+** instalado
-- **Chave de API** de pelo menos um provedor LLM (OpenAI, Anthropic, ou Google)
+Este guia serve para:
 
-Se o alvo for Linux, macOS ou WSL, o caminho mais rápido é o instalador one-liner:
+- subir o Arkhe localmente ou em VPS com o setup wizard atual
+- configurar roteamento de modelos por papel
+- manter API, WebSocket e rotas administrativas protegidos desde o início
+- verificar operação sem abrir a máquina inteira na internet
+
+Se você quer só instalar e experimentar, use o wizard. Se você quer expor o serviço para fora da máquina, leia a seção de segurança antes.
+
+---
+
+## Requisitos
+
+- Python 3.11 ou superior
+- uma chave de API de LLM: OpenAI, Anthropic ou Google
+- `uv` recomendado; `pip` continua suportado
+
+---
+
+## Instalação
+
+### Linux, macOS e WSL
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/O-guardiao/Arkhe/main/install.sh | bash
 ```
 
-Ele prepara o checkout em `~/.arkhe/repo` e, quando houver TTY interativo, continua direto no `arkhe setup` para você preencher chaves, modelo e opções de daemon.
+Esse fluxo:
 
-Sem TTY, ele faz bootstrap seguro com `.env` local e você abre o menu depois com `cd ~/.arkhe/repo && uv run arkhe setup`.
+- instala `uv` se necessário
+- clona ou atualiza o checkout em `~/.arkhe/repo`
+- roda `uv sync`
+- cria os wrappers `arkhe` e `rlm`
+- entra no `arkhe setup` quando existe TTY interativo
+- gera bootstrap seguro com `.env` local quando não existe TTY
 
----
-
-## 1. Instalação
+### Windows
 
 ```powershell
-# Clone ou navegue até o diretório do projeto
 cd C:\caminho\para\arkhe
-
-# Instale em modo editável
 pip install -e .
-
-# Verifique a instalação
 arkhe version
-# ou
-python -m rlm version
+```
+
+Se preferir `uv` no Windows:
+
+```powershell
+uv venv
+uv pip install -e .
+uv run arkhe version
 ```
 
 ---
 
-## 2. Configuração Inicial
+## Setup Inicial
 
-### Opção A: Wizard interativo (recomendado)
+O caminho recomendado é o wizard:
 
-```powershell
+```bash
 arkhe setup
 ```
 
-Alias legado: `rlm setup` continua válido.
+Alias legado:
 
-O wizard pergunta:
-1. Sua chave de API (OpenAI, Anthropic, etc.)
-2. Modelo padrão (gpt-4o-mini é o mais barato)
-3. Endereços do servidor (aceite os padrões)
-4. Tokens de segurança (gerados automaticamente)
-
-Resultado: arquivo `.env` criado na raiz do projeto.
-
-### Opção B: Configuração manual
-
-```powershell
-# Copie o template
-copy .env.example .env
-
-# Edite com seu editor preferido
-notepad .env
+```bash
+rlm setup
 ```
 
-Preencha no mínimo:
-```env
-OPENAI_API_KEY=sk-sua-chave-aqui
-RLM_MODEL=gpt-4o-mini
-```
+O wizard atual já cobre o que o QuickStart antigo não cobria mais:
 
-### Diagnóstico
+1. escolha do provedor LLM
+2. escolha do modelo base
+3. estratégia de modelos
+4. bind e portas da API/WebSocket
+5. geração de tokens de segurança
+6. instalação de serviço com `systemd` ou `launchd`, quando disponível
 
-```powershell
-arkhe doctor
-```
-
-Verifica tudo de uma vez: .env, API key, tokens, servidor, canais.
+Ao final, o arquivo `.env` é gravado na raiz real do projeto. Em instalação típica via one-liner em Linux, isso significa `~/.arkhe/repo/.env`.
 
 ---
 
-## 3. Iniciar o Servidor
+## Estratégia de Modelos
 
-### Modo foreground (logs ao vivo)
+O Arkhe já não precisa mais operar só com um modelo monolítico. O wizard suporta três modos:
 
-```powershell
+1. `Um único modelo`
+   Use se você quer simplicidade máxima e aceita custo maior por chamada.
+
+2. `Split recomendado`
+   Preenche automaticamente os papéis de execução.
+
+3. `Escolher por papel`
+   Configura manualmente planner, worker, evaluator, fast e minirepl.
+
+Configuração recomendada para OpenAI:
+
+```env
+OPENAI_API_KEY=sk-...
+RLM_MODEL=gpt-5.4-mini
+RLM_MODEL_PLANNER=gpt-5.4
+RLM_MODEL_WORKER=gpt-5.4-mini
+RLM_MODEL_EVALUATOR=gpt-5.4-mini
+RLM_MODEL_FAST=gpt-5.4-nano
+RLM_MODEL_MINIREPL=gpt-5-nano
+```
+
+Leitura prática:
+
+- `RLM_MODEL_PLANNER`: decide estratégia e orquestração raiz
+- `RLM_MODEL_WORKER`: faz trabalho delegado e subagentes
+- `RLM_MODEL_EVALUATOR`: crítica e validação
+- `RLM_MODEL_FAST`: verificações simples e respostas operacionais curtas
+- `RLM_MODEL_MINIREPL`: classificação barata e loops leves
+
+Se você voltar para modo de modelo único pelo wizard, os overrides `RLM_MODEL_*` são removidos do `.env` automaticamente.
+
+---
+
+## Perfil Seguro Recomendado
+
+Defaults seguros para quase todo cenário:
+
+```env
+RLM_API_HOST=127.0.0.1
+RLM_API_PORT=5000
+RLM_WS_HOST=127.0.0.1
+RLM_WS_PORT=8765
+```
+
+Não faça isso no começo:
+
+- não use `0.0.0.0` sem reverse proxy, TLS e autenticação bem definida
+- não comite `.env`
+- não reutilize o mesmo token para tudo se o servidor vai sair da máquina local
+- não rode `arkhe start` manualmente se o daemon já foi instalado e iniciado pelo wizard
+
+Tokens que devem existir em produção:
+
+```env
+RLM_WS_TOKEN=...
+RLM_INTERNAL_TOKEN=...
+RLM_ADMIN_TOKEN=...
+RLM_HOOK_TOKEN=...
+RLM_API_TOKEN=...
+```
+
+Separação correta:
+
+- `RLM_WS_TOKEN`: autenticação do WebSocket
+- `RLM_INTERNAL_TOKEN`: chamadas internas para `/webhook/{client_id}`
+- `RLM_ADMIN_TOKEN`: health, sessões, scheduler, hooks e telemetria administrativa
+- `RLM_HOOK_TOKEN`: integrações externas em `/api/hooks/...`
+- `RLM_API_TOKEN`: endpoint OpenAI-compatible em `/v1/chat/completions`
+
+Se você expôs uma chave ou token em terminal, chat, issue ou screenshot, trate como comprometido e rotacione.
+
+Para ambientes mais sensíveis, habilite aprovação antes de execução:
+
+```env
+RLM_EXEC_APPROVAL_REQUIRED=true
+# RLM_EXEC_APPROVAL_TIMEOUT=60
+```
+
+---
+
+## Subindo o Serviço
+
+### Se o wizard instalou daemon
+
+Linux:
+
+```bash
+systemctl --user status rlm
+systemctl --user restart rlm
+```
+
+macOS:
+
+```bash
+launchctl list | grep rlm
+```
+
+Nessa situação, prefira gerenciar o processo pelo serviço. Não dispare `arkhe start` por cima do daemon, ou você pode provocar disputa pela porta 5000.
+
+### Se você está rodando manualmente
+
+```bash
 arkhe start --foreground
 ```
 
-Você verá os logs no terminal. Interrompa com `Ctrl+C`.
+Ou em background:
 
-### Modo background
-
-```powershell
+```bash
 arkhe start
-```
-
-O servidor roda em background. PIDs salvos em `~/.rlm/run/`.
-
-### Verificar status
-
-```powershell
 arkhe status
 ```
 
-### Atualizar a instalação
+Para parar:
 
-```powershell
-arkhe update
-```
-
-Se você estiver fora do checkout instalado, aponte explicitamente a pasta:
-
-```powershell
-arkhe update --path $HOME/.arkhe/repo
-```
-
-Mostra:
-- PID dos processos (API e WebSocket)
-- Se estão ativos ou parados
-- URLs dos endpoints
-
-### Parar
-
-```powershell
+```bash
 arkhe stop
 ```
 
 ---
 
-## 4. Usar o WebChat
+## Validação Rápida
 
-Após `arkhe start`, abra no navegador:
+Depois do setup:
 
+```bash
+arkhe doctor
+arkhe status
 ```
-http://localhost:5000/webchat
-```
 
-Funcionalidades:
-- Chat com streaming em tempo real
-- Markdown renderizado (código, listas, títulos)
-- Sessão persistente (sobrevive a refresh)
-- Enter = enviar, Shift+Enter = nova linha
+O que validar:
+
+- `.env` foi carregado
+- chave LLM está presente
+- tokens de segurança existem
+- API está respondendo
+- WebSocket está respondendo
+- canais configurados não estão quebrados
 
 ---
 
-## 5. Usar como Biblioteca Python
+## WebChat e API
+
+Com a API no ar, abra:
+
+```text
+http://127.0.0.1:5000/webchat
+```
+
+Se você estiver atrás de proxy, publique o webchat só com autenticação e TLS.
+
+API OpenAI-compatible:
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="seu-rlm-api-token",
+    base_url="http://127.0.0.1:5000/v1",
+)
+
+response = client.chat.completions.create(
+    model="gpt-5.4-mini",
+    messages=[{"role": "user", "content": "Olá"}],
+)
+print(response.choices[0].message.content)
+```
+
+Esse endpoint exige `RLM_API_TOKEN`.
+
+---
+
+## Uso como Biblioteca Python
 
 ```python
 from rlm import RLM
 
 rlm = RLM(
     backend="openai",
-    backend_kwargs={"model_name": "gpt-4o-mini"},
+    backend_kwargs={"model_name": "gpt-5.4-mini"},
     verbose=True,
 )
 
-# Completion simples
-result = rlm.completion("Resuma as notícias de hoje")
+result = rlm.completion("Resuma as mudanças do dia")
 print(result.response)
 ```
 
-### Com sessão persistente e memória
+Com sessão persistente:
 
 ```python
 from rlm.session import RLMSession
 
 session = RLMSession(
     backend="openai",
-    backend_kwargs={"model_name": "gpt-4o-mini"},
-    memory_db_path="minha_memoria.db",
+    backend_kwargs={"model_name": "gpt-5.4-mini"},
+    memory_db_path="rlm_memory_v2.db",
 )
 
-# O agente lembra de conversas anteriores
-response = session.chat("O que decidimos ontem sobre o projeto?")
-print(response)
+print(session.chat("O que ficou pendente ontem?").response)
 ```
 
 ---
 
-## 6. Conectar Telegram
+## Canais Externos
 
-1. Crie um bot no Telegram via [@BotFather](https://t.me/BotFather)
-2. Copie o token do bot
-3. Adicione ao `.env`:
+### Telegram
 
 ```env
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+TELEGRAM_BOT_TOKEN=123456:ABC...
+RLM_ALLOWED_CHATS=123456789
 ```
 
-4. Reinicie o servidor:
+Recomendação mínima:
 
-```powershell
+- sempre preencha `RLM_ALLOWED_CHATS` em uso pessoal ou administrativo
+- não deixe bot responder a qualquer chat se ele puder executar ações operacionais
+
+Depois de editar o `.env`, reinicie o serviço.
+
+### Discord, WhatsApp e Slack
+
+Configure só depois de o `arkhe doctor` local estar limpo. Primeiro estabilize o core, depois abra superfície externa.
+
+---
+
+## Atualização
+
+Checkout git:
+
+```bash
+git pull
+pip install -e .
+```
+
+Se usa serviço:
+
+```bash
+systemctl --user restart rlm
+```
+
+Se usa processo manual:
+
+```bash
 arkhe stop
 arkhe start
 ```
 
-5. Converse com seu bot no Telegram — o Arkhe responde.
-
-Para restringir acesso apenas ao seu chat:
-```env
-RLM_ALLOWED_CHATS=seu_chat_id_aqui
-```
-
----
-
-## 7. Conectar Discord
-
-1. Crie um app no [Discord Developer Portal](https://discord.com/developers/)
-2. Copie a Public Key e App ID
-3. Adicione ao `.env`:
-
-```env
-DISCORD_APP_PUBLIC_KEY=sua_public_key
-DISCORD_APP_ID=seu_app_id
-```
-
-4. Configure o Interactions Endpoint URL no portal do Discord:
-```
-https://seu-dominio.com/discord/interactions
-```
-
----
-
-## 8. API OpenAI-Compatible
-
-O Arkhe expõe um endpoint compatível com a API da OpenAI:
-
-```env
-RLM_INTERNAL_TOKEN=token-interno-longo
-RLM_ADMIN_TOKEN=token-admin-longo
-RLM_API_TOKEN=meu-token-secreto
-```
-
-Qualquer app que use a OpenAI SDK pode ser apontada para o Arkhe:
-
-```python
-import openai
-
-client = openai.OpenAI(
-    api_key="meu-token-secreto",
-    base_url="http://localhost:5000/v1",
-)
-
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Olá!"}],
-)
-print(response.choices[0].message.content)
-```
-
----
-
-## 9. Scheduler (Tarefas Agendadas)
-
-O scheduler permite agendar tarefas que o Arkhe executa automaticamente.
-
-### Via API
+Depois rode:
 
 ```bash
-curl -X POST http://localhost:5000/scheduler/tasks \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "resumo_diario",
-    "client_id": "meu_usuario",
-    "prompt": "Pesquise as principais notícias de tecnologia de hoje e me envie um resumo",
-    "trigger_type": "cron",
-    "trigger_value": "0 9 * * 1-5"
-  }'
-```
-
-### Tipos de trigger
-
-| Tipo | Formato | Exemplo |
-|---|---|---|
-| `cron` | Expressão cron | `0 9 * * 1-5` (9h, seg-sex) |
-| `once` | ISO 8601 | `2026-03-15T10:00:00` |
-| `interval` | Segundos | `3600` (a cada hora) |
-
----
-
-## 10. Skills Disponíveis
-
-O Arkhe descobre automaticamente qual skill usar baseado na sua mensagem:
-
-| Você diz... | Skill ativada |
-|---|---|
-| "Pesquisa sobre X" | `web_search` |
-| "Lê o arquivo README.md" | `filesystem` |
-| "Roda `git status`" | `shell` |
-| "Como está o tempo?" | `weather` |
-| "O que decidimos ontem?" | `memory` |
-| "Navega até site.com" | `browser` |
-| "Envia email para..." | `email` |
-| "Agenda reunião..." | `calendar` |
-
-### Listar skills instaladas
-
-```powershell
-arkhe skill list
-```
-
-### Instalar skill externa
-
-```powershell
-arkhe skill install github:usuario/repositorio
+arkhe doctor
 ```
 
 ---
 
-## 11. Manutenção
+## Logs e Backup
 
-### Rotacionar tokens de segurança
+Logs típicos:
 
-```powershell
-arkhe token rotate
-arkhe stop && arkhe start
-```
+- `~/.rlm/logs/api.log`
+- `~/.rlm/logs/ws.log`
 
-Em produção, mantenha tokens separados:
-- `RLM_INTERNAL_TOKEN` para gateways/WebChat chamarem `/webhook/{client_id}`
-- `RLM_ADMIN_TOKEN` para `/health`, sessões, cron e telemetria
-- `RLM_HOOK_TOKEN` para integrações externas em `/api/hooks/...`
-- `RLM_API_TOKEN` para clientes OpenAI-compatible em `/v1`
-
-### Updates
+Exemplo Windows:
 
 ```powershell
-cd C:\caminho\para\arkhe
-git pull
-pip install -e .
-arkhe stop && arkhe start
-```
-
-### Logs
-
-Os logs ficam em `~/.rlm/logs/`:
-- `api.log` — servidor FastAPI
-- `ws.log` — servidor WebSocket
-
-```powershell
-# Ver logs ao vivo
 Get-Content $HOME\.rlm\logs\api.log -Wait
 ```
 
-### Backup da memória
+Backups mínimos:
 
-```powershell
-# O banco de memória fica na raiz do projeto
-copy rlm_memory_v2.db rlm_memory_v2.backup.db
-
-# O banco de sessões
-copy rlm_sessions.db rlm_sessions.backup.db
-
-# O banco do scheduler
-copy $HOME\.rlm\scheduler.db scheduler.backup.db
-```
-
----
-
-## 12. Estrutura de Arquivos
-
-```
-arkhe/
-├── .env                    ← Configuração (gerado por arkhe setup)
-├── .env.example            ← Template de referência
-├── rlm_sessions.db         ← Sessões (gerado em runtime)
-├── rlm_memory_v2.db        ← Memória persistente (gerado em runtime)
-├── rlm_states/             ← Estados de sessão (gerado em runtime)
-├── rlm/
-│   ├── __main__.py         ← Entry point (python -m rlm)
-│   ├── __init__.py         ← Exporta classe RLM
-│   ├── session.py          ← RLMSession (wrapper conversacional + memória)
-│   ├── cli/
-│   │   ├── main.py         ← CLI (arkhe setup/start/stop/doctor/...)
-│   │   ├── wizard.py       ← Wizard interativo de configuração
-│   │   └── service.py      ← Gerenciamento de processos e daemons
-│   ├── core/
-│   │   ├── rlm.py          ← Engine recursivo principal
-│   │   ├── session.py      ← SessionManager (pool SQLite)
-│   │   ├── memory_manager.py ← MultiVectorMemory (FTS5 + vetores)
-│   │   ├── supervisor.py   ← Timeout, abort, error detection
-│   │   ├── skill_loader.py ← Discovery e routing de skills
-│   │   ├── scheduler.py    ← Agendamento de tarefas
-│   │   ├── hooks.py        ← Sistema de hooks
-│   │   ├── auth.py         ← Autenticação JWT
-│   │   └── security.py     ← Sanitização e validação
-│   ├── server/
-│   │   ├── api.py          ← FastAPI principal
-│   │   ├── webchat.py      ← Chat web (SSE)
-│   │   ├── ws_server.py    ← WebSocket de observabilidade
-│   │   ├── telegram_gateway.py
-│   │   ├── discord_gateway.py
-│   │   ├── whatsapp_gateway.py
-│   │   ├── slack_gateway.py
-│   │   ├── scheduler.py    ← Scheduler standalone
-│   │   ├── openai_compat.py ← API OpenAI-compatible
-│   │   ├── webhook_dispatch.py
-│   │   └── event_router.py
-│   ├── skills/             ← 19 skills com SKILL.md
-│   ├── plugins/            ← Plugins de canal e ferramentas
-│   ├── clients/            ← Clientes LLM (OpenAI, Anthropic, etc.)
-│   ├── environments/       ← REPL sandboxes
-│   ├── tools/              ← Tools do REPL (memória, embeddings, etc.)
-│   ├── static/
-│   │   └── webchat.html    ← Interface web
-│   └── utils/              ← Parsing, prompts, etc.
-├── tests/                  ← 1070+ testes
-├── examples/               ← Exemplos de uso
-└── Makefile                ← Shortcuts de CLI
-```
+- `rlm_memory_v2.db`
+- `rlm_sessions.db`
+- `~/.rlm/scheduler.db`
+- `.env` guardado fora do repositório
 
 ---
 
 ## Troubleshooting
 
-| Problema | Solução |
-|---|---|
-| `arkhe: command not found` | Execute `pip install -e .` no diretório do projeto |
-| `python -m rlm` não funciona | Verifique se `rlm/__main__.py` existe |
-| Servidor não carrega `.env` | Certifique-se que o `.env` está na raiz do projeto |
-| API key inválida | Execute `arkhe doctor` para testar a conexão |
-| WebChat offline | Verifique `arkhe status` e se a porta 5000 está livre |
-| Telegram não responde | Verifique `TELEGRAM_BOT_TOKEN` no `.env` e reinicie |
-| Memória não funciona | O `rlm_memory_v2.db` é criado automaticamente no primeiro uso |
-| Testes travando | Exclua `test_live_llm.py` (faz chamadas reais à API) |
+| Problema | Causa provável | Ação objetiva |
+| --- | --- | --- |
+| Porta 5000 ocupada | daemon ativo + start manual | use só `systemctl --user restart rlm` ou só `arkhe start`, não ambos |
+| WebChat não abre | API fora do ar ou bind errado | rode `arkhe status` e confirme `RLM_API_HOST`/`RLM_API_PORT` |
+| OpenAI-compatible retorna 401/403 | `RLM_API_TOKEN` ausente ou errado | gere/valide token e reinicie |
+| Telegram não responde | token ausente, chat não permitido ou serviço não reiniciado | confira `TELEGRAM_BOT_TOKEN`, `RLM_ALLOWED_CHATS` e reinicie |
+| O wizard manteve configuração antiga | você escolheu `Manter valores atuais` | rode `arkhe setup` de novo e escolha `Modificar valores` |
+| O servidor responde mas usa um modelo só | `.env` sem `RLM_MODEL_*` | configure split recomendado ou manual no wizard |
+| Exposição acidental de chave/token | segredo comprometido | rotacione imediatamente |
+
+---
+
+## Regra de Ouro
+
+Para começar certo:
+
+1. use o wizard
+2. mantenha bind local
+3. separe os tokens
+4. ative split de modelos quando custo ou latência importarem
+5. só exponha o serviço depois de autenticação, proxy e TLS estarem fechados

@@ -62,7 +62,7 @@ In practical terms, Arkhe provides:
 
 ### Install
 
-Quickstart estilo one-liner para Linux, macOS e WSL:
+Quickstart one-liner para Linux, macOS e WSL:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/O-guardiao/Arkhe/main/install.sh | bash
@@ -91,7 +91,7 @@ pip install -e .
 
 O cliente Python de MCP vem incluído na instalação padrão. Isso evita falhas nas skills MCP embutidas, como `filesystem`, `playwright` e `sqlite`.
 
-### First Run (wizard interativo)
+### First Run
 
 ```bash
 arkhe setup
@@ -101,14 +101,67 @@ Se você usou o one-liner em shell interativo, o instalador já entra no `arkhe 
 
 Compatibilidade legada: `rlm setup` continua funcionando.
 
-O wizard configura:
-1. **Chave de API** — OpenAI, Anthropic ou Google
-2. **Modelo padrão** — gpt-4o-mini, gpt-4o, claude-3-5-haiku, etc.
-3. **Endereços** — API REST e WebSocket
-4. **Tokens de segurança** — gerados automaticamente
-5. **Daemon** — systemd (Linux) ou launchd (macOS)
+O wizard atual configura:
 
-Resultado: arquivo `.env` pronto para uso.
+1. **Provedor e chave de API**
+2. **Modelo base**
+3. **Estratégia de modelos**: single-model, split recomendado ou escolha por papel
+4. **Overrides por papel**: `RLM_MODEL_PLANNER`, `RLM_MODEL_WORKER`, `RLM_MODEL_EVALUATOR`, `RLM_MODEL_FAST`, `RLM_MODEL_MINIREPL`
+5. **Bind e portas** da API REST e do WebSocket
+6. **Tokens de segurança** separados por superfície
+7. **Daemon**: systemd (Linux) ou launchd (macOS), quando disponível
+
+Resultado: `.env` pronto para uso e alinhado com o serviço instalado.
+
+### Recommended model split
+
+Para OpenAI, o perfil mais útil hoje é separar capacidade por papel:
+
+```env
+OPENAI_API_KEY=sk-...
+RLM_MODEL=gpt-5.4-mini
+RLM_MODEL_PLANNER=gpt-5.4
+RLM_MODEL_WORKER=gpt-5.4-mini
+RLM_MODEL_EVALUATOR=gpt-5.4-mini
+RLM_MODEL_FAST=gpt-5.4-nano
+RLM_MODEL_MINIREPL=gpt-5-nano
+```
+
+Isso reduz custo e latência sem perder o planner forte no topo da execução.
+
+### Security baseline
+
+Defaults seguros para começar:
+
+```env
+RLM_API_HOST=127.0.0.1
+RLM_API_PORT=5000
+RLM_WS_HOST=127.0.0.1
+RLM_WS_PORT=8765
+```
+
+Não exponha `0.0.0.0` sem reverse proxy, TLS e autenticação. Não rode `arkhe start` manualmente por cima de um daemon já instalado pelo wizard. Se qualquer chave ou token foi exposto em chat, terminal compartilhado ou screenshot, rotacione imediatamente.
+
+### Health checks
+
+Depois do setup:
+
+```bash
+arkhe doctor
+arkhe status
+```
+
+Se o wizard instalou daemon, prefira:
+
+```bash
+systemctl --user restart rlm
+```
+
+em vez de subir outro processo manual por cima da mesma porta.
+
+### Full guide
+
+O guia operacional curto e atualizado está em [QUICKSTART.md](QUICKSTART.md).
 
 ### Uso como biblioteca Python
 
@@ -117,7 +170,7 @@ from rlm import RLM
 
 rlm = RLM(
     backend="openai",
-    backend_kwargs={"model_name": "gpt-4o-mini"},
+    backend_kwargs={"model_name": "gpt-5.4-mini"},
     verbose=True,
 )
 

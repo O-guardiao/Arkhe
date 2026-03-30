@@ -13,6 +13,7 @@ Execute:
 """
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import threading
 import time
@@ -763,3 +764,124 @@ class TestApiIntegration:
         from rlm.server.openai_compat import create_openai_compat_router, ChatCompletionRequest
         assert all([ExecApprovalGate, ApprovalRecord, create_webhook_router,
                     HookDispatchBody, create_openai_compat_router, ChatCompletionRequest])
+
+    def test_lifespan_uses_backend_from_env_for_session_manager(self, monkeypatch: pytest.MonkeyPatch):
+        from fastapi import FastAPI
+        from rlm.server import api
+
+        monkeypatch.setenv("RLM_BACKEND", "anthropic")
+        monkeypatch.setenv("RLM_MODEL", "claude-3-5-haiku-latest")
+        monkeypatch.setenv("RLM_WS_DISABLED", "true")
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+        captured: dict[str, object] = {}
+
+        class _FakeSessionManager:
+            def __init__(self, db_path: str, state_root: str, default_rlm_kwargs: dict[str, object], hooks: object):
+                captured["db_path"] = db_path
+                captured["state_root"] = state_root
+                captured["default_rlm_kwargs"] = default_rlm_kwargs
+                captured["hooks"] = hooks
+
+            def add_close_callback(self, callback: object) -> None:
+                captured["close_callback"] = callback
+
+            def close_all(self) -> None:
+                captured["closed"] = True
+
+        class _FakeSupervisor:
+            def __init__(self, default_config: object, session_manager: object):
+                captured["supervisor_config"] = default_config
+                captured["supervisor_session_manager"] = session_manager
+
+            def shutdown(self) -> None:
+                captured["supervisor_shutdown"] = True
+
+        class _FakePluginLoader:
+            def list_available(self) -> list[object]:
+                return []
+
+        class _FakeEventRouter:
+            def __init__(self) -> None:
+                self.routes: list[object] = []
+
+        class _FakeExecApprovalGate:
+            def __init__(self, default_timeout_s: int):
+                captured["approval_timeout"] = default_timeout_s
+
+        class _FakeSkillLoader:
+            def load_from_dir(self, _path: str) -> list[object]:
+                return []
+
+            def filter_eligible(self, skills: list[object]) -> list[object]:
+                return skills
+
+            def build_system_prompt_context(self, _skills: list[object], mode: str = "compact") -> str:
+                return mode
+
+            def deactivate_scope(self, _session_id: str) -> None:
+                return None
+
+            def deactivate_all(self) -> None:
+                captured["skills_deactivated"] = True
+
+        class _FakeScheduler:
+            def __init__(self, execute_fn: object):
+                captured["scheduler_execute_fn"] = execute_fn
+
+            def start(self) -> None:
+                captured["scheduler_started"] = True
+
+            def stop(self) -> None:
+                captured["scheduler_stopped"] = True
+
+        class _FakeDrainGuard:
+            def __init__(self, event_bus: object):
+                captured["drain_event_bus"] = event_bus
+
+            def start_draining(self) -> None:
+                captured["drain_started"] = True
+
+            def wait_active(self, timeout: int) -> None:
+                captured["drain_timeout"] = timeout
+
+        class _FakeHealthMonitor:
+            def __init__(self, event_bus: object, interval_s: float):
+                captured["health_event_bus"] = event_bus
+                captured["health_interval_s"] = interval_s
+
+            def register(self, name: str, probe: object) -> None:
+                captured["health_register"] = name
+                captured["health_probe"] = probe
+
+            def start(self) -> None:
+                captured["health_started"] = True
+
+            def dispose(self) -> None:
+                captured["health_disposed"] = True
+
+        with (
+            patch.object(api, "SessionManager", _FakeSessionManager),
+            patch.object(api, "RLMSupervisor", _FakeSupervisor),
+            patch.object(api, "PluginLoader", _FakePluginLoader),
+            patch.object(api, "EventRouter", _FakeEventRouter),
+            patch.object(api, "ExecApprovalGate", _FakeExecApprovalGate),
+            patch.object(api, "SkillLoader", _FakeSkillLoader),
+            patch.object(api, "RLMScheduler", _FakeScheduler),
+            patch.object(api, "DrainGuard", _FakeDrainGuard),
+            patch.object(api, "HealthMonitor", _FakeHealthMonitor),
+        ):
+            async def _run_lifespan() -> None:
+                app = FastAPI()
+                async with api.lifespan(app):
+                    assert captured["default_rlm_kwargs"]["backend"] == "anthropic"
+                    assert captured["default_rlm_kwargs"]["backend_kwargs"]["model_name"] == "claude-3-5-haiku-latest"
+
+            asyncio.run(_run_lifespan())
+
+        assert captured["closed"] is True
+        assert captured["supervisor_shutdown"] is True
+        assert captured["scheduler_started"] is True
+        assert captured["scheduler_stopped"] is True
+        assert captured["health_started"] is True
+        assert captured["health_disposed"] is True

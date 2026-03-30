@@ -41,6 +41,63 @@ def tmp_project(tmp_path: Path) -> Path:
     return tmp_path
 
 
+class _DummyProgress:
+    def update(self, msg: str) -> None:
+        _ = msg
+
+    def stop(self, msg: str = "") -> None:
+        _ = msg
+
+
+class _WizardTestPrompter:
+    def __init__(
+        self,
+        *,
+        selects: list[object] | None = None,
+        texts: list[str] | None = None,
+        confirms: list[bool] | None = None,
+    ) -> None:
+        self._selects = iter(selects or [])
+        self._texts = iter(texts or [])
+        self._confirms = iter(confirms or [])
+        self.notes: list[tuple[str, str]] = []
+
+    def intro(self, title: str) -> None:
+        _ = title
+
+    def outro(self, message: str) -> None:
+        _ = message
+
+    def note(self, message: str, title: str = "") -> None:
+        self.notes.append((title, message))
+
+    def select(self, message: str, options: list[dict[str, object]], initial_value: object = None) -> object:
+        _ = (message, options, initial_value)
+        return next(self._selects)
+
+    def text(
+        self,
+        message: str,
+        default: str = "",
+        placeholder: str = "",
+        password: bool = False,
+        validate: object = None,
+    ) -> str:
+        _ = (message, default, placeholder, password, validate)
+        return next(self._texts)
+
+    def confirm(self, message: str, default: bool = True) -> bool:
+        _ = (message, default)
+        try:
+            return next(self._confirms)
+        except StopIteration:
+            return default
+
+    def progress(self, label: str) -> _DummyProgress:
+        _ = label
+        return _DummyProgress()
+
+
 # =========================================================================== #
 # 1. main.py                                                                   #
 # =========================================================================== #
@@ -521,6 +578,11 @@ class TestWizardEnvIO:
         original = {
             "OPENAI_API_KEY": "sk-abc",
             "RLM_MODEL": "gpt-4o",
+            "RLM_MODEL_PLANNER": "gpt-5.4",
+            "RLM_MODEL_WORKER": "gpt-5.4-mini",
+            "RLM_MODEL_EVALUATOR": "gpt-5.4-mini",
+            "RLM_MODEL_FAST": "gpt-5.4-nano",
+            "RLM_MODEL_MINIREPL": "gpt-5-nano",
             "RLM_WS_TOKEN": secrets.token_hex(32),
             "RLM_INTERNAL_TOKEN": secrets.token_hex(32),
             "RLM_ADMIN_TOKEN": secrets.token_hex(32),
@@ -548,6 +610,23 @@ class TestWizardEnvIO:
         _write_env(tmp_env, {"RLM_MODEL": "gpt-4o"})
         loaded = _load_existing_env(tmp_env)
         assert loaded["RLM_MODEL"] == "gpt-4o"
+
+    def test_write_removes_managed_role_keys_when_returning_to_single_model(self, tmp_env: Path) -> None:
+        from rlm.cli.wizard import _load_existing_env, _write_env
+
+        tmp_env.write_text(
+            "RLM_MODEL=gpt-5.4\n"
+            "RLM_MODEL_FAST=gpt-5.4-nano\n"
+            "TELEGRAM_TOKEN=abc123\n",
+            encoding="utf-8",
+        )
+
+        _write_env(tmp_env, {"RLM_MODEL": "gpt-5.4-mini"})
+
+        loaded = _load_existing_env(tmp_env)
+        assert loaded["RLM_MODEL"] == "gpt-5.4-mini"
+        assert "RLM_MODEL_FAST" not in loaded
+        assert loaded["TELEGRAM_TOKEN"] == "abc123"
 
     def test_load_ignores_comments(self, tmp_env: Path) -> None:
         from rlm.cli.wizard import _load_existing_env
@@ -656,6 +735,23 @@ class TestWizardPrompterInterface:
         assert "127.0.0.1" in summary
         assert "1 configurados" in summary
 
+    def test_summarize_existing_config_with_role_models(self) -> None:
+        from rlm.cli.wizard import _summarize_existing_config
+
+        summary = _summarize_existing_config(
+            {
+                "RLM_MODEL": "gpt-5.4",
+                "RLM_MODEL_PLANNER": "gpt-5.4",
+                "RLM_MODEL_WORKER": "gpt-5.4-mini",
+                "RLM_MODEL_FAST": "gpt-5.4-nano",
+            }
+        )
+
+        assert "Modelo base: gpt-5.4" in summary
+        assert "Planner=gpt-5.4" in summary
+        assert "Worker=gpt-5.4-mini" in summary
+        assert "Fast=gpt-5.4-nano" in summary
+
     def test_summarize_empty_config(self) -> None:
         from rlm.cli.wizard import _summarize_existing_config
         assert "(vazio)" in _summarize_existing_config({})
@@ -671,6 +767,50 @@ class TestWizardPrompterInterface:
         from rlm.cli.wizard import run_wizard
         sig = inspect.signature(run_wizard)
         assert "flow" in sig.parameters
+
+    def test_step_llm_credentials_preserves_role_models_on_skip(self) -> None:
+        from rlm.cli.wizard import _step_llm_credentials
+
+        config = _step_llm_credentials(
+            _WizardTestPrompter(selects=["skip"]),
+            {
+                "OPENAI_API_KEY": "sk-old-key",
+                "RLM_MODEL": "gpt-5.4",
+                "RLM_MODEL_FAST": "gpt-5.4-nano",
+            },
+            "quickstart",
+        )
+
+        assert config["RLM_MODEL"] == "gpt-5.4"
+        assert config["RLM_MODEL_FAST"] == "gpt-5.4-nano"
+
+    def test_step_llm_credentials_collects_role_models(self) -> None:
+        from rlm.cli.wizard import _step_llm_credentials
+
+        prompter = _WizardTestPrompter(
+            selects=[
+                "openai",
+                "gpt-5.4",
+                "manual",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+                "gpt-5.4-mini",
+                "gpt-5.4-nano",
+                "gpt-5-nano",
+            ],
+            texts=["sk-new-key"],
+            confirms=[False],
+        )
+
+        config = _step_llm_credentials(prompter, {"RLM_MODEL": "gpt-5.4"}, "advanced")
+
+        assert config["RLM_MODEL"] == "gpt-5.4"
+        assert config["RLM_MODEL_PLANNER"] == "gpt-5.4"
+        assert config["RLM_MODEL_WORKER"] == "gpt-5.4-mini"
+        assert config["RLM_MODEL_EVALUATOR"] == "gpt-5.4-mini"
+        assert config["RLM_MODEL_FAST"] == "gpt-5.4-nano"
+        assert config["RLM_MODEL_MINIREPL"] == "gpt-5-nano"
+        assert config["OPENAI_API_KEY"] == "sk-new-key"
 
 
 # =========================================================================== #

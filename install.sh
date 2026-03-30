@@ -19,7 +19,12 @@
 #   8. Cai em `.env` seguro como fallback não interativo                        #
 #                                                                               #
 # Variáveis opcionais:                                                          #
-#   ARKHE_REPO_URL, ARKHE_INSTALL_DIR, ARKHE_BIN_DIR, ARKHE_MODEL               #
+#   ARKHE_REPO_URL, ARKHE_INSTALL_DIR, ARKHE_BIN_DIR                            #
+#   ARKHE_PROVIDER=openai|anthropic|google|custom                               #
+#   ARKHE_BACKEND=openai|anthropic|google|portkey|litellm                       #
+#   ARKHE_OPENAI_API_KEY, ARKHE_ANTHROPIC_API_KEY, ARKHE_GOOGLE_API_KEY         #
+#   ARKHE_MODEL, ARKHE_MODEL_PLANNER, ARKHE_MODEL_WORKER                        #
+#   ARKHE_MODEL_EVALUATOR, ARKHE_MODEL_FAST, ARKHE_MODEL_MINIREPL               #
 #   ARKHE_SKIP_WIZARD=1 para pular o menu interativo                            #
 # =============================================================================#
 
@@ -36,12 +41,194 @@ REPO_URL="${ARKHE_REPO_URL:-https://github.com/O-guardiao/Arkhe.git}"
 INSTALL_BASE="${ARKHE_INSTALL_DIR:-$HOME/.arkhe}"
 CLONE_DIR="$INSTALL_BASE/repo"
 WRAPPER_DIR="${ARKHE_BIN_DIR:-$HOME/.local/bin}"
-DEFAULT_MODEL="${ARKHE_MODEL:-gpt-4o-mini}"
+DEFAULT_PROVIDER_RAW="${ARKHE_PROVIDER:-openai}"
+DEFAULT_BACKEND_RAW="${ARKHE_BACKEND:-}"
+
+BOOTSTRAP_PROVIDER=""
+BOOTSTRAP_BACKEND=""
+BOOTSTRAP_MODEL=""
+BOOTSTRAP_MODEL_PLANNER=""
+BOOTSTRAP_MODEL_WORKER=""
+BOOTSTRAP_MODEL_EVALUATOR=""
+BOOTSTRAP_MODEL_FAST=""
+BOOTSTRAP_MODEL_MINIREPL=""
+BOOTSTRAP_OPENAI_KEY=""
+BOOTSTRAP_ANTHROPIC_KEY=""
+BOOTSTRAP_GOOGLE_KEY=""
+BOOTSTRAP_ENV_CREATED=0
 
 ok()   { echo -e "${GREEN}✓${RESET}  $*"; }
 warn() { echo -e "${YELLOW}⚠${RESET}  $*"; }
 err()  { echo -e "${RED}✗ Erro:${RESET} $*" >&2; exit 1; }
 info() { echo -e "${CYAN}→${RESET}  $*"; }
+
+normalize_provider() {
+  local provider_raw="${1:-openai}"
+  case "$provider_raw" in
+    openai|anthropic|google|custom)
+      echo "$provider_raw"
+      ;;
+    *)
+      warn "ARKHE_PROVIDER=$provider_raw não é reconhecido. Usando openai no bootstrap."
+      echo "openai"
+      ;;
+  esac
+}
+
+resolve_backend() {
+  local backend_raw="${1:-}"
+  local provider="$2"
+  if [ -n "$backend_raw" ]; then
+    echo "$backend_raw"
+    return
+  fi
+  if [ "$provider" = "custom" ]; then
+    echo "openai"
+    return
+  fi
+  echo "$provider"
+}
+
+set_bootstrap_model_defaults() {
+  local provider="$1"
+  local default_model=""
+  local default_planner=""
+  local default_worker=""
+  local default_evaluator=""
+  local default_fast=""
+  local default_minirepl=""
+
+  case "$provider" in
+    anthropic)
+      default_model="claude-3-5-haiku-latest"
+      default_planner="claude-sonnet-4-20250514"
+      default_worker="claude-3-5-haiku-latest"
+      default_evaluator="claude-3-5-haiku-latest"
+      default_fast="claude-3-5-haiku-latest"
+      default_minirepl="claude-3-5-haiku-latest"
+      ;;
+    google)
+      default_model="gemini-2.5-flash"
+      default_planner="gemini-2.5-pro"
+      default_worker="gemini-2.5-flash"
+      default_evaluator="gemini-2.5-flash"
+      default_fast="gemini-2.5-flash"
+      default_minirepl="gemini-2.5-flash"
+      ;;
+    custom)
+      default_model="gpt-5.4-mini"
+      default_planner="$default_model"
+      default_worker="$default_model"
+      default_evaluator="$default_model"
+      default_fast="$default_model"
+      default_minirepl="$default_model"
+      ;;
+    *)
+      default_model="gpt-5.4-mini"
+      default_planner="gpt-5.4"
+      default_worker="gpt-5.4-mini"
+      default_evaluator="gpt-5.4-mini"
+      default_fast="gpt-5.4-nano"
+      default_minirepl="gpt-5-nano"
+      ;;
+  esac
+
+  BOOTSTRAP_MODEL="${ARKHE_MODEL:-$default_model}"
+  BOOTSTRAP_MODEL_PLANNER="${ARKHE_MODEL_PLANNER:-$default_planner}"
+  BOOTSTRAP_MODEL_WORKER="${ARKHE_MODEL_WORKER:-$default_worker}"
+  BOOTSTRAP_MODEL_EVALUATOR="${ARKHE_MODEL_EVALUATOR:-$default_evaluator}"
+  BOOTSTRAP_MODEL_FAST="${ARKHE_MODEL_FAST:-$default_fast}"
+  BOOTSTRAP_MODEL_MINIREPL="${ARKHE_MODEL_MINIREPL:-$default_minirepl}"
+
+  if [ "$provider" = "custom" ]; then
+    BOOTSTRAP_MODEL_PLANNER="${ARKHE_MODEL_PLANNER:-$BOOTSTRAP_MODEL}"
+    BOOTSTRAP_MODEL_WORKER="${ARKHE_MODEL_WORKER:-$BOOTSTRAP_MODEL}"
+    BOOTSTRAP_MODEL_EVALUATOR="${ARKHE_MODEL_EVALUATOR:-$BOOTSTRAP_MODEL}"
+    BOOTSTRAP_MODEL_FAST="${ARKHE_MODEL_FAST:-$BOOTSTRAP_MODEL}"
+    BOOTSTRAP_MODEL_MINIREPL="${ARKHE_MODEL_MINIREPL:-$BOOTSTRAP_MODEL}"
+  fi
+}
+
+set_bootstrap_provider_keys() {
+  BOOTSTRAP_OPENAI_KEY="${OPENAI_API_KEY:-${ARKHE_OPENAI_API_KEY:-}}"
+  BOOTSTRAP_ANTHROPIC_KEY="${ANTHROPIC_API_KEY:-${ARKHE_ANTHROPIC_API_KEY:-}}"
+  BOOTSTRAP_GOOGLE_KEY="${GOOGLE_API_KEY:-${GEMINI_API_KEY:-${ARKHE_GOOGLE_API_KEY:-${ARKHE_GEMINI_API_KEY:-}}}}"
+}
+
+prompt_primary_provider_key() {
+  local provider="$1"
+  case "$provider" in
+    anthropic)
+      if [ -z "$BOOTSTRAP_ANTHROPIC_KEY" ]; then
+        BOOTSTRAP_ANTHROPIC_KEY=$(prompt_via_tty "ANTHROPIC_API_KEY (opcional agora; Enter para preencher depois): " true)
+      fi
+      ;;
+    google)
+      if [ -z "$BOOTSTRAP_GOOGLE_KEY" ]; then
+        BOOTSTRAP_GOOGLE_KEY=$(prompt_via_tty "GOOGLE_API_KEY (opcional agora; Enter para preencher depois): " true)
+      fi
+      ;;
+    *)
+      if [ -z "$BOOTSTRAP_OPENAI_KEY" ]; then
+        BOOTSTRAP_OPENAI_KEY=$(prompt_via_tty "OPENAI_API_KEY (opcional agora; Enter para preencher depois): " true)
+      fi
+      ;;
+  esac
+}
+
+env_has_provider_key() {
+  local env_path="$1"
+  awk -F= '/^(OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY)=/ { if (length($2) > 0) found=1 } END { exit found ? 0 : 1 }' "$env_path"
+}
+
+warn_if_legacy_env() {
+  local env_path="$1"
+  local missing_keys=()
+  local key
+  for key in RLM_MODEL_PLANNER RLM_MODEL_WORKER RLM_MODEL_EVALUATOR RLM_MODEL_FAST RLM_MODEL_MINIREPL; do
+    if ! grep -q "^${key}=" "$env_path" 2>/dev/null; then
+      missing_keys+=("$key")
+    fi
+  done
+
+  if [ "${#missing_keys[@]}" -gt 0 ]; then
+    warn "O .env existente parece legado e não tem split completo de modelos (${missing_keys[*]}). Rode 'uv run arkhe setup' e escolha split recomendado ou manual."
+  fi
+}
+
+detect_installed_daemon() {
+  local project_root="$1"
+  local systemd_unit="$HOME/.config/systemd/user/rlm.service"
+  local launchd_plist="$HOME/Library/LaunchAgents/com.rlm.server.plist"
+
+  if [ -f "$systemd_unit" ] && grep -Fq "WorkingDirectory=$project_root" "$systemd_unit" 2>/dev/null; then
+    echo "systemd"
+    return
+  fi
+
+  if [ -f "$launchd_plist" ] && grep -Fq "<string>$project_root</string>" "$launchd_plist" 2>/dev/null; then
+    echo "launchd"
+    return
+  fi
+
+  echo ""
+}
+
+daemon_status_hint() {
+  case "$1" in
+    systemd) echo "systemctl --user status rlm" ;;
+    launchd) echo "launchctl list com.rlm.server" ;;
+    *) echo "" ;;
+  esac
+}
+
+daemon_restart_hint() {
+  case "$1" in
+    systemd) echo "systemctl --user restart rlm" ;;
+    launchd) echo "launchctl kickstart -k gui/\$(id -u)/com.rlm.server" ;;
+    *) echo "" ;;
+  esac
+}
 
 banner() {
   echo
@@ -169,26 +356,30 @@ create_env_file() {
   local py_bin="$1"
   local env_path="$2"
   local project_root="$3"
-  local openai_key="${OPENAI_API_KEY:-${ARKHE_OPENAI_API_KEY:-}}"
 
   if [ -f "$env_path" ]; then
     warn ".env já existe em $env_path. Mantendo o arquivo atual."
+    warn_if_legacy_env "$env_path"
     return
   fi
 
-  if [ -z "$openai_key" ]; then
-    openai_key=$(prompt_via_tty "OPENAI_API_KEY (opcional agora; Enter para preencher depois): " true)
-  fi
+  prompt_primary_provider_key "$BOOTSTRAP_PROVIDER"
 
   mkdir -p "$(dirname "$env_path")"
   cat > "$env_path" <<EOF
 # Arkhe — gerado por install.sh
 
 # --- LLM ---
-OPENAI_API_KEY=$openai_key
-ANTHROPIC_API_KEY=
-GOOGLE_API_KEY=
-RLM_MODEL=$DEFAULT_MODEL
+OPENAI_API_KEY=$BOOTSTRAP_OPENAI_KEY
+ANTHROPIC_API_KEY=$BOOTSTRAP_ANTHROPIC_KEY
+GOOGLE_API_KEY=$BOOTSTRAP_GOOGLE_KEY
+RLM_BACKEND=$BOOTSTRAP_BACKEND
+RLM_MODEL=$BOOTSTRAP_MODEL
+RLM_MODEL_PLANNER=$BOOTSTRAP_MODEL_PLANNER
+RLM_MODEL_WORKER=$BOOTSTRAP_MODEL_WORKER
+RLM_MODEL_EVALUATOR=$BOOTSTRAP_MODEL_EVALUATOR
+RLM_MODEL_FAST=$BOOTSTRAP_MODEL_FAST
+RLM_MODEL_MINIREPL=$BOOTSTRAP_MODEL_MINIREPL
 
 # --- Servidor ---
 RLM_API_HOST=127.0.0.1
@@ -203,12 +394,13 @@ RLM_ADMIN_TOKEN=$(generate_token "$py_bin")
 RLM_HOOK_TOKEN=$(generate_token "$py_bin")
 RLM_API_TOKEN=$(generate_token "$py_bin")
 EOF
+  BOOTSTRAP_ENV_CREATED=1
   ok ".env criado em $env_path"
 
-  if [ -z "$openai_key" ]; then
-    warn "Nenhuma chave de provedor foi configurada. Edite $env_path e preencha OPENAI_API_KEY, ANTHROPIC_API_KEY ou GOOGLE_API_KEY."
+  if ! env_has_provider_key "$env_path"; then
+    warn "Nenhuma chave de provedor foi configurada. Edite $env_path ou rode 'uv run arkhe setup' antes de iniciar o runtime."
   else
-    ok "Chave inicial inserida no .env"
+    ok "Bootstrap gerado com provider=$BOOTSTRAP_PROVIDER e split recomendado de modelos"
   fi
 
   if [ ! -f "$project_root/.env.example" ]; then
@@ -283,6 +475,11 @@ main() {
   fi
   ok "Python: $("$py_bin" --version)"
 
+  BOOTSTRAP_PROVIDER=$(normalize_provider "$DEFAULT_PROVIDER_RAW")
+  BOOTSTRAP_BACKEND=$(resolve_backend "$DEFAULT_BACKEND_RAW" "$BOOTSTRAP_PROVIDER")
+  set_bootstrap_model_defaults "$BOOTSTRAP_PROVIDER"
+  set_bootstrap_provider_keys
+
   export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
   if ! command -v uv >/dev/null 2>&1; then
     install_uv
@@ -297,13 +494,30 @@ main() {
   sync_project "$project_root"
   install_wrappers "$project_root"
   create_env_file "$py_bin" "$project_root/.env" "$project_root"
-  run_setup_wizard "$project_root" || true
+  local wizard_completed=0
+  if run_setup_wizard "$project_root"; then
+    wizard_completed=1
+  fi
 
   local arkhe_cmd="$WRAPPER_DIR/arkhe"
   if "$arkhe_cmd" version >/dev/null 2>&1; then
     ok "CLI validada: $("$arkhe_cmd" version)"
   else
     warn "Não foi possível validar o wrapper automaticamente. Tente: $arkhe_cmd version"
+  fi
+
+  local daemon_manager
+  daemon_manager=$(detect_installed_daemon "$project_root")
+  local daemon_status_cmd=""
+  local daemon_restart_cmd=""
+  if [ -n "$daemon_manager" ]; then
+    daemon_status_cmd=$(daemon_status_hint "$daemon_manager")
+    daemon_restart_cmd=$(daemon_restart_hint "$daemon_manager")
+  fi
+
+  local has_provider_key=0
+  if env_has_provider_key "$project_root/.env"; then
+    has_provider_key=1
   fi
 
   echo
@@ -314,11 +528,31 @@ main() {
   echo -e "  Projeto:      ${CYAN}$project_root${RESET}"
   echo -e "  Configuração: ${CYAN}$project_root/.env${RESET}"
   echo -e "  CLI:          ${CYAN}$arkhe_cmd${RESET}"
+  if [ "$BOOTSTRAP_ENV_CREATED" -eq 1 ]; then
+    echo -e "  Provider:     ${CYAN}$BOOTSTRAP_PROVIDER${RESET}"
+  fi
   echo
-  echo -e "  ${CYAN}1.${RESET} Se o wizard não abriu, execute ${CYAN}(cd $project_root && uv run arkhe setup)${RESET}"
-  echo -e "  ${CYAN}2.${RESET} Inicie com ${CYAN}$arkhe_cmd start --foreground${RESET}"
-  echo -e "  ${CYAN}3.${RESET} Rode ${CYAN}$arkhe_cmd doctor${RESET} para validar a instalação"
-  echo -e "  ${CYAN}4.${RESET} Use ${CYAN}ARKHE_SKIP_WIZARD=1${RESET} apenas para bootstrap não interativo"
+  if [ "$wizard_completed" -eq 0 ]; then
+    echo -e "  ${CYAN}1.${RESET} Se o wizard não abriu, execute ${CYAN}(cd $project_root && uv run arkhe setup)${RESET}"
+    echo -e "  ${CYAN}2.${RESET} Não inicie o runtime só com o bootstrap; revise provider, modelos e tokens primeiro"
+    echo -e "  ${CYAN}3.${RESET} Se você automatiza instalação, use ${CYAN}ARKHE_SKIP_WIZARD=1${RESET} apenas para preparar o checkout e depois finalize a configuração do .env"
+  else
+    echo -e "  ${CYAN}1.${RESET} Revise ou ajuste depois com ${CYAN}(cd $project_root && uv run arkhe setup)${RESET}"
+
+    if [ "$has_provider_key" -eq 0 ]; then
+      echo -e "  ${CYAN}2.${RESET} Preencha uma chave de provedor no ${CYAN}$project_root/.env${RESET} antes de iniciar o runtime"
+      echo -e "  ${CYAN}3.${RESET} Depois disso, revise o setup com ${CYAN}(cd $project_root && uv run arkhe setup)${RESET} ou inicie manualmente conforme seu modo de operação"
+    elif [ -n "$daemon_manager" ]; then
+      echo -e "  ${CYAN}2.${RESET} O wizard deixou um daemon ${CYAN}$daemon_manager${RESET} instalado; verifique com ${CYAN}$daemon_status_cmd${RESET}"
+      echo -e "  ${CYAN}3.${RESET} Se alterar o .env, reaplique com ${CYAN}$daemon_restart_cmd${RESET}"
+    else
+      echo -e "  ${CYAN}2.${RESET} Inicie manualmente com ${CYAN}$arkhe_cmd start --foreground${RESET}"
+      echo -e "  ${CYAN}3.${RESET} Use ${CYAN}$arkhe_cmd status${RESET} para validar o runtime"
+    fi
+  fi
+
+  echo -e "  ${CYAN}4.${RESET} Rode ${CYAN}$arkhe_cmd doctor${RESET} para validar a instalação"
+  echo -e "  ${CYAN}5.${RESET} Use ${CYAN}ARKHE_SKIP_WIZARD=1${RESET} apenas para bootstrap não interativo"
   echo
 }
 

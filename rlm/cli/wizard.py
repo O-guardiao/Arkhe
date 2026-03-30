@@ -367,6 +367,92 @@ class _Env:
         return shutil.which(name)
 
 
+_LLM_SECTION_KEYS = [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+    "RLM_MODEL",
+    "RLM_MODEL_PLANNER",
+    "RLM_MODEL_WORKER",
+    "RLM_MODEL_EVALUATOR",
+    "RLM_MODEL_FAST",
+    "RLM_MODEL_MINIREPL",
+]
+
+_SERVER_SECTION_KEYS = ["RLM_API_HOST", "RLM_API_PORT", "RLM_WS_HOST", "RLM_WS_PORT"]
+
+_SECURITY_SECTION_KEYS = [
+    "RLM_WS_TOKEN",
+    "RLM_INTERNAL_TOKEN",
+    "RLM_ADMIN_TOKEN",
+    "RLM_HOOK_TOKEN",
+    "RLM_API_TOKEN",
+]
+
+_MANAGED_ENV_SECTIONS = [
+    ("# --- LLM ---", _LLM_SECTION_KEYS),
+    ("# --- Servidor ---", _SERVER_SECTION_KEYS),
+    ("# --- Segurança ---", _SECURITY_SECTION_KEYS),
+]
+
+_MANAGED_ENV_KEYS = {
+    key
+    for _section_title, keys in _MANAGED_ENV_SECTIONS
+    for key in keys
+}
+
+_MODEL_ROLE_SPECS = [
+    ("RLM_MODEL_PLANNER", "Planner", "orquestração raiz"),
+    ("RLM_MODEL_WORKER", "Worker", "subagentes e delegação"),
+    ("RLM_MODEL_EVALUATOR", "Evaluator", "crítica e validação"),
+    ("RLM_MODEL_FAST", "Fast", "fast-path e respostas operacionais"),
+    ("RLM_MODEL_MINIREPL", "MiniREPL", "classificação e loops baratos"),
+]
+
+_PROVIDER_MODEL_OPTIONS: dict[str, list[dict[str, str]]] = {
+    "openai": [
+        {"value": "gpt-5.4-mini", "label": "gpt-5.4-mini", "hint": "equilíbrio custo/qualidade (recomendado)"},
+        {"value": "gpt-5.4", "label": "gpt-5.4", "hint": "mais capaz para planejamento"},
+        {"value": "gpt-5.4-nano", "label": "gpt-5.4-nano", "hint": "rápido e barato para fast-path"},
+        {"value": "gpt-5-nano", "label": "gpt-5-nano", "hint": "mínimo custo para tarefas curtas"},
+        {"value": "gpt-4o-mini", "label": "gpt-4o-mini", "hint": "fallback estável e barato"},
+        {"value": "gpt-4o", "label": "gpt-4o", "hint": "legado multimodal"},
+        {"value": "o3-mini", "label": "o3-mini", "hint": "raciocínio avançado"},
+    ],
+    "anthropic": [
+        {"value": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4", "hint": "equilíbrio custo/qualidade"},
+        {"value": "claude-3-5-haiku-latest", "label": "Claude 3.5 Haiku", "hint": "rápido e barato"},
+        {"value": "claude-opus-4-20250514", "label": "Claude Opus 4", "hint": "máxima capacidade"},
+    ],
+    "google": [
+        {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "hint": "rápido"},
+        {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "hint": "avançado"},
+    ],
+    "custom": [],
+}
+
+_PROVIDER_ROLE_DEFAULTS: dict[str, dict[str, str]] = {
+    "openai": {
+        "RLM_MODEL_WORKER": "gpt-5.4-mini",
+        "RLM_MODEL_EVALUATOR": "gpt-5.4-mini",
+        "RLM_MODEL_FAST": "gpt-5.4-nano",
+        "RLM_MODEL_MINIREPL": "gpt-5-nano",
+    },
+    "anthropic": {
+        "RLM_MODEL_WORKER": "claude-3-5-haiku-latest",
+        "RLM_MODEL_EVALUATOR": "claude-3-5-haiku-latest",
+        "RLM_MODEL_FAST": "claude-3-5-haiku-latest",
+        "RLM_MODEL_MINIREPL": "claude-3-5-haiku-latest",
+    },
+    "google": {
+        "RLM_MODEL_WORKER": "gemini-2.5-flash",
+        "RLM_MODEL_EVALUATOR": "gemini-2.5-flash",
+        "RLM_MODEL_FAST": "gemini-2.5-flash",
+        "RLM_MODEL_MINIREPL": "gemini-2.5-flash",
+    },
+}
+
+
 # ═══════════════════════════════════════════════════════════════════════════ #
 # Helpers (.env I/O)                                                         #
 # ═══════════════════════════════════════════════════════════════════════════ #
@@ -395,7 +481,6 @@ def _load_existing_env(path: Path) -> dict[str, str]:
 
 def _write_env(path: Path, values: dict[str, str]) -> None:
     """Escreve (ou atualiza) arquivo .env, preservando entradas não-RLM."""
-    existing: dict[str, str] = {}
     extra_lines: list[str] = []
 
     if path.exists():
@@ -407,30 +492,14 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
             if "=" in stripped:
                 k, _, v = stripped.partition("=")
                 k = k.strip()
-                if k not in values:          # mantém chaves não gerenciadas
-                    existing[k] = v.strip()
+                if k not in _MANAGED_ENV_KEYS:
                     extra_lines.append(line)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = ["# RLM — gerado por `rlm setup`", ""]
 
     # Chaves gerenciadas pelo wizard
-    section_order = [
-        ("# --- LLM ---", ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "RLM_MODEL"]),
-        ("# --- Servidor ---", ["RLM_API_HOST", "RLM_API_PORT", "RLM_WS_HOST", "RLM_WS_PORT"]),
-        (
-            "# --- Segurança ---",
-            [
-                "RLM_WS_TOKEN",
-                "RLM_INTERNAL_TOKEN",
-                "RLM_ADMIN_TOKEN",
-                "RLM_HOOK_TOKEN",
-                "RLM_API_TOKEN",
-            ],
-        ),
-    ]
-
-    for section_title, keys in section_order:
+    for section_title, keys in _MANAGED_ENV_SECTIONS:
         written = False
         for k in keys:
             if k in values:
@@ -461,6 +530,75 @@ def _test_openai_key(api_key: str) -> bool:
         return False
 
 
+def _get_model_options(provider: str) -> list[dict[str, str]]:
+    """Retorna catálogo de modelos do provider com opção manual embutida."""
+    options = [dict(option) for option in _PROVIDER_MODEL_OPTIONS.get(provider, _PROVIDER_MODEL_OPTIONS["custom"])]
+    if not any(option["value"] == "custom" for option in options):
+        options.append(
+            {
+                "value": "custom",
+                "label": "Digitar nome do modelo",
+                "hint": "informar manualmente",
+            }
+        )
+    return options
+
+
+def _prompt_model_name(
+    p: WizardPrompter,
+    provider: str,
+    message: str,
+    default: str,
+    options: list[dict[str, str]],
+) -> str:
+    """Seleciona um modelo do catálogo ou aceita entrada manual."""
+    if provider == "custom":
+        return p.text(
+            message,
+            default=default,
+            placeholder="ex: gpt-5.4-mini, claude-sonnet-4 ou @openai/gpt-5-nano",
+        )
+
+    option_values = {option["value"] for option in options}
+    initial_value = default if default in option_values else "custom"
+    selected = p.select(message, options=options, initial_value=initial_value)
+    if selected == "custom":
+        return p.text(
+            f"{message} (manual)",
+            default=default,
+            placeholder="ex: gpt-5.4-mini, claude-sonnet-4 ou @openai/gpt-5-nano",
+        )
+    return str(selected)
+
+
+def _build_role_model_defaults(
+    existing: dict[str, str],
+    provider: str,
+    base_model: str,
+) -> dict[str, str]:
+    """Monta defaults para os papéis de modelo usando base, existing e presets."""
+    provider_defaults = _PROVIDER_ROLE_DEFAULTS.get(provider, {})
+    worker_default = existing.get("RLM_MODEL_WORKER") or provider_defaults.get("RLM_MODEL_WORKER") or base_model
+    fast_default = existing.get("RLM_MODEL_FAST") or provider_defaults.get("RLM_MODEL_FAST") or worker_default
+    return {
+        "RLM_MODEL_PLANNER": existing.get("RLM_MODEL_PLANNER") or base_model,
+        "RLM_MODEL_WORKER": worker_default,
+        "RLM_MODEL_EVALUATOR": existing.get("RLM_MODEL_EVALUATOR") or provider_defaults.get("RLM_MODEL_EVALUATOR") or worker_default,
+        "RLM_MODEL_FAST": fast_default,
+        "RLM_MODEL_MINIREPL": existing.get("RLM_MODEL_MINIREPL") or provider_defaults.get("RLM_MODEL_MINIREPL") or fast_default,
+    }
+
+
+def _format_role_model_summary(values: dict[str, str]) -> str:
+    """Gera resumo compacto de roteamento por papel."""
+    parts: list[str] = []
+    for env_name, label, _description in _MODEL_ROLE_SPECS:
+        model_name = values.get(env_name)
+        if model_name:
+            parts.append(f"{label}={model_name}")
+    return "  • " + "\n  • ".join(parts) if parts else ""
+
+
 def _summarize_existing_config(existing: dict[str, str]) -> str:
     """Gera resumo textual da config existente para exibição."""
     lines: list[str] = []
@@ -470,7 +608,10 @@ def _summarize_existing_config(existing: dict[str, str]) -> str:
     if existing.get("ANTHROPIC_API_KEY"):
         lines.append(f"  • Anthropic API Key: …{existing['ANTHROPIC_API_KEY'][-6:]}")
     if existing.get("RLM_MODEL"):
-        lines.append(f"  • Modelo: {existing['RLM_MODEL']}")
+        lines.append(f"  • Modelo base: {existing['RLM_MODEL']}")
+    role_summary = _format_role_model_summary(existing)
+    if role_summary:
+        lines.append(role_summary)
     if existing.get("RLM_API_HOST"):
         lines.append(
             f"  • API: {existing.get('RLM_API_HOST', '?')}:{existing.get('RLM_API_PORT', '?')}"
@@ -727,7 +868,7 @@ def _step_llm_credentials(
     provider = p.select(
         "Provedor LLM",
         options=[
-            {"value": "openai", "label": "OpenAI", "hint": "GPT-4o, GPT-4o-mini"},
+            {"value": "openai", "label": "OpenAI", "hint": "GPT-5.4, mini, nano"},
             {"value": "anthropic", "label": "Anthropic", "hint": "Claude 3.5, Claude 4"},
             {"value": "google", "label": "Google AI", "hint": "Gemini Pro, Gemini Flash"},
             {"value": "custom", "label": "Outro / OpenAI-compatível", "hint": "LM Studio, Ollama, etc."},
@@ -738,55 +879,65 @@ def _step_llm_credentials(
 
     if provider == "skip":
         # Mantém existentes se houver
-        for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "RLM_MODEL"):
+        for k in _LLM_SECTION_KEYS:
             if existing.get(k):
                 config[k] = existing[k]
         return config
 
     # Modelo
-    model_options = {
-        "openai": [
-            {"value": "gpt-4o-mini", "label": "gpt-4o-mini", "hint": "rápido e barato (recomendado)"},
-            {"value": "gpt-4o", "label": "gpt-4o", "hint": "mais capaz, mais caro"},
-            {"value": "gpt-4.1-mini", "label": "gpt-4.1-mini", "hint": "nova geração"},
-            {"value": "o3-mini", "label": "o3-mini", "hint": "raciocínio avançado"},
-        ],
-        "anthropic": [
-            {"value": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4", "hint": "equilíbrio custo/qualidade"},
-            {"value": "claude-3-5-haiku-latest", "label": "Claude 3.5 Haiku", "hint": "rápido e barato"},
-            {"value": "claude-opus-4-20250514", "label": "Claude Opus 4", "hint": "máxima capacidade"},
-        ],
-        "google": [
-            {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "hint": "rápido"},
-            {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "hint": "avançado"},
-        ],
-        "custom": [
-            {"value": "custom", "label": "Digitar nome do modelo", "hint": "qualquer modelo compatível"},
-        ],
-    }
-
-    models = model_options.get(provider, model_options["custom"])
+    models = _get_model_options(provider)
     existing_model = existing.get("RLM_MODEL", "")
 
     if flow == "quickstart" and provider != "custom":
-        # QuickStart: usa primeiro modelo (recomendado) automaticamente
-        selected_model = models[0]["value"]
+        # QuickStart: usa existente ou primeiro modelo recomendado automaticamente
+        selected_model = existing_model or models[0]["value"]
         p.note(f"Modelo selecionado automaticamente: [bold]{selected_model}[/]", title="QuickStart")
     else:
-        selected_model = p.select(
+        selected_model = _prompt_model_name(
+            p,
+            provider,
             "Modelo padrão",
-            options=models,
-            initial_value=existing_model if existing_model else None,
-        )
-
-    if selected_model == "custom":
-        selected_model = p.text(
-            "Nome do modelo",
-            default=existing_model or "gpt-4o-mini",
-            placeholder="ex: mistral-7b, llama-3-70b",
+            existing_model,
+            models,
         )
 
     config["RLM_MODEL"] = selected_model
+
+    has_role_models = any(existing.get(env_name) for env_name, _label, _description in _MODEL_ROLE_SPECS)
+    route_mode_default = "single" if flow == "quickstart" else "recommended"
+    if has_role_models:
+        route_mode_default = "manual"
+
+    route_mode = p.select(
+        "Estratégia de modelos",
+        options=[
+            {"value": "single", "label": "Um único modelo", "hint": "usa apenas RLM_MODEL e limpa overrides antigos"},
+            {"value": "recommended", "label": "Split recomendado", "hint": "preenche planner, worker, fast e minirepl automaticamente"},
+            {"value": "manual", "label": "Escolher por papel", "hint": "configurar planner, worker, evaluator, fast e minirepl"},
+        ],
+        initial_value=route_mode_default,
+    )
+
+    role_defaults = _build_role_model_defaults(existing, provider, selected_model)
+    if route_mode == "recommended":
+        config.update(role_defaults)
+        p.note(_format_role_model_summary(role_defaults), title="Modelos por papel")
+    elif route_mode == "manual":
+        for env_name, label, description in _MODEL_ROLE_SPECS:
+            config[env_name] = _prompt_model_name(
+                p,
+                provider,
+                f"Modelo para {label} ({description})",
+                role_defaults[env_name],
+                models,
+            )
+        p.note(_format_role_model_summary(config), title="Modelos por papel")
+    else:
+        p.note(
+            f"  • Todos os papéis usarão [bold]{selected_model}[/]\n"
+            "  • Overrides RLM_MODEL_* antigos serão removidos ao salvar",
+            title="Modelos",
+        )
 
     # API Key
     key_map = {
