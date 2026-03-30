@@ -143,7 +143,7 @@ de mensagens e memória persistente**.
 | `sif.py` | SIF (Structured Iterative Feedback): loop de feedback estruturado para code review |
 | `mcp_client.py` | Cliente MCP: conecta ao servidor MCP e expõe tools como funções REPL |
 | `structured_log.py` | Logger estruturado JSON para análise de execução |
-| `optimized.py` | Parser de código otimizado (`rlm_rust` → fallback Python) |
+| `optimized.py` | Backend otimizado em Python para parsing, transporte e mensagens LM |
 
 #### `rlm/cli/` — Interface de linha de comando
 | Arquivo | Propósito |
@@ -649,7 +649,7 @@ As evoluções foram numeradas no código via comentários como `# Evolution N` 
 | **Fase 10** | Codebase Mode | `tools/codebase.py`, `RLM_CODE_SYSTEM_PROMPT`, auto-detect diretório |
 | **Fase 11** | Sub-RLM factory | `core/sub_rlm.py`, `make_sub_rlm_fn()` |
 | **Fase 11.2** | Vision/Audio | `build_multimodal_user_prompt()`, `_is_multimodal_content_list()` |
-| **Otimização** | Rust/Python parser | `rlm_rust/`, `core/fast.py`, `core/optimized.py` |
+| **Otimização** | Backend Python otimizado | `core/fast.py`, `core/optimized.py` |
 
 ---
 
@@ -765,12 +765,9 @@ externos. O RLM não precisa mais saber quais ferramentas existem.
 ### 7d. Por que `find_code_blocks()` foi movido de `utils/parsing.py` para `core/fast.py`?
 
 Profiling mostrou que o parsing de blocos de código é chamado centenas de vezes
-por sessão (uma vez por resposta do LLM). O módulo `core/fast.py` usa um parser
-puramente imperativo (sem regex) com early exit — ~3x mais rápido no caso comum
-(resposta curta, um único bloco).
-
-A versão `rlm_rust` (módulo de extensão compilado) disponível como `rlm_rust.pyd`
-oferece ~10x speedup se disponível, com fallback automático para `fast.py`.
+por sessão (uma vez por resposta do LLM). O módulo `core/fast.py` agora prioriza
+um backend Python otimizado com regex compilado, framing endurecido e helpers de
+hash/formatação mantidos no próprio runtime Python.
 
 ### 7e. Por que o nome do pacote mudou de `rlms` para `rlm`?
 

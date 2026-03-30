@@ -2,10 +2,9 @@
 RLM Fast - Drop-in replacement for RLM core modules
 ====================================================
 
-Este módulo tenta usar o backend mais rápido disponível:
-1. rlm_rust (Rust via PyO3) - 50-100x faster
-2. rlm.core.optimized (Python otimizado) - 2-5x faster
-3. Fallback para implementação original
+Este módulo tenta usar o backend Python mais rápido disponível:
+1. rlm.core.optimized (Python otimizado) - 2-5x faster
+2. Fallback para implementação original
 
 Uso:
     from rlm.core.fast import (
@@ -19,128 +18,43 @@ Uso:
 
 import threading as _threading
 import warnings
-from typing import Any, Optional
+from typing import Any
 
-# Optional Rust extensions — set to None until binary is rebuilt with new exports
-format_iteration_rs = None
-compute_hash = None
-
-# Try Rust backend first (fastest)
 try:
-    from rlm_rust import (
-        socket_send as _rust_socket_send,
-        socket_recv as _rust_socket_recv,
-        socket_request as _rust_socket_request,
-        find_code_blocks as _rust_find_code_blocks,
-        find_final_answer as _rust_find_final_answer,
-        RustLMHandler,
+    from rlm.core.optimized import (
+        compute_hash,
+        find_code_blocks,
+        find_final_answer,
+        format_iteration_rs,
+        socket_recv,
+        socket_request,
+        socket_send,
     )
-    
-    def socket_send(sock, data):
-        """Wrapper for Rust socket_send that handles socket objects."""
-        if hasattr(sock, "fileno"):
-            _rust_socket_send(sock.fileno(), data)
-        else:
-            _rust_socket_send(sock, data)
-            
-    def socket_recv(sock):
-        """Wrapper for Rust socket_recv that handles socket objects."""
-        if hasattr(sock, "fileno"):
-            return _rust_socket_recv(sock.fileno())
-        return _rust_socket_recv(sock)
-
-    def socket_request(address, data, timeout=300):
-        """Wrapper for Rust socket_request to accept optional timeout kwarg."""
-        try:
-            return _rust_socket_request(address, data, timeout)
-        except TypeError:
-            # Rust version may not accept timeout
-            return _rust_socket_request(address, data)
-
-    def find_code_blocks(text, *args, **kwargs):
-        """Wrapper for Rust find_code_blocks to ignore extra args."""
-        return _rust_find_code_blocks(text)
-
-    def find_final_answer(text, *args, **kwargs):
-        """Wrapper: uses Rust regex for speed, but delegates FINAL_VAR resolution
-        to the Python environment when one is provided (Rust can't access it).
-        """
-        environment = kwargs.get("environment") or (args[0] if args else None)
-
-        if environment is not None:
-            get_pending = getattr(environment, "get_pending_final", None)
-            if callable(get_pending):
-                pending = get_pending()
-                if isinstance(pending, str):
-                    return pending
-
-        rust_result = _rust_find_final_answer(text)
-
-        # If Rust found a FINAL_VAR match, it returns the variable NAME, not the value.
-        # We need to resolve it through the environment.
-        if rust_result is not None and environment is not None:
-            import re
-            _fv = re.search(r"^\s*FINAL_VAR\((.*?)\)", text, re.MULTILINE | re.DOTALL)
-            if _fv:
-                var_name = _fv.group(1).strip().strip('"').strip("'")
-                if hasattr(environment, "execute_code"):
-                    exec_result = environment.execute_code(f"print(FINAL_VAR({var_name!r}))")
-                    resolved = exec_result.stdout.strip()
-                    if resolved and not resolved.startswith("Error:"):
-                        return resolved
-                # FINAL_VAR resolution failed — return None so the RLM loop
-                # continues and the model can correct itself (matches original behavior).
-                return None
-
-        return rust_result
-        
-    BACKEND = "rust"
-
-    # Optional parsing/hashing extensions (available after maturin rebuild)
-    try:
-        from rlm_rust import (
-            format_iteration_rs as _rust_format_iteration,
-            compute_hash as _rust_compute_hash,
-        )
-        format_iteration_rs = _rust_format_iteration
-        compute_hash = _rust_compute_hash
-    except ImportError:
-        pass  # Leave as None; Python fallbacks in loop_detector and parsing
+    BACKEND = "optimized"
 
 except ImportError:
-    # Fall back to optimized Python
-    try:
-        from rlm.core.optimized import (
-            socket_send,
-            socket_recv,
-            socket_request,
-            find_code_blocks,
-            find_final_answer,
-        )
-        BACKEND = "optimized"
-        RustLMHandler = None
-        
-    except ImportError:
-        # Fall back to original implementation
-        from rlm.core.comms_utils import socket_send, socket_recv
-        from rlm.utils.parsing import find_code_blocks, find_final_answer
-        
-        def socket_request(address, data, timeout=300):
-            """Wrapper for original implementation."""
-            import socket as sock_module
-            with sock_module.socket(sock_module.AF_INET, sock_module.SOCK_STREAM) as s:
-                s.settimeout(timeout)
-                s.connect(address)
-                socket_send(s, data)
-                return socket_recv(s)
-        
-        BACKEND = "original"
-        RustLMHandler = None
-        warnings.warn(
-            "Using original RLM implementation. "
-            "For 2-5x speedup, install orjson: pip install orjson",
-            RuntimeWarning
-        )
+    from rlm.core.comms_utils import socket_send, socket_recv
+    from rlm.utils.parsing import find_code_blocks, find_final_answer
+
+    format_iteration_rs = None
+    compute_hash = None
+
+    def socket_request(address, data, timeout=300):
+        """Wrapper for original implementation."""
+        import socket as sock_module
+
+        with sock_module.socket(sock_module.AF_INET, sock_module.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(address)
+            socket_send(s, data)
+            return socket_recv(s)
+
+    BACKEND = "original"
+    warnings.warn(
+        "Using original RLM implementation. "
+        "For 2-5x speedup, install orjson: pip install orjson",
+        RuntimeWarning,
+    )
 
 
 def get_backend() -> str:
@@ -151,9 +65,8 @@ def get_backend() -> str:
 def print_backend_info():
     """Print information about the current backend."""
     speedup = {
-        "rust": "50-100x",
-        "optimized": "2-5x", 
-        "original": "1x (baseline)"
+        "optimized": "2-5x",
+        "original": "1x (baseline)",
     }
     print(f"RLM Backend: {BACKEND} ({speedup[BACKEND]} speedup)")
 
@@ -170,7 +83,6 @@ __all__ = [
     "get_backend",
     "print_backend_info",
     "BACKEND",
-    "RustLMHandler",
     "LMRequest",
     "LMResponse",
     "send_lm_request",

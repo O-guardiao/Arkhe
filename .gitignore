@@ -217,8 +217,6 @@ test_cli_output.txt
 *.out
 *.pyd
 *.dll
-rlm_rust/target/
-rlm_rust/target2/
 
 # Cursor
 #  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to

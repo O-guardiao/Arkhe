@@ -4,9 +4,9 @@ LMHandler - Routes LLM requests from the RLM process and environment subprocesse
 Uses a multi-threaded socket server. Protocol: 4-byte length prefix + JSON payload.
 
 Architecture note:
-    The Python ThreadingLMServer is the production handler. The Rust handler
-    (rlm_rust/src/handler.rs) is reserved for future local-LLM / low-latency
-    scenarios (see its module docstring for activation criteria).
+    The Python ThreadingLMServer is the production handler. Native handler
+    experiments were discontinued in this repository; low-latency improvements
+    now live in the optimized Python transport and pooling paths.
 """
 
 import asyncio
@@ -146,7 +146,8 @@ class ThreadingLMServer(ThreadingTCPServer):
     - Graceful shutdown draining active connections
 
     For local LLM / low-latency API scenarios (< 50ms response, 100+ envs),
-    consider activating the Rust Tokio handler in rlm_rust/src/handler.rs.
+    tune connection pooling and the optimized Python transport before adding
+    another runtime layer.
     """
 
     daemon_threads = True

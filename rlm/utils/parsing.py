@@ -11,11 +11,11 @@ if TYPE_CHECKING:
     from rlm.environments.base_env import BaseEnv
 
 try:
-    from rlm.core.fast import format_iteration_rs as _format_iteration_rs
-    if _format_iteration_rs is None:
+    from rlm.core.fast import format_iteration_rs as _format_iteration_fast
+    if _format_iteration_fast is None:
         raise ImportError
 except (ImportError, AttributeError):
-    _format_iteration_rs = None
+    _format_iteration_fast = None
 
 
 def find_code_blocks(text: str) -> list[str]:
@@ -101,13 +101,13 @@ def format_iteration(
     Returns:
         A list of messages to add to the next prompt
     """
-    # Fast path: Rust string building with UTF-8-safe truncation
-    if _format_iteration_rs is not None:
+    # Fast path: optimized Python string building with UTF-8-safe truncation
+    if _format_iteration_fast is not None:
         code_block_pairs = [
             (cb.code, format_execution_result(cb.result))
             for cb in iteration.code_blocks
         ]
-        pairs = _format_iteration_rs(iteration.response, code_block_pairs, max_character_length)
+        pairs = _format_iteration_fast(iteration.response, code_block_pairs, max_character_length)
         return [{"role": role, "content": content} for role, content in pairs]
 
     # Python fallback

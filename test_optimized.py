@@ -71,20 +71,12 @@ try:
     server.setblocking(False)
     client.setblocking(False)
     
-    # We need to drain the buffer in a separate thread/loop or just trust flush works for small benchmarking
-    # For benchmark we will just send to /dev/null logic efficiently or just fill buffer
-    # Actually, socket_send writes to FD. If buffer fills, it blocks/errors.
-    # Let's use a dummy FD for simple serialization test if possible, or real socket and read from other end.
-    
-    # Simpler: Just benchmark the Python side overhead + serialization call
-    # Rust socket_send takes FD.
-    
-    msg = {"prompt": "Hello world " * 100, "data": list(range(100))} # Smaller payload to avoid blocking
+    msg = {"prompt": "Hello world " * 100, "data": list(range(100))}  # Smaller payload to avoid blocking
     
     print("\n--- JSON/Socket Benchmark ---")
     
-    # Consumer thread to drain socket
     import threading
+
     def drain():
         while True:
             try:
@@ -95,11 +87,7 @@ try:
     
     start = time.perf_counter()
     
-    # Rust expects FD (int), Python expects socket object
-    if BACKEND == "rust":
-        target = server.fileno()
-    else:
-        target = server
+    target = server
 
     sent_count = 0
     start = time.perf_counter()
@@ -110,12 +98,8 @@ try:
                 socket_send(target, msg)
                 sent_count += 1
             except BlockingIOError:
-                # Buffer full (Rust is too fast for Python reader)
-                # We stop valid benchmark here or yield
                 pass
             except Exception as e:
-                # Rust code converts IO error to string in PyIOError
-                # "O sistema não pode... (os error 10035)"
                 if "10035" in str(e) or getattr(e, 'winerror', 0) == 10035:
                     pass
                 else:

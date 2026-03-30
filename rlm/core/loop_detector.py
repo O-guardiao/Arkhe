@@ -15,11 +15,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 try:
-    from rlm.core.fast import compute_hash as _compute_hash_rust
-    if _compute_hash_rust is None:
+    from rlm.core.fast import compute_hash as _compute_hash_fast
+    if _compute_hash_fast is None:
         raise ImportError
 except (ImportError, AttributeError):
-    _compute_hash_rust = None
+    _compute_hash_fast = None
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +311,6 @@ class LoopDetector:
 
 def _hash(text: str) -> str:
     """Generate a short hash for pattern matching."""
-    if _compute_hash_rust is not None:
-        return _compute_hash_rust(text)
+    if _compute_hash_fast is not None:
+        return _compute_hash_fast(text)
     return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:12]

@@ -7,7 +7,7 @@ to dedicated modules for parsing, wire protocol, and typed LM messages.
 from __future__ import annotations
 
 from rlm.core.optimized_benchmark import benchmark
-from rlm.core.optimized_parsing import find_code_blocks, find_final_answer
+from rlm.core.optimized_parsing import compute_hash, find_code_blocks, find_final_answer, format_iteration_rs
 from rlm.core.optimized_types import LMRequest, LMResponse
 from rlm.core.optimized_wire import (
     JSON_BACKEND,
@@ -27,8 +27,10 @@ __all__ = [
     "LMRequest",
     "LMResponse",
     "benchmark",
+    "compute_hash",
     "find_code_blocks",
     "find_final_answer",
+    "format_iteration_rs",
     "json_dumps",
     "json_loads",
     "send_lm_request",

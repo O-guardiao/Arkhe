@@ -1,71 +1,60 @@
 # RLM Optimization: Technical Documentation
 
-This document details the high-performance architectural changes implemented in RLM. It covers file structure, optimization strategies (Python & Rust), and integration details.
+This document describes the pure-Python performance path currently maintained in RLM. The repository no longer ships or activates a Rust backend.
 
 ## 📂 File Manifest
 
 ### Core Integration
 
-* `rlm/core/fast.py`: **Facade Module**. The main entry point. It attempts to import the Rust backend, falls back to Optimized Python, then to Original. Exports a unified API (`socket_send`, `find_final_answer`, etc.) so the rest of the codebase doesn't need to know which backend is running.
+* `rlm/core/fast.py`: **Facade Module**. The main entry point. It prefers the optimized Python backend and falls back to the original implementation only if the optimized path cannot load. It exports a unified API (`socket_send`, `find_final_answer`, etc.) so the rest of the codebase does not need backend-specific branching.
 
-### Strategy 1: Optimized Python
+### Strategy: Optimized Python
 
-* `rlm/core/optimized.py`: High-performance pure Python implementation.
-  * **JSON**: Uses `orjson` (Rust-based JSON library) which is 10-30x faster than standard `json`.
-  * **Parsing**: Uses `re.compile()` to cache regex state machines, avoiding recompilation on every call.
-  * **I/O**: Uses `memoryview` and pre-allocated buffers to minimize memory copying during socket reads.
+* `rlm/core/optimized.py`: High-performance pure Python facade.
+* `rlm/core/optimized_parsing.py`: compiled regex parsing, short hashing, and fast iteration formatting helpers.
+* `rlm/core/optimized_wire.py`: framing, JSON serialization, exact socket reads, and typed LM request helpers.
+* `rlm/core/optimized_types.py`: typed LM request/response dataclasses.
+* `rlm/core/optimized_benchmark.py`: benchmark entry point kept separate from runtime imports.
 
-### Strategy 2: Native Rust (The "Nuclear" Option)
+The optimized Python path focuses on:
 
-* `rlm_rust/`: Source code for the Rust backend.
-  * `Cargo.toml`: Dependencies (`pyo3`, `tokio`, `serde`, `regex`).
-  * `src/lib.rs`: PyO3 entry point. Exposes Rust functions to Python.
-  * `src/comms.rs`: Zero-copy socket handling. Reads directly from the socket file descriptor (`RawFd`), bypassing Python's socket object overhead entirely.
-  * `src/parsing.rs`: Compiled Regex engine using Rust's `regex` crate (which uses DFA/NFA optimizations).
-  * `src/handler.rs`: Multi-threaded async TCP server using **Tokio**. Handles concurrency at the OS thread level, bypassing Python's GIL.
-
-### Build Artifacts
-
-* `rlm_rust.pyd`: The compiled Windows DLL (linked to Python). This is the file actually imported by `fast.py`.
+* **JSON**: Uses `orjson` when available, which is much faster than standard `json`.
+* **Parsing**: Uses `re.compile()` to cache regex state machines, avoiding recompilation on every call.
+* **I/O**: Uses `memoryview`, exact reads, and capped frame sizes to reduce copying and harden socket handling.
+* **Compatibility helpers**: Keeps `compute_hash` and `format_iteration_rs` available from Python so higher layers do not depend on native code.
 
 ---
 
 ## 🛠️ Technical Deep Dive
 
-### 1. Python Optimization Strategy (`optimized.py`)
+### 1. Python Optimization Strategy
 
-We squeezed the maximum performance possible out of Python before moving to Rust.
+We squeezed the maximum performance practical out of Python without another runtime layer.
 
 * **Problem**: `json.loads` and `json.dumps` are slow for large LLM payloads.
-* **Solution**: Switched to `orjson`. It returns bytes directly and avoids intermediate string allocations.
-* **Problem**: Python's `socket.recv()` creates a new bytes object for every chunk.
-* **Solution**: Implemented a buffering strategy using `bytearray` and `memoryview` to write directly into a pre-allocated buffer, reducing GC pressure.
-
-### 2. Rust Optimization Strategy (`rlm_rust`)
-
-For "infinite" performance, we moved the bottleneck execution to native code.
-
-* **FFI (PyO3)**: We use PyO3 to create native Python modules. The transition from Python to Rust has a small overhead (<100ns), which is negligible compared to the gains.
-* **Async Runtime (Tokio)**: Python's `threading` module is limited by the GIL (Global Interpreter Lock). Rust's `tokio` runtime allows true parallelism. The `LMHandler` in Rust can serve thousands of concurrent connections on a single core.
-* **Zero-Copy Networking**: The `socket_send` implementation in Rust takes the raw File Descriptor (`fd`) from Python. It writes data directly to the kernel socket buffer, saturating the link instantly (as seen in benchmarks where it hit `WSAEWOULDBLOCK`).
+* **Solution**: Switched to `orjson` when available. It returns bytes directly and avoids intermediate string allocations.
+* **Problem**: TCP framing is stream-based; naive code often assumes one `recv()` returns a full header or payload.
+* **Solution**: Added exact-read framing with a configurable frame-size cap and JSON-object validation.
+* **Problem**: Formatting and hashing helpers previously depended on optional native hooks.
+* **Solution**: Added optimized Python implementations for short hashes and iteration formatting so the fast path stays fully in Python.
 
 ---
 
-## 📊 Performance Benchmarks (Final)
+## 📊 Performance Benchmarks
 
-| Component | Operation | Python Original | Python Optimized | Rust (Native) |
-| :--- | :--- | :--- | :--- | :--- |
-| **Parsing** | Find Final Answer | 45k ops/s | 233k ops/s | **407k ops/s** |
-| **Parsing** | Extract Code | 60k ops/s | 388k ops/s | **410k ops/s** |
-| **Comms** | JSON Serialization | Baseline | 28x Faster | **Instant** |
-| **Comms** | Socket Throughput | Limited | High | **Line Rate** |
+| Component | Operation | Python Original | Python Optimized |
+| :--- | :--- | :--- | :--- |
+| **Parsing** | Find Final Answer | 45k ops/s | 233k ops/s |
+| **Parsing** | Extract Code | 60k ops/s | 388k ops/s |
+| **Comms** | JSON Serialization | Baseline | 28x Faster |
+| **Comms** | Socket Throughput | Limited | High |
 
 ## Usage
 
-No manual changes required. The system is designed to "Just Work".
+No manual changes are required. The system is designed to prefer the optimized Python path automatically.
 
-* If `rlm_rust.pyd` is present (compiled), it uses **Rust**.
-* If not, it silently uses **Optimized Python**.
+* If the optimized backend loads, it is used.
+* If not, the system silently falls back to the original implementation.
 
 To verify your current backend:
 
@@ -76,16 +65,16 @@ print_backend_info()
 
 ## ⚠️ Troubleshooting & Safety
 
-### OS Error 10038 (Socket operation on non-socket)
+### Partial header reads / oversized frames
 
-If you encounter this error, it means the Rust backend closed a socket that Python was still trying to use.
+If socket parsing fails, verify the peer is respecting the 4-byte length-prefixed JSON protocol.
 
-* **Cause:** Rust's `TcpStream::from_raw_socket` takes ownership of the file descriptor. When the variable goes out of scope, Rust calls `closesocket`.
-* **Fix:** We use `std::mem::forget(stream)` in `comms.rs` to intentionally leak the Rust object, preventing the destructor from running. The socket remains open for Python to manage.
-* **Status:** **PATCHED** in `rlm_rust` v0.1.1.
+* **Cause:** TCP framing is stream-based; a single `recv()` is not guaranteed to return the full header or payload.
+* **Fix:** The optimized backend now uses exact reads and rejects frames above `RLM_MAX_SOCKET_FRAME_BYTES`.
 
-### Windows Defender
+### Invalid Unicode in payloads
 
-Defender may block the compilation of `rlm_rust.dll`.
+If a payload contains broken surrogate pairs, the optimized backend sanitizes them before serialization.
 
-* **Fix:** Add an exclusion for the project folder or use `build_admin.bat`.
+* **Cause:** Some upstream payloads may contain invalid UTF-16 surrogate code points.
+* **Fix:** The serializer normalizes invalid surrogates to replacement characters before encoding.

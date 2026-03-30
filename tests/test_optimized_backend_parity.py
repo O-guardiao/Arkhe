@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import Mock
-import importlib.util
 
 import pytest
 
 from rlm.core import optimized_wire
 from rlm.core.optimized_parsing import find_code_blocks as optimized_find_code_blocks
+from rlm.core.optimized_parsing import format_iteration_rs as optimized_format_iteration
 from rlm.core.optimized_parsing import find_final_answer as optimized_find_final_answer
+from rlm.core.optimized_parsing import compute_hash as optimized_compute_hash
 from rlm.utils.parsing import find_code_blocks as original_find_code_blocks
 from rlm.utils.parsing import find_final_answer as original_find_final_answer
 
@@ -79,20 +81,24 @@ def test_find_final_answer_final_var_missing_variable_matches_original() -> None
     assert optimized_find_final_answer(text, environment=env) == original_find_final_answer(text, environment=env)
 
 
-def test_rust_and_optimized_match_for_plain_final() -> None:
-    if importlib.util.find_spec("rlm_rust") is None:
-        pytest.skip("rlm_rust indisponivel")
+def test_compute_hash_matches_loop_detector_contract() -> None:
+    text = "algum texto para hashing"
 
-    try:
-        from rlm_rust import find_code_blocks as rust_find_code_blocks
-        from rlm_rust import find_final_answer as rust_find_final_answer
-    except ImportError:
-        pytest.skip("rlm_rust presente, mas o binario nao carregou")
+    assert optimized_compute_hash(text) == hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:12]
 
-    text = """```repl\nprint(1)\n```\nFINAL(42)"""
 
-    assert rust_find_code_blocks(text) == optimized_find_code_blocks(text) == original_find_code_blocks(text)
-    assert rust_find_final_answer(text) == optimized_find_final_answer(text) == original_find_final_answer(text)
+def test_format_iteration_helper_matches_python_contract() -> None:
+    pairs = optimized_format_iteration(
+        "Resposta do modelo",
+        [("print('x')", "y" * 20)],
+        8,
+    )
+
+    assert pairs[0] == ("assistant", "Resposta do modelo")
+    assert pairs[1][0] == "user"
+    assert "Code executed:" in pairs[1][1]
+    assert "print('x')" in pairs[1][1]
+    assert "... + [12 chars...]" in pairs[1][1]
 
 
 def test_socket_recv_handles_partial_header_reads() -> None:

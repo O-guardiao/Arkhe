@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -12,6 +13,37 @@ _FINAL_PATTERN = re.compile(r"^\s*FINAL\((.*)\)\s*$", re.MULTILINE | re.DOTALL)
 def find_code_blocks(text: str) -> list[str]:
     """Find REPL code blocks in text wrapped in triple backticks."""
     return [match.group(1).strip() for match in _CODE_BLOCK_PATTERN.finditer(text)]
+
+
+def compute_hash(text: str) -> str:
+    """Return the short hash format used by loop detection."""
+    return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def format_iteration_rs(
+    response: str,
+    code_block_pairs: list[tuple[str, str]],
+    max_character_length: int,
+) -> list[tuple[str, str]]:
+    """Fast Python replacement for the legacy native formatter hook."""
+    messages: list[tuple[str, str]] = [("assistant", response)]
+
+    for code, result in code_block_pairs:
+        rendered_result = result
+        if len(rendered_result) > max_character_length:
+            rendered_result = (
+                rendered_result[:max_character_length]
+                + f"... + [{len(rendered_result) - max_character_length} chars...]"
+            )
+
+        messages.append(
+            (
+                "user",
+                f"Code executed:\n```python\n{code}\n```\n\nREPL output:\n{rendered_result}",
+            )
+        )
+
+    return messages
 
 
 def _resolve_final_var(environment: Any, variable_name: str) -> str | None:
