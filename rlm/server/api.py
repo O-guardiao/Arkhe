@@ -167,10 +167,14 @@ async def lifespan(app: FastAPI):
         "event_bus": app.state.event_bus,
     }
 
+    # Hooks
+    app.state.hooks = HookSystem()
+
     app.state.session_manager = SessionManager(
         db_path=db_path,
         state_root=state_root,
         default_rlm_kwargs=default_rlm_kwargs,
+        hooks=app.state.hooks,
     )
 
     # Supervisor
@@ -178,16 +182,16 @@ async def lifespan(app: FastAPI):
         max_execution_time=int(os.environ.get("RLM_TIMEOUT", "120")),
         max_consecutive_errors=int(os.environ.get("RLM_MAX_ERRORS", "5")),
     )
-    app.state.supervisor = RLMSupervisor(default_config=supervisor_config)
+    app.state.supervisor = RLMSupervisor(
+        default_config=supervisor_config,
+        session_manager=app.state.session_manager,
+    )
 
     # Plugin Loader
     app.state.plugin_loader = PluginLoader()
 
     # Event Router
     app.state.event_router = EventRouter()
-
-    # Hooks
-    app.state.hooks = HookSystem()
 
     # Phase 9.2: Exec Approval Gate
     _approval_timeout = int(os.environ.get("RLM_EXEC_APPROVAL_TIMEOUT", "60"))
@@ -472,6 +476,19 @@ async def receive_webhook(client_id: str, request: Request):
         "user_id": session.user_id,
         "payload_size": len(json.dumps(payload)),
     })
+    sm.log_operation(
+        session.session_id,
+        "message.receive",
+        phase="ingress",
+        status="accepted",
+        source="webhook",
+        payload={
+            "client_id": client_id,
+            "user_id": session.user_id,
+            "originating_channel": session.originating_channel,
+            "delivery_context": session.delivery_context,
+        },
+    )
     services.hooks.trigger(
         "message.received",
         session_id=session.session_id,
@@ -552,6 +569,15 @@ async def get_session_events(session_id: str, request: Request, limit: int = 50)
     sm: SessionManager = request.app.state.session_manager
     events = sm.get_events(session_id, limit=limit)
     return {"session_id": session_id, "events": events}
+
+
+@app.get("/sessions/{session_id}/operations")
+async def get_session_operations(session_id: str, request: Request, limit: int = 50):
+    """Get structured operation log for a session."""
+    _require_admin_api_auth(request)
+    sm: SessionManager = request.app.state.session_manager
+    operations = sm.get_operation_log(session_id, limit=limit)
+    return {"session_id": session_id, "operations": operations}
 
 
 @app.get("/sessions/{session_id}/runtime")

@@ -8,6 +8,8 @@ reagirem a eventos do ciclo de vida do RLM.
 
 Eventos disponíveis:
 - session.created, session.closed, session.error
+- session.status_changed, session.origin.updated, session.delivery.updated
+- session.operation
 - completion.started, completion.finished, completion.aborted
 - message.received, message.sent
 - repl.executed, repl.error

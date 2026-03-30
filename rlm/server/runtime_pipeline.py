@@ -504,6 +504,20 @@ def dispatch_runtime_prompt_sync(
     if record_conversation and query_text:
         _record_recursive_message(session_obj, "user", query_text, origin=source_name)
 
+    dispatch_operation_id = services.session_manager.log_operation(
+        session_obj.session_id,
+        "runtime.dispatch",
+        phase="started",
+        status="running",
+        source=source_name,
+        payload={
+            "client_id": client_id,
+            "originating_channel": client_id,
+            "delivery_context": getattr(session_obj, "delivery_context", {}),
+            "query_preview": query_text[:200],
+        },
+    )
+
     services.hooks.trigger(
         "completion.started",
         session_id=session_obj.session_id,
@@ -530,6 +544,18 @@ def dispatch_runtime_prompt_sync(
             context={"error": str(exc), "source": source_name},
         )
         services.session_manager.log_event(session_obj.session_id, "execution_error", {"error": str(exc), "source": source_name})
+        services.session_manager.log_operation(
+            session_obj.session_id,
+            "runtime.dispatch",
+            phase="finished",
+            status="error",
+            source=source_name,
+            operation_id=dispatch_operation_id,
+            payload={
+                "error": str(exc),
+                "client_id": client_id,
+            },
+        )
         error_payload = {
             "status": "error",
             "session_id": session_obj.session_id,
@@ -593,6 +619,19 @@ def dispatch_runtime_prompt_sync(
             "status": result.status,
             "execution_time": result.execution_time,
             "source": source_name,
+        },
+    )
+    services.session_manager.log_operation(
+        session_obj.session_id,
+        "runtime.dispatch",
+        phase="finished",
+        status=result.status,
+        source=source_name,
+        operation_id=dispatch_operation_id,
+        payload={
+            "execution_time": result.execution_time,
+            "client_id": client_id,
+            "response_preview": (result.response or result.error_detail or result.abort_reason or "")[:200],
         },
     )
 

@@ -49,9 +49,14 @@ def build_runtime_snapshot(session: Any) -> dict[str, Any] | None:
 
 
 def build_activity_payload(session_manager: Any, session: Any, *, event_limit: int = 40) -> dict[str, Any]:
+    get_operation_log = getattr(session_manager, "get_operation_log", None)
+    operation_log = []
+    if callable(get_operation_log):
+        operation_log = list(reversed(get_operation_log(session.session_id, limit=event_limit)))
     return {
         "session": session_manager.session_to_dict(session),
         "event_log": list(reversed(session_manager.get_events(session.session_id, limit=event_limit))),
+        "operation_log": operation_log,
         "runtime": build_runtime_snapshot(session),
     }
 
@@ -213,6 +218,21 @@ def apply_operator_command(
             "payload": body,
         },
     )
+    operation_id = None
+    log_operation = getattr(session_manager, "log_operation", None)
+    if callable(log_operation):
+        operation_id = log_operation(
+            session.session_id,
+            "operator.command",
+            phase="queued",
+            status="queued",
+            source=origin,
+            payload={
+                "command_id": entry.get("command_id"),
+                "command_type": entry.get("command_type"),
+                "branch_id": entry.get("branch_id"),
+            },
+        )
 
     try:
         applied = _apply_queued_command(
@@ -226,6 +246,20 @@ def apply_operator_command(
             entry=entry,
             origin=origin,
         )
+        if callable(log_operation):
+            log_operation(
+                session.session_id,
+                "operator.command",
+                phase="applied",
+                status="completed",
+                source=origin,
+                operation_id=operation_id,
+                payload={
+                    "command_id": entry.get("command_id"),
+                    "command_type": command_type,
+                    "branch_id": branch_id,
+                },
+            )
     except Exception as exc:
         _update_command_status(env, int(entry["command_id"]), status="failed", outcome={"error": str(exc)})
         session_manager.log_event(
@@ -238,6 +272,21 @@ def apply_operator_command(
                 "error": str(exc),
             },
         )
+        if callable(log_operation):
+            log_operation(
+                session.session_id,
+                "operator.command",
+                phase="applied",
+                status="failed",
+                source=origin,
+                operation_id=operation_id,
+                payload={
+                    "command_id": entry.get("command_id"),
+                    "command_type": command_type,
+                    "branch_id": branch_id,
+                    "error": str(exc),
+                },
+            )
         raise
 
     return applied, build_runtime_snapshot(session)

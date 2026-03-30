@@ -285,6 +285,20 @@ def create_webhook_router(
             "channel": body.channel,
             "ip": client_ip,
         })
+        sm.log_operation(
+            session.session_id,
+            "message.receive",
+            phase="dispatch",
+            status="accepted",
+            source="webhook_dispatch",
+            payload={
+                "client_id": client_id,
+                "channel": body.channel,
+                "ip": client_ip,
+                "originating_channel": session.originating_channel,
+                "delivery_context": session.delivery_context,
+            },
+        )
 
         if hooks:
             hooks.trigger(

@@ -19,6 +19,12 @@ from rlm.core.structured_log import get_logger
 
 _session_log = get_logger("session_manager")
 
+SESSION_SELECT_COLUMNS = (
+    "session_id, client_id, user_id, status, created_at, last_active, state_dir, "
+    "total_completions, total_tokens_used, last_error, metadata, delivery_context"
+)
+SESSION_OPERATION_EVENT = "session_operation"
+
 
 # ---------------------------------------------------------------------------
 # Data Classes
@@ -35,10 +41,13 @@ class SessionRecord:
     - ``client_id`` → canal de origem (*originating_channel*) do último
                       request recebido (ex: ``"telegram:123"``, ``"tui:default"``).
                       Usado pelo ChannelRegistry para rotear respostas.
+    - ``delivery_context`` → rota persistida para entregas assíncronas e retomadas.
+                             Não deve ser confundida com o canal de origem do request atual.
     """
     session_id: str
     client_id: str                    # Último canal de origem (originating_channel)
     user_id: str = "main"             # Chave unificada de sessão (dmScope)
+    delivery_context: dict = field(default_factory=dict)  # Rota persistida de entrega
     status: str = "idle"              # idle | running | completed | aborted | error
     created_at: str = ""              # ISO timestamp
     last_active: str = ""             # ISO timestamp
@@ -50,6 +59,22 @@ class SessionRecord:
 
     # Runtime (não persistido no SQLite)
     rlm_instance: Any = field(default=None, repr=False)
+
+    @property
+    def originating_channel(self) -> str:
+        return self.client_id
+
+    @originating_channel.setter
+    def originating_channel(self, value: str) -> None:
+        self.client_id = value
+
+    @property
+    def session_status(self) -> str:
+        return self.status
+
+    @session_status.setter
+    def session_status(self, value: str) -> None:
+        self.status = value
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +135,7 @@ class SessionManager:
         db_path: str = "rlm_sessions.db",
         state_root: str = "./rlm_states",
         default_rlm_kwargs: dict | None = None,
+        hooks: Any | None = None,
     ):
         self.db_path = db_path
         self.state_root = os.path.abspath(state_root)
@@ -125,9 +151,13 @@ class SessionManager:
         self._lock = threading.Lock()
         self._active_sessions: dict[str, SessionRecord] = {}  # session_id -> session
         self._close_callbacks: list[Callable[[SessionRecord], None]] = []
+        self._hooks = hooks
 
         os.makedirs(self.state_root, exist_ok=True)
         self._init_db()
+
+    def set_hook_system(self, hooks: Any | None) -> None:
+        self._hooks = hooks
 
     # --- Database Setup ---
 
@@ -135,6 +165,7 @@ class SessionManager:
         """Create the sessions table if it doesn't exist, apply migrations."""
         with self._get_conn() as conn:
             # --- Migration first: add user_id to legacy tables that lack it --
+            existing_columns: set[str] = set()
             try:
                 cursor = conn.execute("PRAGMA table_info(sessions)")
                 existing_columns = {row[1] for row in cursor.fetchall()}
@@ -142,9 +173,15 @@ class SessionManager:
                     conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'main'")
                     conn.execute("UPDATE sessions SET user_id = 'main' WHERE user_id = '' OR user_id IS NULL")
                     conn.commit()
+                    existing_columns.add("user_id")
                     _session_log.info("DB migration: added user_id column to sessions table")
+                if existing_columns and "delivery_context" not in existing_columns:
+                    conn.execute("ALTER TABLE sessions ADD COLUMN delivery_context TEXT NOT NULL DEFAULT '{}' ")
+                    conn.commit()
+                    existing_columns.add("delivery_context")
+                    _session_log.info("DB migration: added delivery_context column to sessions table")
             except Exception as exc:
-                _session_log.warning(f"DB migration user_id check: {exc}")
+                _session_log.warn(f"DB migration user_id check: {exc}")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -158,7 +195,8 @@ class SessionManager:
                     total_completions INTEGER DEFAULT 0,
                     total_tokens_used INTEGER DEFAULT 0,
                     last_error   TEXT DEFAULT '',
-                    metadata     TEXT DEFAULT '{}'
+                    metadata     TEXT DEFAULT '{}',
+                    delivery_context TEXT NOT NULL DEFAULT '{}'
                 )
             """)
             conn.execute("""
@@ -204,33 +242,21 @@ class SessionManager:
             # Check active in-memory sessions first (by user_id)
             for session in self._active_sessions.values():
                 if session.user_id == user_id and session.status in ("idle", "running"):
-                    # Update originating channel to current request's channel
-                    if session.client_id != client_id:
-                        session.client_id = client_id
-                        if session.rlm_instance is not None:
-                            session.rlm_instance.client_id = client_id
-                        _session_log.info(
-                            "session channel switch",
-                            session_id=session.session_id,
-                            user_id=user_id,
-                            new_channel=client_id,
-                        )
+                    self.bind_originating_channel(session, client_id, source="request")
                     return session
 
             # Check database for a resumable session (by user_id)
             with self._get_conn() as conn:
                 row = conn.execute(
-                    "SELECT * FROM sessions WHERE user_id = ? AND status IN ('idle', 'running') "
+                    f"SELECT {SESSION_SELECT_COLUMNS} FROM sessions WHERE user_id = ? AND status IN ('idle', 'running') "
                     "ORDER BY last_active DESC LIMIT 1",
                     (user_id,),
                 ).fetchone()
 
             if row:
                 session = self._row_to_session(row)
-                session.client_id = client_id  # update originating channel
                 self._activate_session(session, extra_rlm_kwargs)
-                if session.rlm_instance is not None:
-                    session.rlm_instance.client_id = client_id
+                self.bind_originating_channel(session, client_id, source="request")
                 return session
 
             # Create new session
@@ -245,7 +271,7 @@ class SessionManager:
         # Check database
         with self._get_conn() as conn:
             row = conn.execute(
-                "SELECT * FROM sessions WHERE session_id = ?",
+                f"SELECT {SESSION_SELECT_COLUMNS} FROM sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
         return self._row_to_session(row) if row else None
@@ -255,12 +281,12 @@ class SessionManager:
         with self._get_conn() as conn:
             if status:
                 rows = conn.execute(
-                    "SELECT * FROM sessions WHERE status = ? ORDER BY last_active DESC LIMIT ?",
+                    f"SELECT {SESSION_SELECT_COLUMNS} FROM sessions WHERE status = ? ORDER BY last_active DESC LIMIT ?",
                     (status, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM sessions ORDER BY last_active DESC LIMIT ?",
+                    f"SELECT {SESSION_SELECT_COLUMNS} FROM sessions ORDER BY last_active DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
         return [self._row_to_session(row) for row in rows]
@@ -272,7 +298,7 @@ class SessionManager:
             conn.execute(
                 """UPDATE sessions SET
                     client_id = ?, status = ?, last_active = ?, total_completions = ?,
-                    total_tokens_used = ?, last_error = ?, metadata = ?
+                    total_tokens_used = ?, last_error = ?, metadata = ?, delivery_context = ?
                 WHERE session_id = ?""",
                 (
                     session.client_id,
@@ -281,11 +307,158 @@ class SessionManager:
                     session.total_completions,
                     session.total_tokens_used,
                     session.last_error,
-                    json.dumps(session.metadata),
+                    json.dumps(session.metadata or {}),
+                    json.dumps(session.delivery_context or {}),
                     session.session_id,
                 ),
             )
             conn.commit()
+
+    def bind_originating_channel(
+        self,
+        session: SessionRecord,
+        client_id: str,
+        *,
+        source: str = "request",
+        adopt_delivery_context: bool = True,
+    ) -> bool:
+        previous_channel = session.client_id
+        changed = previous_channel != client_id
+        if changed:
+            session.client_id = client_id
+            if session.rlm_instance is not None:
+                session.rlm_instance.client_id = client_id
+
+        delivery_changed = False
+        if adopt_delivery_context:
+            delivery_changed = self.maybe_refresh_delivery_context(session, client_id, source=source, persist=False)
+
+        if changed or delivery_changed:
+            self.update_session(session)
+
+        if changed:
+            payload = {
+                "previous_channel": previous_channel,
+                "originating_channel": client_id,
+                "source": source,
+            }
+            self.log_event(session.session_id, "session_origin_updated", payload)
+            self.log_operation(
+                session.session_id,
+                "session.origin",
+                phase="updated",
+                status="completed",
+                source=source,
+                payload=payload,
+            )
+            self._trigger_hook("session.origin.updated", session_id=session.session_id, context=payload)
+            _session_log.info(
+                "session channel switch",
+                session_id=session.session_id,
+                user_id=session.user_id,
+                new_channel=client_id,
+            )
+        return changed or delivery_changed
+
+    def maybe_refresh_delivery_context(
+        self,
+        session: SessionRecord,
+        client_id: str,
+        *,
+        source: str = "request",
+        persist: bool = True,
+    ) -> bool:
+        delivery_context = self.build_delivery_context(client_id, source=source)
+        if not delivery_context or not delivery_context.get("replyable"):
+            return False
+        return self.update_delivery_context(
+            session,
+            delivery_context,
+            source=source,
+            persist=persist,
+        )
+
+    def update_delivery_context(
+        self,
+        session: SessionRecord,
+        delivery_context: dict | None,
+        *,
+        source: str = "request",
+        persist: bool = True,
+    ) -> bool:
+        normalized = self._normalize_delivery_context(delivery_context, source=source)
+        if not normalized:
+            return False
+
+        previous = dict(session.delivery_context or {})
+        if self._same_delivery_context(previous, normalized):
+            return False
+
+        session.delivery_context = normalized
+        if persist:
+            self.update_session(session)
+
+        payload = {
+            "previous_delivery_context": previous,
+            "delivery_context": normalized,
+            "source": source,
+        }
+        self.log_event(session.session_id, "session_delivery_updated", payload)
+        self.log_operation(
+            session.session_id,
+            "session.delivery",
+            phase="updated",
+            status="completed",
+            source=source,
+            payload=payload,
+        )
+        self._trigger_hook("session.delivery.updated", session_id=session.session_id, context=payload)
+        return True
+
+    def transition_status(
+        self,
+        session: SessionRecord,
+        new_status: str,
+        *,
+        source: str = "session_manager",
+        reason: str = "",
+        error: str = "",
+        persist: bool = True,
+        metadata: dict | None = None,
+    ) -> bool:
+        previous_status = session.status
+        changed = previous_status != new_status
+        if metadata:
+            merged = dict(session.metadata or {})
+            merged.update(metadata)
+            session.metadata = merged
+        if not changed and not reason and not error and not metadata:
+            return False
+
+        session.status = new_status
+        if error:
+            session.last_error = str(error)[:500]
+        if persist:
+            self.update_session(session)
+
+        payload = {
+            "previous_status": previous_status,
+            "session_status": new_status,
+            "reason": reason,
+            "error": str(error or "")[:500],
+            "source": source,
+        }
+        self.log_event(session.session_id, "session_status_changed", payload)
+        self.log_operation(
+            session.session_id,
+            "session.status",
+            phase="transition",
+            status=new_status,
+            source=source,
+            payload=payload,
+        )
+        self._trigger_hook("session.status_changed", session_id=session.session_id, context=payload)
+        return True
 
     def close_session(self, session_id: str) -> bool:
         """
@@ -317,8 +490,28 @@ class SessionManager:
                     if not session.last_error:
                         session.last_error = f"close callback failed: {e}"
 
-            session.status = "completed"
-            self.update_session(session)
+            self.transition_status(
+                session,
+                "completed",
+                source="session_manager.close",
+                reason="session closed",
+            )
+            self.log_operation(
+                session.session_id,
+                "session.lifecycle",
+                phase="closed",
+                status="completed",
+                source="session_manager.close",
+                payload={"delivery_context": session.delivery_context},
+            )
+            self._trigger_hook(
+                "session.closed",
+                session_id=session.session_id,
+                context={
+                    "originating_channel": session.client_id,
+                    "delivery_context": session.delivery_context,
+                },
+            )
             del self._active_sessions[session_id]
             return True
 
@@ -365,6 +558,34 @@ class SessionManager:
             except Exception:
                 pass
 
+    def log_operation(
+        self,
+        session_id: str,
+        operation: str,
+        *,
+        phase: str,
+        status: str,
+        source: str = "session_manager",
+        payload: dict | None = None,
+        operation_id: str | None = None,
+        parent_operation_id: str = "",
+    ) -> str:
+        op_id = operation_id or uuid.uuid4().hex
+        body = {
+            "kind": "operation",
+            "operation_id": op_id,
+            "parent_operation_id": parent_operation_id,
+            "operation": operation,
+            "phase": phase,
+            "status": status,
+            "source": source,
+            "recorded_at": _now_iso(),
+            "payload": dict(payload or {}),
+        }
+        self.log_event(session_id, SESSION_OPERATION_EVENT, body)
+        self._trigger_hook("session.operation", session_id=session_id, context=body)
+        return op_id
+
     def get_events(self, session_id: str, limit: int = 100) -> list[dict]:
         """Get recent events for a session."""
         try:
@@ -398,6 +619,23 @@ class SessionManager:
                 pass
             return []
 
+    def get_operation_log(self, session_id: str, limit: int = 100) -> list[dict]:
+        """Get structured operation log entries for a session."""
+        try:
+            with self._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT timestamp, payload FROM event_log "
+                    "WHERE session_id = ? AND event_type = ? ORDER BY id DESC LIMIT ?",
+                    (session_id, SESSION_OPERATION_EVENT, limit),
+                ).fetchall()
+            operations: list[dict] = []
+            for timestamp, raw_payload in rows:
+                payload = _loads_json_object(raw_payload)
+                operations.append({"timestamp": timestamp, **payload})
+            return operations
+        except sqlite3.OperationalError:
+            return []
+
     # --- Internal Helpers ---
 
     def _create_session(self, client_id: str, extra_rlm_kwargs: dict, *, user_id: str = "main") -> SessionRecord:
@@ -406,11 +644,15 @@ class SessionManager:
         now = _now_iso()
         state_dir = os.path.join(self.state_root, session_id)
         os.makedirs(state_dir, exist_ok=True)
+        delivery_context = self.build_delivery_context(client_id, source="session_create")
+        if not delivery_context.get("replyable"):
+            delivery_context = {}
 
         session = SessionRecord(
             session_id=session_id,
             client_id=client_id,
             user_id=user_id,
+            delivery_context=delivery_context,
             status="idle",
             created_at=now,
             last_active=now,
@@ -420,15 +662,30 @@ class SessionManager:
         # Persist to DB
         with self._get_conn() as conn:
             conn.execute(
-                "INSERT INTO sessions (session_id, client_id, user_id, status, created_at, last_active, state_dir) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (session_id, client_id, user_id, "idle", now, now, state_dir),
+                "INSERT INTO sessions (session_id, client_id, user_id, status, created_at, last_active, state_dir, delivery_context) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (session_id, client_id, user_id, "idle", now, now, state_dir, json.dumps(delivery_context)),
             )
             conn.commit()
 
         # Create RLM instance
         self._activate_session(session, extra_rlm_kwargs)
-        self.log_event(session_id, "session_created", {"client_id": client_id, "user_id": user_id})
+        payload = {
+            "client_id": client_id,
+            "originating_channel": client_id,
+            "user_id": user_id,
+            "delivery_context": delivery_context,
+        }
+        self.log_event(session_id, "session_created", payload)
+        self.log_operation(
+            session_id,
+            "session.lifecycle",
+            phase="created",
+            status="idle",
+            source="session_manager.create",
+            payload=payload,
+        )
+        self._trigger_hook("session.created", session_id=session_id, context=payload)
         return session
 
     def _activate_session(self, session: SessionRecord, extra_rlm_kwargs: dict):
@@ -472,39 +729,19 @@ class SessionManager:
         self._active_sessions[session.session_id] = session
 
     def _row_to_session(self, row: tuple) -> SessionRecord:
-        """Convert a SQLite row to a SessionRecord dataclass.
-
-        Handles both old schema (10 cols, no user_id) and new schema (11 cols).
-        After ALTER TABLE migration, user_id is appended at the end of the row.
-        """
-        if len(row) >= 11:
-            # New or migrated schema — user_id is the 11th column (index 10)
-            return SessionRecord(
-                session_id=row[0],
-                client_id=row[1],
-                user_id=row[10] or "main",
-                status=row[2],
-                created_at=row[3],
-                last_active=row[4],
-                state_dir=row[5],
-                total_completions=row[6],
-                total_tokens_used=row[7],
-                last_error=row[8],
-                metadata=json.loads(row[9]) if row[9] else {},
-            )
-        # Legacy schema — no user_id column
         return SessionRecord(
             session_id=row[0],
             client_id=row[1],
-            user_id="main",
-            status=row[2],
-            created_at=row[3],
-            last_active=row[4],
-            state_dir=row[5],
-            total_completions=row[6],
-            total_tokens_used=row[7],
-            last_error=row[8],
-            metadata=json.loads(row[9]) if row[9] else {},
+            user_id=row[2] or "main",
+            status=row[3],
+            created_at=row[4],
+            last_active=row[5],
+            state_dir=row[6],
+            total_completions=row[7],
+            total_tokens_used=row[8],
+            last_error=row[9],
+            metadata=_loads_json_object(row[10]),
+            delivery_context=_loads_json_object(row[11]),
         )
 
     # --- Serialization ---
@@ -514,16 +751,82 @@ class SessionManager:
         return {
             "session_id": session.session_id,
             "client_id": session.client_id,
+            "originating_channel": session.originating_channel,
             "user_id": session.user_id,
             "status": session.status,
+            "session_status": session.session_status,
             "created_at": session.created_at,
             "last_active": session.last_active,
             "total_completions": session.total_completions,
             "total_tokens_used": session.total_tokens_used,
             "last_error": session.last_error,
+            "delivery_context": session.delivery_context,
             "metadata": session.metadata,
             "has_rlm_instance": session.rlm_instance is not None,
         }
+
+    @staticmethod
+    def build_delivery_context(
+        client_id: str,
+        *,
+        source: str = "request",
+        replyable: bool | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        if not client_id:
+            return {}
+        prefix, _, target_id = client_id.partition(":")
+        if replyable is None:
+            replyable = False
+            if prefix and target_id:
+                try:
+                    from rlm.plugins.channel_registry import ChannelRegistry
+
+                    replyable = ChannelRegistry.get_adapter(prefix) is not None
+                except Exception:
+                    replyable = False
+        context = {
+            "channel": client_id,
+            "transport": prefix,
+            "target_id": target_id or client_id,
+            "replyable": bool(replyable),
+            "source": source,
+            "updated_at": _now_iso(),
+        }
+        if metadata:
+            context["metadata"] = dict(metadata)
+        return context
+
+    def _normalize_delivery_context(self, delivery_context: dict | None, *, source: str) -> dict:
+        if not delivery_context:
+            return {}
+        if "channel" not in delivery_context:
+            return self.build_delivery_context(
+                str(delivery_context.get("client_id", "")),
+                source=source,
+                metadata=delivery_context,
+            )
+        normalized = dict(delivery_context)
+        normalized.setdefault("source", source)
+        normalized.setdefault("updated_at", _now_iso())
+        normalized.setdefault("transport", str(normalized.get("channel", "")).partition(":")[0])
+        channel = str(normalized.get("channel", ""))
+        _, _, target_id = channel.partition(":")
+        normalized.setdefault("target_id", target_id or channel)
+        normalized["replyable"] = bool(normalized.get("replyable"))
+        return normalized
+
+    def _same_delivery_context(self, left: dict, right: dict) -> bool:
+        compare_keys = ("channel", "transport", "target_id", "replyable")
+        return all(left.get(key) == right.get(key) for key in compare_keys)
+
+    def _trigger_hook(self, event_type: str, *, session_id: str, context: dict | None = None) -> None:
+        if self._hooks is None:
+            return
+        try:
+            self._hooks.trigger(event_type, session_id=session_id, context=context or {})
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -532,3 +835,15 @@ class SessionManager:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _loads_json_object(raw: Any) -> dict:
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    try:
+        value = json.loads(raw)
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}

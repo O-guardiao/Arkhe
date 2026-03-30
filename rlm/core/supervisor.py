@@ -72,14 +72,18 @@ class RLMSupervisor:
         supervisor.abort(session.session_id, reason="User requested stop")
     """
 
-    def __init__(self, default_config: SupervisorConfig | None = None):
+    def __init__(self, default_config: SupervisorConfig | None = None, session_manager: SessionManager | None = None):
         self.default_config = default_config or SupervisorConfig()
+        self._session_manager = session_manager
         self._abort_events: dict[str, threading.Event] = {}  # session_id -> Event (legacy)
         self._cancel_sources: dict[str, CancellationTokenSource] = {}  # Fase 10
         self._active_futures: dict[str, Future] = {}          # session_id -> Future
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rlm-worker")
         self._lock = threading.Lock()
         self._shutdown_manager = ShutdownManager()
+
+    def set_session_manager(self, session_manager: SessionManager | None) -> None:
+        self._session_manager = session_manager
 
     # --- Core Execution ---
 
@@ -140,7 +144,15 @@ class RLMSupervisor:
         if cfg.max_iterations_override is not None:
             session.rlm_instance.max_iterations = cfg.max_iterations_override
 
-        session.status = "running"
+        if self._session_manager is not None:
+            self._session_manager.transition_status(
+                session,
+                "running",
+                source="supervisor.execute",
+                reason="completion started",
+            )
+        else:
+            session.status = "running"
         start_time = time.perf_counter()
         result = ExecutionResult(session_id=session.session_id, status="running")
         rlm_result = None
@@ -228,12 +240,37 @@ class RLMSupervisor:
                 session.rlm_instance._cancel_token = CancellationToken.NONE
             
             # Update session status
-            if result.status == "completed":
-                session.status = "idle"
-            elif result.status in ("error", "error_loop"):
-                session.status = "error"
-            elif result.status in ("aborted", "timeout"):
-                session.status = "idle"  # Can be retried
+            if self._session_manager is not None:
+                if result.status == "completed":
+                    self._session_manager.transition_status(
+                        session,
+                        "idle",
+                        source="supervisor.execute",
+                        reason="completion completed",
+                    )
+                elif result.status in ("error", "error_loop"):
+                    self._session_manager.transition_status(
+                        session,
+                        "error",
+                        source="supervisor.execute",
+                        reason=result.status,
+                        error=result.error_detail or session.last_error,
+                    )
+                elif result.status in ("aborted", "timeout"):
+                    self._session_manager.transition_status(
+                        session,
+                        "idle",
+                        source="supervisor.execute",
+                        reason=result.status,
+                        error=result.abort_reason or "",
+                    )
+            else:
+                if result.status == "completed":
+                    session.status = "idle"
+                elif result.status in ("error", "error_loop"):
+                    session.status = "error"
+                elif result.status in ("aborted", "timeout"):
+                    session.status = "idle"  # Can be retried
 
             if on_complete:
                 on_complete(result)
