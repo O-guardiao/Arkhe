@@ -156,6 +156,7 @@ def _run_worker(
         context=context,
         max_iterations=10,
         timeout_s=240,
+        model_role="worker",
         _task_id=handoff.task_id,
     )
     _update_handoff_task(rlm, handoff, result)
@@ -203,6 +204,7 @@ def _run_evaluator(
         context=context,
         max_iterations=6,
         timeout_s=180,
+        model_role="evaluator",
     )
     return _parse_evaluator_decision(raw)
 
@@ -253,6 +255,7 @@ def _apply_evaluator_decision(
             ),
             max_iterations=8,
             timeout_s=180,
+            model_role="worker",
             _task_id=handoff.task_id if handoff is not None else None,
         )
         return retried, True, False

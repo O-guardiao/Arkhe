@@ -40,6 +40,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING, cast
 
+from rlm.core.execution_policy import build_backend_kwargs, resolve_subagent_model
 from rlm.core.types import ClientBackend, EnvironmentType
 
 if TYPE_CHECKING:
@@ -568,6 +569,8 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
         timeout_s: float = 300.0,
         return_artifacts: bool = False,
         system_prompt: "str | None" = None,
+        model: str | None = None,
+        model_role: str = "worker",
         interaction_mode: str = "repl",
         _task_id: int | None = None,
         _cancel_event: "threading.Event | None" = None,
@@ -684,9 +687,16 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
         if _parent_memory is not None:
             _env_kwargs["_parent_memory"] = _parent_memory
 
+        child_model = resolve_subagent_model(
+            parent,
+            requested_model=model,
+            model_role=model_role,
+            child_depth=child_depth,
+        )
+
         child = _cls(
             backend=cast(ClientBackend, parent.backend),
-            backend_kwargs=parent.backend_kwargs.copy() if parent.backend_kwargs else None,
+            backend_kwargs=build_backend_kwargs(parent.backend_kwargs, child_model),
             environment=cast(EnvironmentType, parent.environment_type),
             environment_kwargs=_env_kwargs if _env_kwargs else None,
             depth=child_depth,
@@ -1057,6 +1067,8 @@ def make_sub_rlm_async_fn(
         context: str = "",
         max_iterations: int = 8,
         timeout_s: float = 300.0,
+        model: str | None = None,
+        model_role: str = "worker",
     ) -> AsyncHandle:
         """
         Inicia um filho RLM em background e retorna imediatamente um handle.
@@ -1155,9 +1167,16 @@ def make_sub_rlm_async_fn(
         if _parent_memory is not None:
             _env_kwargs["_parent_memory"] = _parent_memory
 
+        child_model = resolve_subagent_model(
+            parent,
+            requested_model=model,
+            model_role=model_role,
+            child_depth=child_depth,
+        )
+
         child = _cls(
             backend=cast(ClientBackend, parent.backend),
-            backend_kwargs=parent.backend_kwargs.copy() if parent.backend_kwargs else None,
+            backend_kwargs=build_backend_kwargs(parent.backend_kwargs, child_model),
             environment=cast(EnvironmentType, parent.environment_type),
             environment_kwargs=_env_kwargs if _env_kwargs else None,
             depth=child_depth,
@@ -1352,6 +1371,7 @@ def make_sub_rlm_parallel_fn(
         return_artifacts: bool = False,
         coordination_policy: str | None = None,
         system_prompts: "list[str | None] | None" = None,
+        models: "list[str | None] | None" = None,
         interaction_modes: "list[str | None] | None" = None,
     ) -> "list[str] | list[SubRLMArtifactResult]":
         """
@@ -1580,6 +1600,7 @@ def make_sub_rlm_parallel_fn(
             task: str,
             extra_context: str = "",
             system_prompt: "str | None" = None,
+            model: str | None = None,
             interaction_mode: str = "repl",
         ) -> tuple[int, Any, str | None]:
             """Executa uma tarefa, retorna (branch_id, answer, error)."""
@@ -1591,6 +1612,7 @@ def make_sub_rlm_parallel_fn(
                     timeout_s=timeout_s,
                     return_artifacts=return_artifacts,
                     system_prompt=system_prompt,
+                    model=model,
                     interaction_mode=interaction_mode,
                     _task_id=branch_task_ids.get(branch_id),
                     _cancel_event=cancel_events[branch_id],
@@ -1618,13 +1640,17 @@ def make_sub_rlm_parallel_fn(
                 _mode = interaction_modes[_mode_idx]
                 if _mode is not None:
                     _interaction_modes[_mode_idx] = _mode
+        _models: list[str | None] = [None] * _n
+        if models is not None:
+            for _model_idx in range(min(len(models), _n)):
+                _models[_model_idx] = models[_model_idx]
         executor = _cf.ThreadPoolExecutor(
             max_workers=_n,
             thread_name_prefix="sub-rlm-parallel",
         )
         try:
             futures = {
-                executor.submit(_run_one, i, task, "", _sys_prompts[i], _interaction_modes[i]): i
+                executor.submit(_run_one, i, task, "", _sys_prompts[i], _models[i], _interaction_modes[i]): i
                 for i, task in enumerate(tasks)
             }
             try:
@@ -1746,6 +1772,7 @@ def make_sub_rlm_parallel_fn(
                             tasks[branch_id],
                             replan_contexts[branch_id],
                             _sys_prompts[branch_id],
+                            _models[branch_id],
                             _interaction_modes[branch_id],
                         ): branch_id
                         for branch_id in replan_targets
@@ -1865,6 +1892,7 @@ def make_sub_rlm_parallel_fn(
         timeout_s: float = 60.0,
         max_workers: int = 5,
         coordination_policy: str | None = None,
+        models: "list[str | None] | None" = None,
     ) -> "SubRLMParallelDetailedResults":
         """
         Igual a sub_rlm_parallel(), mas retorna SubRLMParallelTaskResult por tarefa.

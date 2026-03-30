@@ -250,9 +250,43 @@ class RLMContextMixin:
         if not hasattr(environment, "globals"):
             return
 
+        execution_policy = getattr(self, "_runtime_execution_policy", None)
+        allow_recursion = getattr(execution_policy, "allow_recursion", True)
+
+        if not allow_recursion:
+            reason = getattr(execution_policy, "note", "execution policy disabled recursive tools")
+
+            def _blocked_recursive_tool(*_args: Any, **_kwargs: Any) -> Any:
+                raise RuntimeError(f"Recursive tools disabled by execution policy: {reason}")
+
+            environment.globals["sub_rlm"] = _blocked_recursive_tool
+            environment.globals["rlm_query"] = _blocked_recursive_tool
+            environment.globals["sub_rlm_parallel"] = _blocked_recursive_tool
+            environment.globals["sub_rlm_parallel_detailed"] = _blocked_recursive_tool
+            environment.globals["rlm_query_batched"] = _blocked_recursive_tool
+            environment.globals["sub_rlm_async"] = _blocked_recursive_tool
+            environment.globals["AsyncHandle"] = __import__(
+                "rlm.core.sub_rlm", fromlist=["AsyncHandle"]
+            ).AsyncHandle
+            environment.globals["SubRLMParallelTaskResult"] = __import__(
+                "rlm.core.sub_rlm", fromlist=["SubRLMParallelTaskResult"]
+            ).SubRLMParallelTaskResult
+            environment.globals["async_bus"] = None
+            environment._rlm_scaffold_refs = {
+                "sub_rlm": _blocked_recursive_tool,
+                "rlm_query": _blocked_recursive_tool,
+                "sub_rlm_parallel": _blocked_recursive_tool,
+                "sub_rlm_parallel_detailed": _blocked_recursive_tool,
+                "rlm_query_batched": _blocked_recursive_tool,
+                "sub_rlm_async": _blocked_recursive_tool,
+                "async_bus": None,
+            }
+            environment.globals.update(make_browser_globals())
+            return
+
         _sub_rlm_fn = make_sub_rlm_fn(self)
         environment.globals["sub_rlm"] = _sub_rlm_fn
-        _rlm_query_fn = lambda prompt, model=None: _sub_rlm_fn(prompt)
+        _rlm_query_fn = lambda prompt, model=None: _sub_rlm_fn(prompt, model=model)
         environment.globals["rlm_query"] = _rlm_query_fn
         _par, _par_det = make_sub_rlm_parallel_fn(self)
         environment.globals["sub_rlm_parallel"] = _par

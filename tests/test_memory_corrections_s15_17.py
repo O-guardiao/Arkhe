@@ -26,6 +26,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from rlm.core.execution_policy import RuntimeExecutionPolicy
+
 # ---------------------------------------------------------------------------
 # §1 — session_memory_tools.py
 # ---------------------------------------------------------------------------
@@ -315,6 +317,11 @@ class TestRuntimePipelineSessionToolInjection:
             client_id="test-client",
             plugins_to_load=[],
             dynamic_skill_context="",
+            execution_policy=RuntimeExecutionPolicy(
+                task_class="default",
+                allow_recursion=True,
+                allow_role_orchestrator=True,
+            ),
         )
 
         # The 3 session memory tools should be in repl_locals
@@ -407,6 +414,11 @@ class TestRuntimePipelineSessionToolInjection:
             client_id="tui:default",
             plugins_to_load=[],
             dynamic_skill_context="",
+            execution_policy=RuntimeExecutionPolicy(
+                task_class="default",
+                allow_recursion=True,
+                allow_role_orchestrator=True,
+            ),
         )
 
         updates = repl_locals["telegram_get_updates"](limit=5)
@@ -455,6 +467,11 @@ class TestRuntimePipelineSessionToolInjection:
             client_id="c",
             plugins_to_load=[],
             dynamic_skill_context="",
+            execution_policy=RuntimeExecutionPolicy(
+                task_class="default",
+                allow_recursion=True,
+                allow_role_orchestrator=True,
+            ),
         )
 
         # Session memory tools should NOT be present

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from rlm.core.execution_policy import RuntimeExecutionPolicy, infer_runtime_execution_policy
 from rlm.core.exec_approval import ExecApprovalGate
 from rlm.core.handoff import VALID_HANDOFF_ROLES, make_handoff_fn
 from rlm.core.role_orchestrator import PENDING_HANDOFFS_KEY, orchestrate_roles
 from rlm.core.session import SessionManager
 from rlm.core.skill_loader import SkillLoader
 from rlm.core.skill_telemetry import get_skill_telemetry
-from rlm.core.supervisor import ExecutionResult, RLMSupervisor
+from rlm.core.supervisor import ExecutionResult, RLMSupervisor, SupervisorConfig
 from rlm.plugins import PluginLoader
 from rlm.plugins.channel_registry import sanitize_text_payload
 from rlm.server.event_router import EventRouter
@@ -229,6 +231,7 @@ def _apply_repl_injections(
     client_id: str,
     plugins_to_load: list[str],
     dynamic_skill_context: str,
+    execution_policy: RuntimeExecutionPolicy,
 ) -> None:
     """Inject all server-mode callables into the REPL namespace.
 
@@ -274,6 +277,7 @@ def _apply_repl_injections(
     repl_locals["reply_audio"] = reply_audio
     repl_locals["send_media"] = send_media
     repl_locals["telegram_get_updates"] = telegram_get_updates
+    repl_locals["execution_policy"] = execution_policy
 
     # Session memory tools — expose conversational long-term memory to the REPL
     _rlm_session = getattr(session, "rlm_instance", None)
@@ -419,6 +423,7 @@ def _prepare_repl_locals(
     plugins_to_load: list[str],
     prompt_plan: Any,
     dynamic_skill_context: str,
+    execution_policy: RuntimeExecutionPolicy,
 ) -> dict[str, Any] | None:
     if session.rlm_instance and (dynamic_skill_context or services.skill_context):
         session.rlm_instance.skills_context = dynamic_skill_context or services.skill_context
@@ -434,6 +439,7 @@ def _prepare_repl_locals(
                 session=session, client_id=client_id,
                 plugins_to_load=plugins_to_load,
                 dynamic_skill_context=dynamic_skill_context,
+                execution_policy=execution_policy,
             )
         return None
 
@@ -443,8 +449,44 @@ def _prepare_repl_locals(
         session=session, client_id=client_id,
         plugins_to_load=plugins_to_load,
         dynamic_skill_context=dynamic_skill_context,
+        execution_policy=execution_policy,
     )
     return repl_locals
+
+
+@contextmanager
+def _temporary_root_model_override(rlm_session: Any, model_name: str | None):
+    if not model_name:
+        yield
+        return
+
+    rlm_core = getattr(rlm_session, "_rlm", rlm_session)
+    backend_kwargs = dict(getattr(rlm_core, "backend_kwargs", None) or {})
+    previous_model = backend_kwargs.get("model_name")
+    if previous_model == model_name:
+        yield
+        return
+
+    previous_handler = getattr(rlm_core, "_persistent_lm_handler", None)
+    backend_kwargs["model_name"] = model_name
+    rlm_core.backend_kwargs = backend_kwargs
+    rlm_core._persistent_lm_handler = None
+    try:
+        yield
+    finally:
+        new_handler = getattr(rlm_core, "_persistent_lm_handler", None)
+        if new_handler is not None and new_handler is not previous_handler:
+            try:
+                new_handler.stop()
+            except Exception:
+                pass
+        restored_kwargs = dict(getattr(rlm_core, "backend_kwargs", None) or {})
+        if previous_model is None:
+            restored_kwargs.pop("model_name", None)
+        else:
+            restored_kwargs["model_name"] = previous_model
+        rlm_core.backend_kwargs = restored_kwargs
+        rlm_core._persistent_lm_handler = previous_handler
 
 
 def dispatch_runtime_prompt_sync(
@@ -509,6 +551,15 @@ def dispatch_runtime_prompt_sync(
         query=query_text,
         mode="auto",
     )
+    root_model = None
+    if session_obj.rlm_instance is not None:
+        root_model = ((getattr(getattr(session_obj.rlm_instance, "_rlm", None), "backend_kwargs", None) or {}).get("model_name"))
+    execution_policy = infer_runtime_execution_policy(
+        query_text,
+        client_id=client_id,
+        prompt_plan=prompt_plan,
+        default_model=str(root_model) if root_model is not None else None,
+    )
     if query_text:
         estimate = services.skill_loader.estimate_tokens(services.eligible_skills, query=query_text)
         ranked_payload = [
@@ -539,6 +590,13 @@ def dispatch_runtime_prompt_sync(
                 "ranked_skills": ranked_payload,
                 "blocked_skills": blocked_payload,
                 "estimate": estimate,
+                "execution_policy": {
+                    "task_class": execution_policy.task_class,
+                    "allow_recursion": execution_policy.allow_recursion,
+                    "allow_role_orchestrator": execution_policy.allow_role_orchestrator,
+                    "max_iterations_override": execution_policy.max_iterations_override,
+                    "root_model_override": execution_policy.root_model_override,
+                },
             },
         )
         get_skill_telemetry().record_routing(
@@ -560,6 +618,7 @@ def dispatch_runtime_prompt_sync(
         plugins_to_load=plugins_to_load,
         prompt_plan=prompt_plan,
         dynamic_skill_context=dynamic_skill_context,
+        execution_policy=execution_policy,
     )
 
     # --- Memory bridge: injeta memórias de longo prazo no prompt -----------
@@ -595,6 +654,10 @@ def dispatch_runtime_prompt_sync(
         context={"client_id": client_id, "source": source_name},
     )
 
+    rlm_core = getattr(getattr(session_obj, "rlm_instance", None), "_rlm", None)
+    if rlm_core is not None:
+        rlm_core._runtime_execution_policy = execution_policy
+
     def _execute_with_skill_context() -> ExecutionResult:
         skill_ctx_tokens = services.skill_loader.set_request_context(
             session_id=session_obj.session_id,
@@ -602,7 +665,17 @@ def dispatch_runtime_prompt_sync(
             query=query_text,
         )
         try:
-            return services.supervisor.execute(session_obj, prompt, root_prompt=query_text or None)
+            config = None
+            if execution_policy.max_iterations_override is not None:
+                default_cfg = services.supervisor.default_config
+                config = SupervisorConfig(
+                    max_execution_time=default_cfg.max_execution_time,
+                    max_consecutive_errors=default_cfg.max_consecutive_errors,
+                    max_iterations_override=execution_policy.max_iterations_override,
+                    poll_interval=default_cfg.poll_interval,
+                )
+            with _temporary_root_model_override(session_obj.rlm_instance, execution_policy.root_model_override):
+                return services.supervisor.execute(session_obj, prompt, config=config, root_prompt=query_text or None)
         finally:
             services.skill_loader.clear_request_context(skill_ctx_tokens)
 
@@ -652,7 +725,12 @@ def dispatch_runtime_prompt_sync(
         },
     )
 
-    if result.status == "completed" and session_obj.rlm_instance is not None and repl_locals is not None:
+    if (
+        result.status == "completed"
+        and session_obj.rlm_instance is not None
+        and repl_locals is not None
+        and execution_policy.allow_role_orchestrator
+    ):
         role_outcome = orchestrate_roles(
             rlm=session_obj.rlm_instance,
             prompt=query_text or str(prompt),
@@ -674,6 +752,15 @@ def dispatch_runtime_prompt_sync(
                     "retried": role_outcome.retried,
                 },
             )
+    elif result.status == "completed" and not execution_policy.allow_role_orchestrator:
+        services.session_manager.log_event(
+            session_obj.session_id,
+            "agent_role_summary_skipped",
+            {
+                "reason": execution_policy.note,
+                "task_class": execution_policy.task_class,
+            },
+        )
 
     # --- Memory bridge: persiste nuggets do turno em background ------------
     # Roda após role_orchestrator para capturar a resposta final (pode ter

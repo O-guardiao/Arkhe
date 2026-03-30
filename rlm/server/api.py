@@ -175,7 +175,7 @@ async def lifespan(app: FastAPI):
     
     default_rlm_kwargs = {
         "backend": "openai",
-        "backend_kwargs": {"model_name": os.environ.get("RLM_MODEL", "gpt-4o-mini")},
+        "backend_kwargs": {"model_name": os.environ.get("RLM_MODEL_PLANNER", os.environ.get("RLM_MODEL", "gpt-4o-mini"))},
         "environment": "local",
         "max_iterations": int(os.environ.get("RLM_MAX_ITERATIONS", "30")),
         "max_depth": int(os.environ.get("RLM_MAX_DEPTH", "3")),
