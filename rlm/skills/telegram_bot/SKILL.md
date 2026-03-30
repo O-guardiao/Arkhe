@@ -1,7 +1,7 @@
 +++
 name = "telegram_bot"
-description = "Envia e recebe mensagens Telegram via Bot API. O plugin rlm.plugins.telegram já está disponível — use diretamente no REPL. Use when: user asks to enviar mensagem Telegram, notificar via Telegram, receber atualizações, ou o agente precisa reportar progresso por Telegram. NOT for: WhatsApp (use whatsapp skill), email (use email skill), ligações (use voice skill)."
-tags = ["telegram", "bot telegram", "mensagem telegram", "notificar telegram"]
+description = "Envia mensagens Telegram via Bot API. No runtime bridge ao vivo, telegram_bot e apenas envio. Use when: user asks to enviar mensagem Telegram, notificar via Telegram, ou o agente precisa reportar progresso por Telegram. Para inspecionar mensagens ja recebidas nesta sessao, use telegram_get_updates. NOT for: WhatsApp (use whatsapp skill), email (use email skill), ligações (use voice skill)."
+tags = ["telegram", "bot telegram", "mensagem telegram", "notificar telegram", "alerta telegram"]
 priority = "contextual"
 
 [requires]
@@ -9,7 +9,7 @@ bins = []
 
 [sif]
 signature = "telegram_send(chat_id: str, text: str, parse_mode: str = 'Markdown') -> dict"
-prompt_hint = "Use para notificar, alertar ou reportar progresso por Telegram para um chat ou canal."
+prompt_hint = "Use para notificar, alertar ou reportar progresso por Telegram para um chat ou canal. Ferramenta apenas de envio."
 short_sig = "telegram_bot(cid,txt)→{}"
 compose = ["whatsapp", "email", "voice"]
 examples_min = ["enviar atualização de progresso para um chat Telegram"]
@@ -50,43 +50,39 @@ example_queries = ["mande mensagem no Telegram", "notifique este chat"]
 
 # Telegram Bot Skill
 
-Integração com Telegram Bot API via `rlm.plugins.telegram` (já disponível no REPL).
+Envio de mensagens Telegram via Bot API.
+
+No runtime bridge ao vivo, `telegram_bot` e uma ferramenta de envio apenas.
+Ela nao deve ser usada para descobrir mensagens recebidas, ler inbox nem fazer polling.
+O gateway ja consome `getUpdates` em long-polling; duplicar essa leitura no REPL disputa a fila e cria resultados enganosos.
 
 ## Quando usar
 
 ✅ **USE quando:**
 - "Manda mensagem para meu Telegram"
 - "Notifica o chat_id X que o processo terminou"
-- "Lê as últimas mensagens do bot"
 - "Envia o resultado como arquivo para o Telegram"
 - Agente reporta progresso de tarefas longas
+- Precisa notificar outro chat explicitamente, fora do canal atual
 
 ❌ **NÃO use quando:**
+- Você quer descobrir o que chegou pelo Telegram nesta sessao
+- Você quer responder a mensagem atual do canal de origem e `reply(...)` ja existe
 - WhatsApp → use `whatsapp` skill
 - Email → use `email` skill
 
-## Uso básico (plugin pré-carregado)
+Para introspecao segura do historico ja processado pelo runtime, use `telegram_get_updates(...)`.
+Para responder ao canal atual quando a origem e replyable, prefira `reply(text)`.
+
+## Uso básico
 
 ```python
-# O plugin está importado diretamente — sem imports adicionais
-from rlm.plugins.telegram import send_message, get_updates, send_document
-
-# Enviar mensagem de texto
-resultado = send_message(chat_id=123456789, text="Tarefa concluída! ✅")
+# Ferramenta SIF pre-injetada para envio direto
+resultado = telegram_bot("123456789", "Tarefa concluida! ✅")
 print(resultado)
 
-# Com formatação Markdown
-send_message(
-    chat_id=123456789,
-    text="*Relatório Diário*\n`data: 2026-03-06`\nTotal: **R$ 12.450,00**",
-    parse_mode="Markdown",
-)
-
-# Obter chat_id (primeira vez)
-updates = get_updates()
-for u in updates:
-    print(f"Chat ID: {u.get('message', {}).get('chat', {}).get('id')}")
-    print(f"Texto: {u.get('message', {}).get('text')}")
+# Tambem funciona bem para avisos curtos de progresso
+telegram_bot("123456789", "⏳ Analise iniciada")
 ```
 
 ## Enviar arquivo (CSV, JSON, PDF)
@@ -119,38 +115,29 @@ send_photo(
 )
 ```
 
-## Receber mensagens / polling
+## Limites operacionais
 
 ```python
-from rlm.plugins.telegram import get_updates
+# Correto: usar reply para responder a mensagem atual do canal replyable
+reply("Recebido. Vou continuar e te atualizo por aqui.")
 
-updates = get_updates(offset=None, limit=10, timeout=5)
-mensagens = []
-for u in updates:
-    msg = u.get("message", {})
-    if "text" in msg:
-        mensagens.append({
-            "chat_id": msg["chat"]["id"],
-            "from": msg["from"].get("username", ""),
-            "texto": msg["text"],
-            "data": msg["date"],
-        })
+# Correto: usar telegram_get_updates para ver o que ja entrou no runtime
+historico = telegram_get_updates(limit=5)
 
-FINAL_VAR("mensagens")
+# Incorreto: tentar usar telegram_bot como leitura de inbox
+# telegram_bot("get_updates")
 ```
 
 ## Notificar progresso de tarefa longa (sub_rlm)
 
 ```python
-from rlm.plugins.telegram import send_message
-
 CHAT_ID = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
 
-send_message(CHAT_ID, "⏳ Iniciando análise de dados...")
+telegram_bot(str(CHAT_ID), "⏳ Iniciando analise de dados...")
 
 # ... processamento ...
 
-send_message(CHAT_ID, f"✅ Análise concluída!\nTotal: {resultado['total']} registros")
+telegram_bot(str(CHAT_ID), f"✅ Analise concluida!\nTotal: {resultado['total']} registros")
 ```
 
 ## Variáveis de ambiente
@@ -160,4 +147,4 @@ send_message(CHAT_ID, f"✅ Análise concluída!\nTotal: {resultado['total']} re
 | `TELEGRAM_BOT_TOKEN` | Token do bot (BotFather: /newbot) |
 | `TELEGRAM_CHAT_ID` | ID do chat padrão para notificações |
 
-Para obter chat_id: inicia conversa com o bot → `/getUpdates` na API.
+Para obter `chat_id` pela primeira vez, use um script isolado ou consulte o historico ja processado no runtime. Nao rode polling cru no mesmo processo que o TelegramGateway ativo.

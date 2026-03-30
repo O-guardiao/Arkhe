@@ -76,3 +76,24 @@ def test_transition_status_writes_operation_log(tmp_path, monkeypatch) -> None:
         item["operation"] == "session.status" and item["status"] == "running"
         for item in operations
     )
+
+
+def test_summarize_inbound_payload_keeps_safe_fields_for_local_history() -> None:
+    from rlm.server.api import _summarize_inbound_payload
+
+    payload = {
+        "text": "x" * 520,
+        "from_user": "demet\ud800",
+        "chat_id": 42,
+        "extra": "ignored",
+    }
+
+    summary = _summarize_inbound_payload("telegram:42", payload)
+
+    assert summary["client_id"] == "telegram:42"
+    assert summary["channel"] == "telegram"
+    assert summary["chat_id"] == 42
+    assert summary["payload_size"] > 0
+    assert summary["from_user"].startswith("demet")
+    assert summary["text_preview"].endswith("...[truncado]")
+    assert len(summary["text_preview"]) < 500

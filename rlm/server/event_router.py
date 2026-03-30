@@ -66,7 +66,9 @@ DEFAULT_ROUTES: list[EventRoute] = [
             "USER MESSAGE (TELEGRAM):\n"
             "From: {from_user}\n"
             "Message: {text}\n\n"
-            "Respond using the universal `reply(text)` tool. "
+            "Respond using the universal `reply(text)` tool for this Telegram conversation. "
+            "Do not use `telegram_bot` to answer the current message or inspect inbox history. "
+            "Reserve `telegram_bot(chat_id, text)` for explicit outbound notifications to another chat. "
             "Analyze the message and act appropriately."
         ),
         description="Route Telegram messages to RLM using Universal Channel response",
@@ -162,6 +164,8 @@ DEFAULT_ROUTES: list[EventRoute] = [
             "From: {from_user} (session: {session_id})\n"
             "Message: {text}\n\n"
             "Esta mensagem vem do workbench TUI do Arkhe. "
+            "Se precisar inspecionar mensagens Telegram ja processadas nesta sessao unificada, use `telegram_get_updates(...)`. "
+            "Nunca use `telegram_bot` para descobrir mensagens recebidas. "
             "Use as skills roteadas dinamicamente e responda de forma operacional, objetiva e útil para um operador humano."
         ),
         description="Workbench TUI — painel operacional de terminal do Arkhe",

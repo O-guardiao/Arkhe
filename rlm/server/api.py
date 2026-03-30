@@ -47,6 +47,7 @@ from rlm.server.auth_helpers import configured_tokens, require_token
 from rlm.server.ws_server import RLMEventBus, start_ws_server
 from rlm.server.drain import DrainGuard
 from rlm.server.health_monitor import HealthMonitor
+from rlm.plugins.channel_registry import sanitize_text_payload
 from rlm.plugins import PluginLoader
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
@@ -102,6 +103,22 @@ def _require_admin_api_auth(request: Request) -> None:
         env_names=_ADMIN_AUTH_ENV_NAMES,
         scope="admin API",
     )
+
+
+def _summarize_inbound_payload(client_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    raw_text = payload.get("text") or payload.get("message") or ""
+    text_preview = sanitize_text_payload(raw_text)
+    if len(text_preview) > 500:
+        text_preview = text_preview[:460] + "...[truncado]"
+
+    return {
+        "client_id": client_id,
+        "channel": client_id.partition(":")[0] or "webhook",
+        "from_user": sanitize_text_payload(payload.get("from_user") or ""),
+        "chat_id": payload.get("chat_id"),
+        "payload_size": len(json.dumps(payload, ensure_ascii=False)),
+        "text_preview": text_preview,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -471,11 +488,9 @@ async def receive_webhook(client_id: str, request: Request):
     )
 
     session = sm.get_or_create(client_id)
-    sm.log_event(session.session_id, "webhook_received", {
-        "client_id": client_id,
-        "user_id": session.user_id,
-        "payload_size": len(json.dumps(payload)),
-    })
+    ingress_payload = _summarize_inbound_payload(client_id, payload)
+    ingress_payload["user_id"] = session.user_id
+    sm.log_event(session.session_id, "webhook_received", ingress_payload)
     sm.log_operation(
         session.session_id,
         "message.receive",
@@ -487,6 +502,8 @@ async def receive_webhook(client_id: str, request: Request):
             "user_id": session.user_id,
             "originating_channel": session.originating_channel,
             "delivery_context": session.delivery_context,
+            "from_user": ingress_payload.get("from_user", ""),
+            "text_preview": ingress_payload.get("text_preview", ""),
         },
     )
     services.hooks.trigger(

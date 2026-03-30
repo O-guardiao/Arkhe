@@ -71,3 +71,5 @@ Tabela `event_log`:
 ## Consequencia pratica
 
 O canal mais recente e apenas origem observada. A rota padrao de entrega passa a ser um dado persistido e deliberado. Isso elimina a sobrecarga dupla de `client_id` e prepara o RLM para canais mistos sem corromper a entrega assíncrona.
+
+Para introspecao operacional, `telegram_get_updates()` deve ler apenas mensagens Telegram ja processadas e registradas no `event_log` da sessao. Ele nao consulta a fila viva da Bot API e nao disputa `getUpdates` com o TelegramGateway.

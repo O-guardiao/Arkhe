@@ -320,6 +320,15 @@ class TestSkillDefProperties:
 
 class TestRealSkillContracts:
 
+    def test_telegram_runtime_skills_expose_send_and_safe_history_contracts(self, real_skills_dir):
+        loader = SkillLoader()
+        skills = {skill.name: skill for skill in loader.load_from_dir(real_skills_dir)}
+
+        assert "telegram_bot" in skills
+        assert "telegram_get_updates" in skills
+        assert "apenas envio" in skills["telegram_bot"].description
+        assert "nao chama a Bot API" in skills["telegram_get_updates"].description
+
     def test_real_high_impact_skills_tem_runtime_contracts(self, real_skills_dir):
         loader = SkillLoader()
         skills = {skill.name: skill for skill in loader.load_from_dir(real_skills_dir)}

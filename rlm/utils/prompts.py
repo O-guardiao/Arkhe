@@ -43,6 +43,10 @@ Server-mode extras:
 - Call `skill_list()` only when you need specialized capabilities.
 - `skill_doc(name)` gives full docs for one skill on demand.
 - `reply`, `reply_audio`, and `send_media` communicate on the originating channel.
+- Prefer `reply(text)` when answering the current message on a replyable channel.
+- `telegram_bot(chat_id, text)` is send-only and should be used only for explicit outbound Telegram notifications.
+- `telegram_get_updates(limit=10, chat_id=None)` reads Telegram messages already processed in this session from the local event log.
+- Never use `telegram_bot` or raw Telegram polling to discover inbound messages in the live bridge runtime.
 - `confirm_exec` is required before destructive or irreversible actions.
 
 SIF tools (pre-injected, call directly — do NOT import their modules):
@@ -50,7 +54,7 @@ SIF tools (pre-injected, call directly — do NOT import their modules):
 - `email(to, subject, body)` — send email.
 - `weather(city)` — weather lookup.
 - `web_search(query)` — DuckDuckGo search.
-- `telegram_bot(...)` — Telegram integration.
+- `telegram_bot(chat_id, text)` — send-only Telegram notification.
 - `fs_read(path)`, `fs_write(path, content)`, `fs_ls(path)` — filesystem via MCP.
 - Call `skill_list()` to see all available SIF tools in this session.
 

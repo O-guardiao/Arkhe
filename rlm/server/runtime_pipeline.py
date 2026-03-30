@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -160,6 +161,66 @@ def _record_recursive_message(session: Any, role: str, content: str, *, origin: 
         pass
 
 
+def _collect_processed_telegram_updates(
+    session_manager: Any,
+    session_id: str,
+    *,
+    limit: int = 10,
+    chat_id: str | int | None = None,
+) -> list[dict[str, Any]]:
+    if session_manager is None or not session_id:
+        return []
+
+    try:
+        requested = int(limit)
+    except (TypeError, ValueError):
+        requested = 10
+
+    if requested <= 0:
+        return []
+
+    normalized_chat_id = str(chat_id).strip() if chat_id not in (None, "") else ""
+    scan_limit = max(requested * 8, 40)
+
+    try:
+        events = session_manager.get_events(session_id, limit=scan_limit)
+    except Exception:
+        return []
+
+    updates: list[dict[str, Any]] = []
+    for event in events:
+        if event.get("event_type") != "webhook_received":
+            continue
+
+        payload = event.get("payload") or {}
+        channel = str(payload.get("client_id") or "")
+        if not channel.startswith("telegram:"):
+            continue
+
+        _, _, event_chat_id = channel.partition(":")
+        if normalized_chat_id and event_chat_id != normalized_chat_id:
+            continue
+
+        text = sanitize_text_payload(
+            payload.get("text_preview") or payload.get("text") or payload.get("message") or ""
+        )
+        updates.append(
+            {
+                "timestamp": event.get("timestamp", ""),
+                "client_id": channel,
+                "chat_id": event_chat_id,
+                "from_user": sanitize_text_payload(payload.get("from_user") or ""),
+                "text": text,
+                "payload_size": payload.get("payload_size", 0),
+                "source": payload.get("channel") or payload.get("source") or "webhook",
+            }
+        )
+        if len(updates) >= requested:
+            break
+
+    return updates
+
+
 def _apply_repl_injections(
     services: RuntimeDispatchServices,
     repl_locals: dict[str, Any],
@@ -201,9 +262,18 @@ def _apply_repl_injections(
     def send_media(media_url_or_path: str, caption: str = "") -> bool:
         return ChannelRegistry.send_media(_originating_channel, media_url_or_path, sanitize_text_payload(caption))
 
+    def telegram_get_updates(limit: int = 10, chat_id: str | int | None = None) -> list[dict[str, Any]]:
+        return _collect_processed_telegram_updates(
+            services.session_manager,
+            getattr(session, "session_id", ""),
+            limit=limit,
+            chat_id=chat_id,
+        )
+
     repl_locals["reply"] = reply
     repl_locals["reply_audio"] = reply_audio
     repl_locals["send_media"] = send_media
+    repl_locals["telegram_get_updates"] = telegram_get_updates
 
     # Session memory tools — expose conversational long-term memory to the REPL
     _rlm_session = getattr(session, "rlm_instance", None)
@@ -319,8 +389,9 @@ def _apply_repl_injections(
             },
             current=False,
         )
+        task_id = handoff_task.get("task_id") if isinstance(handoff_task, Mapping) else None
         return {
-            "task_id": handoff_task.get("task_id"),
+            "task_id": task_id,
             "parent_task_id": parent_task_id,
         }
 

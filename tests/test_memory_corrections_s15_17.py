@@ -281,16 +281,17 @@ class TestRuntimePipelineSessionToolInjection:
         skill_loader.activate_all.return_value = None
         skill_loader.inject_sif_callables.return_value = None
         skill_loader.build_skill_doc_fn.return_value = (lambda name: "", lambda: [])
+        plugin_loader = MagicMock()
+        plugin_loader.inject_multiple.return_value = None
 
         services = RuntimeDispatchServices(
             session_manager=MagicMock(),
             supervisor=MagicMock(),
-            plugin_loader=MagicMock(),
+            plugin_loader=plugin_loader,
             event_router=MagicMock(),
             hooks=MagicMock(),
             skill_loader=skill_loader,
         )
-        services.plugin_loader.inject_multiple.return_value = None
 
         # Mock session with rlm_instance that has memory + session_id properties
         mock_rlm_session = SimpleNamespace(
@@ -321,6 +322,104 @@ class TestRuntimePipelineSessionToolInjection:
         assert "session_memory_status" in repl_locals
         assert "session_memory_recent" in repl_locals
         assert callable(repl_locals["session_memory_search"])
+        assert "telegram_get_updates" in repl_locals
+        assert callable(repl_locals["telegram_get_updates"])
+
+    def test_telegram_get_updates_reads_only_processed_telegram_events(self):
+        from rlm.server.runtime_pipeline import _apply_repl_injections, RuntimeDispatchServices
+
+        skill_loader = MagicMock()
+        skill_loader.activate_all.return_value = None
+        skill_loader.inject_sif_callables.return_value = None
+        skill_loader.build_skill_doc_fn.return_value = (lambda name: "", lambda: [])
+        plugin_loader = MagicMock()
+        plugin_loader.inject_multiple.return_value = None
+
+        session_manager = MagicMock()
+        session_manager.get_events.return_value = [
+            {
+                "timestamp": "2026-03-30T10:00:00+00:00",
+                "event_type": "webhook_received",
+                "payload": {
+                    "client_id": "telegram:42",
+                    "from_user": "demet",
+                    "text_preview": "pergunta recente",
+                    "payload_size": 128,
+                    "channel": "telegram",
+                },
+            },
+            {
+                "timestamp": "2026-03-30T09:59:00+00:00",
+                "event_type": "webhook_received",
+                "payload": {
+                    "client_id": "webchat:browser-1",
+                    "from_user": "browser",
+                    "text_preview": "mensagem webchat",
+                    "payload_size": 64,
+                    "channel": "webchat",
+                },
+            },
+            {
+                "timestamp": "2026-03-30T09:58:00+00:00",
+                "event_type": "webhook_received",
+                "payload": {
+                    "client_id": "telegram:99",
+                    "from_user": "outro",
+                    "text_preview": "outro chat",
+                    "payload_size": 96,
+                    "channel": "telegram",
+                },
+            },
+            {
+                "timestamp": "2026-03-30T09:57:00+00:00",
+                "event_type": "tui_response_ready",
+                "payload": {"text": "ignorar"},
+            },
+        ]
+
+        services = RuntimeDispatchServices(
+            session_manager=session_manager,
+            supervisor=MagicMock(),
+            plugin_loader=plugin_loader,
+            event_router=MagicMock(),
+            hooks=MagicMock(),
+            skill_loader=skill_loader,
+        )
+
+        mock_rlm_session = SimpleNamespace(
+            memory=MagicMock(),
+            session_id="sess-telegram-history",
+            _memory=MagicMock(),
+            _session_id="sess-telegram-history",
+        )
+        session = SimpleNamespace(
+            rlm_instance=mock_rlm_session,
+            session_id="sess-telegram-history",
+            client_id="tui:default",
+        )
+
+        repl_locals: dict[str, Any] = {}
+
+        _apply_repl_injections(
+            services,
+            repl_locals,
+            session=session,
+            client_id="tui:default",
+            plugins_to_load=[],
+            dynamic_skill_context="",
+        )
+
+        updates = repl_locals["telegram_get_updates"](limit=5)
+        assert [item["client_id"] for item in updates] == ["telegram:42", "telegram:99"]
+        assert updates[0]["text"] == "pergunta recente"
+        assert updates[0]["source"] == "telegram"
+
+        filtered = repl_locals["telegram_get_updates"](limit=5, chat_id="99")
+        assert len(filtered) == 1
+        assert filtered[0]["chat_id"] == "99"
+        assert filtered[0]["from_user"] == "outro"
+
+        session_manager.get_events.assert_called_with("sess-telegram-history", limit=40)
 
     def test_no_crash_when_rlm_instance_is_none(self):
         from rlm.server.runtime_pipeline import _apply_repl_injections, RuntimeDispatchServices
@@ -329,16 +428,17 @@ class TestRuntimePipelineSessionToolInjection:
         skill_loader.activate_all.return_value = None
         skill_loader.inject_sif_callables.return_value = None
         skill_loader.build_skill_doc_fn.return_value = (lambda name: "", lambda: [])
+        plugin_loader = MagicMock()
+        plugin_loader.inject_multiple.return_value = None
 
         services = RuntimeDispatchServices(
             session_manager=MagicMock(),
             supervisor=MagicMock(),
-            plugin_loader=MagicMock(),
+            plugin_loader=plugin_loader,
             event_router=MagicMock(),
             hooks=MagicMock(),
             skill_loader=skill_loader,
         )
-        services.plugin_loader.inject_multiple.return_value = None
 
         # rlm_instance is None — should not crash
         session = SimpleNamespace(
@@ -558,6 +658,33 @@ class TestSystemPromptMemoryTaxonomy:
         from rlm.utils.prompts import RLM_SYSTEM_PROMPT
         # The taxonomy section should contain a disambiguation warning
         assert "NOT" in RLM_SYSTEM_PROMPT or "confuse" in RLM_SYSTEM_PROMPT or "confus" in RLM_SYSTEM_PROMPT
+
+
+class TestTelegramOperationalPrompting:
+    def test_system_prompt_prefers_reply_and_blocks_telegram_polling(self):
+        from rlm.utils.prompts import RLM_SYSTEM_PROMPT
+
+        assert "Prefer `reply(text)`" in RLM_SYSTEM_PROMPT
+        assert "telegram_bot(chat_id, text)" in RLM_SYSTEM_PROMPT
+        assert "Never use `telegram_bot` or raw Telegram polling" in RLM_SYSTEM_PROMPT
+
+    def test_event_router_telegram_and_tui_routes_document_safe_contract(self):
+        from rlm.server.event_router import EventRouter
+
+        router = EventRouter()
+        telegram_prompt, _ = router.route(
+            "telegram:42",
+            {"from_user": "demet", "text": "responda isso"},
+        )
+        tui_prompt, _ = router.route(
+            "tui:default",
+            {"from_user": "operador", "session_id": "sess-1", "text": "o que chegou no telegram?"},
+        )
+
+        assert "Respond using the universal `reply(text)` tool" in telegram_prompt
+        assert "Do not use `telegram_bot` to answer the current message" in telegram_prompt
+        assert "use `telegram_get_updates(...)`" in tui_prompt
+        assert "Nunca use `telegram_bot` para descobrir mensagens recebidas" in tui_prompt
 
 
 # ---------------------------------------------------------------------------
