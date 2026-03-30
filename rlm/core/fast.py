@@ -66,6 +66,14 @@ try:
         to the Python environment when one is provided (Rust can't access it).
         """
         environment = kwargs.get("environment") or (args[0] if args else None)
+
+        if environment is not None:
+            get_pending = getattr(environment, "get_pending_final", None)
+            if callable(get_pending):
+                pending = get_pending()
+                if isinstance(pending, str):
+                    return pending
+
         rust_result = _rust_find_final_answer(text)
 
         # If Rust found a FINAL_VAR match, it returns the variable NAME, not the value.

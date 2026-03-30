@@ -12,6 +12,7 @@ class _DummySessionManager:
         self.session = session
         self.events: list[dict] = []
         self.updated: list[dict] = []
+        self.transition_calls: list[dict] = []
 
     def get_or_create(self, client_id: str):
         return self.session
@@ -41,6 +42,21 @@ class _DummySessionManager:
 
     def update_session(self, session) -> None:
         self.updated.append(dict(session.metadata))
+
+    def transition_status(self, session, new_status: str, *, source: str = "test", reason: str = "", **kwargs) -> bool:
+        self.transition_calls.append({"new_status": new_status, "source": source, "reason": reason})
+        session.status = new_status
+        self.update_session(session)
+        self.log_event(
+            session.session_id,
+            "session_status_changed",
+            {
+                "session_status": new_status,
+                "source": source,
+                "reason": reason,
+            },
+        )
+        return True
 
 
 class _DummyEnv:
@@ -80,6 +96,11 @@ class _DummyEnv:
         self.snapshot["recursive_session"]["commands"][-1]["status"] = status
         self.snapshot["recursive_session"]["commands"][-1]["outcome"] = outcome or {}
         return self.snapshot["recursive_session"]["commands"][-1]
+
+    def set_runtime_paused(self, paused: bool, *, reason: str = "", origin: str = "operator"):
+        self.snapshot.setdefault("controls", {})["paused"] = paused
+        self.snapshot["controls"]["pause_reason"] = reason
+        return self.snapshot["controls"]
 
     def set_runtime_focus(self, branch_id: int, *, fixed: bool = False, reason: str = "", origin: str = "operator"):
         self.snapshot["controls"]["focused_branch_id"] = branch_id
@@ -198,6 +219,82 @@ def test_dispatch_operator_prompt_uses_runtime_pipeline_when_available() -> None
     assert called[0]["payload"]["channel"] == "tui"
     assert called[0]["kwargs"]["record_conversation"] is True
     assert session.metadata["last_operator_response"] == "resultado roteado"
+
+
+def test_dispatch_operator_prompt_records_worker_error_when_pipeline_fails_early() -> None:
+    from rlm.core.operator_surface import dispatch_operator_prompt
+
+    session = _make_session()
+    manager = _DummySessionManager(session)
+
+    from unittest.mock import patch
+
+    with patch(
+        "rlm.server.runtime_pipeline.dispatch_runtime_prompt_sync",
+        side_effect=RuntimeError("falha no bootstrap do dispatch"),
+    ):
+        dispatch_operator_prompt(
+            manager,
+            MagicMock(is_running=lambda session_id: False),
+            session,
+            text="roteie via pipeline",
+            origin="tui",
+            runtime_services=object(),
+            client_id="tui:demo",
+        )
+        time.sleep(0.05)
+
+    assert session.metadata["last_operator_status"] == "error"
+    assert session.metadata["last_operator_response"] == "falha no bootstrap do dispatch"
+    assert session.last_error == "falha no bootstrap do dispatch"
+    assert manager.events[-1]["event_type"] == "tui_response_error"
+
+
+def test_apply_operator_command_resume_runtime_uses_transition_status() -> None:
+    from rlm.core.operator_surface import apply_operator_command
+
+    session = _make_session()
+    session.status = "aborted"
+    manager = _DummySessionManager(session)
+
+    entry, runtime = apply_operator_command(
+        manager,
+        session,
+        supervisor=None,
+        command_type="resume_runtime",
+        payload={"reason": "retomar apos pausa"},
+        origin="tui",
+    )
+
+    assert entry["status"] == "completed"
+    assert runtime["controls"]["paused"] is False
+    assert session.status == "idle"
+    assert manager.transition_calls[-1]["new_status"] == "idle"
+    assert manager.transition_calls[-1]["source"] == "operator_surface.resume_runtime"
+
+
+def test_apply_operator_command_rejects_unknown_command_type() -> None:
+    from rlm.core.operator_surface import apply_operator_command
+
+    session = _make_session()
+    manager = _DummySessionManager(session)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="command_type sem executor dedicado"):
+        apply_operator_command(
+            manager,
+            session,
+            supervisor=None,
+            command_type="unknown_control",
+            payload={"note": "nao existe"},
+            origin="tui",
+        )
+
+    command = session.rlm_instance._persistent_env.snapshot["recursive_session"]["commands"][-1]
+    assert command["status"] == "failed"
+    assert "command_type sem executor dedicado" in command["outcome"]["error"]
+    assert manager.events[-1]["event_type"] == "tui_command_failed"
 
 
 def test_runtime_workbench_once_renders_panels() -> None:

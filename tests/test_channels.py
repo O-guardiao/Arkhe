@@ -2116,6 +2116,31 @@ class TestWebChatCommands:
         )
         assert resp.status_code == 400
 
+    def test_command_endpoint_rejects_unknown_command_type(self, webchat_client: TestClient) -> None:
+        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+            webchat_client.post(
+                "/webchat/message",
+                json={"text": "Teste", "session_id": "sess_unknown_cmd"},
+            )
+
+        resp = webchat_client.post(
+            "/webchat/session/runtime-sess_unknown_cmd/commands",
+            json={
+                "command_type": "unknown_control",
+                "payload": {"note": "nao existe"},
+            },
+        )
+
+        assert resp.status_code == 400
+        assert "command_type sem executor dedicado" in resp.json()["detail"]
+
+        activity = webchat_client.get("/webchat/session/runtime-sess_unknown_cmd/activity")
+        assert activity.status_code == 200
+        command = activity.json()["runtime"]["recursive_session"]["commands"][-1]
+        assert command["command_type"] == "unknown_control"
+        assert command["status"] == "failed"
+        assert "command_type sem executor dedicado" in command["outcome"]["error"]
+
     def test_command_endpoint_rejects_empty_type(self, webchat_client: TestClient) -> None:
         with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             webchat_client.post(

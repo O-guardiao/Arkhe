@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import threading
 import time
 from pathlib import Path
@@ -19,18 +20,42 @@ def get_runtime_environment(session: Any) -> Any | None:
     return getattr(rlm_instance, "_persistent_env", None)
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)):
+        return list(value)
+    return []
+
+
+def _require_command_entry(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeError("Runtime retornou entrada de comando invalida")
+    return dict(value)
+
+
 def build_runtime_snapshot(session: Any) -> dict[str, Any] | None:
     env = get_runtime_environment(session)
     snapshot = getattr(env, "get_runtime_state_snapshot", None)
     if not callable(snapshot):
         return None
 
-    runtime = snapshot()
-    recursive = dict(runtime.get("recursive_session") or {})
-    tasks = dict(runtime.get("tasks") or {})
-    attachments = dict(runtime.get("attachments") or {})
-    timeline = dict(runtime.get("timeline") or {})
-    coordination = dict(runtime.get("coordination") or {})
+    runtime_raw = snapshot()
+    if not isinstance(runtime_raw, dict):
+        return None
+
+    runtime = dict(runtime_raw)
+    recursive = _as_dict(runtime.get("recursive_session"))
+    tasks = _as_dict(runtime.get("tasks"))
+    attachments = _as_dict(runtime.get("attachments"))
+    timeline = _as_dict(runtime.get("timeline"))
+    coordination = _as_dict(runtime.get("coordination"))
 
     recursive["messages"] = _tail(list(recursive.get("messages") or []), 40)
     recursive["commands"] = _tail(list(recursive.get("commands") or []), 20)
@@ -52,7 +77,8 @@ def build_activity_payload(session_manager: Any, session: Any, *, event_limit: i
     get_operation_log = getattr(session_manager, "get_operation_log", None)
     operation_log = []
     if callable(get_operation_log):
-        operation_log = list(reversed(get_operation_log(session.session_id, limit=event_limit)))
+        operation_items = get_operation_log(session.session_id, limit=event_limit)
+        operation_log = list(reversed(_as_list(operation_items)))
     return {
         "session": session_manager.session_to_dict(session),
         "event_log": list(reversed(session_manager.get_events(session.session_id, limit=event_limit))),
@@ -71,7 +97,8 @@ def _update_command_status(
     update_command = getattr(env, "update_recursive_command", None)
     if not callable(update_command):
         return None
-    return update_command(command_id, status=status, outcome=outcome)
+    updated = update_command(command_id, status=status, outcome=outcome)
+    return _as_dict(updated) or None
 
 
 def _persist_session_state(session: Any, checkpoint_dir: Path) -> str:
@@ -86,6 +113,22 @@ def _persist_session_state(session: Any, checkpoint_dir: Path) -> str:
         raise RuntimeError("Sessao sem mecanismo de checkpoint persistente")
     checkpoint_path = checkpoint_dir / "repl_checkpoint.json"
     return str(save_checkpoint(str(checkpoint_path)))
+
+
+def _transition_session_status(
+    session_manager: Any,
+    session: Any,
+    status: str,
+    *,
+    source: str,
+    reason: str,
+) -> None:
+    transition_status = getattr(session_manager, "transition_status", None)
+    if callable(transition_status):
+        transition_status(session, status, source=source, reason=reason)
+        return
+    session.status = status
+    session_manager.update_session(session)
 
 
 def _apply_queued_command(
@@ -125,8 +168,15 @@ def _apply_queued_command(
         session.metadata["operator_paused"] = False
         session.metadata["operator_pause_reason"] = ""
         if getattr(session, "status", "") == "aborted":
-            session.status = "idle"
-        session_manager.update_session(session)
+            _transition_session_status(
+                session_manager,
+                session,
+                "idle",
+                source="operator_surface.resume_runtime",
+                reason=reason or "runtime resumed by operator",
+            )
+        else:
+            session_manager.update_session(session)
         outcome = {"applied": True, "controls": control_state}
     elif command_type == "create_checkpoint":
         state_dir = Path(getattr(session, "state_dir", "") or ".")
@@ -172,7 +222,7 @@ def _apply_queued_command(
     elif command_type in {"request_runtime_summary", "review_parallel_state"}:
         outcome = {"applied": True, "requested": command_type, "branch_id": branch_id}
     else:
-        outcome = {"applied": False, "reason": "command_type sem executor dedicado"}
+        raise ValueError(f"command_type sem executor dedicado: {command_type}")
 
     updated = _update_command_status(env, int(entry["command_id"]), status="completed", outcome=outcome)
     session_manager.log_event(
@@ -207,7 +257,7 @@ def apply_operator_command(
     body.setdefault("source", origin)
     body.setdefault("issued_at", int(time.time()))
 
-    entry = queue_command(command_type, payload=body, branch_id=branch_id)
+    entry = _require_command_entry(queue_command(command_type, payload=body, branch_id=branch_id))
     session_manager.log_event(
         session.session_id,
         f"{origin}_command_enqueued",
@@ -364,6 +414,13 @@ def dispatch_operator_prompt(
         def _worker() -> None:
             from rlm.server.runtime_pipeline import dispatch_runtime_prompt_sync
 
+            completion_notified = False
+
+            def _notify(result: Any, finished_session: Any | None = None) -> None:
+                nonlocal completion_notified
+                completion_notified = True
+                _on_complete(result, finished_session)
+
             try:
                 dispatch_runtime_prompt_sync(
                     runtime_services,
@@ -377,10 +434,21 @@ def dispatch_operator_prompt(
                     session=session,
                     record_conversation=True,
                     source_name=origin,
-                    on_complete=_on_complete,
+                    on_complete=_notify,
                 )
-            except Exception:
-                return
+            except Exception as exc:
+                if completion_notified:
+                    return
+                _notify(
+                    {
+                        "status": "error",
+                        "response": None,
+                        "execution_time": 0.0,
+                        "error_detail": str(exc),
+                        "abort_reason": None,
+                    },
+                    session,
+                )
 
         thread = threading.Thread(target=_worker, daemon=True, name=f"{origin}-dispatch-{session.session_id[:8]}")
         thread.start()
