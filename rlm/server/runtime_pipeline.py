@@ -182,19 +182,24 @@ def _apply_repl_injections(
 
     from rlm.plugins.channel_registry import ChannelRegistry
 
+    # Capture originating_channel at call time for thread-safe reply routing.
+    # In unified sessions, session.client_id may change between requests;
+    # the parameter ``client_id`` is the actual originating channel.
+    _originating_channel = client_id
+
     def reply(message: str) -> bool:
-        return ChannelRegistry.reply(session.client_id, sanitize_text_payload(message))
+        return ChannelRegistry.reply(_originating_channel, sanitize_text_payload(message))
 
     def reply_audio(text: str, voice: str = "alloy", output_format: str = "mp3") -> bool:
         return ChannelRegistry.reply_audio(
-            session.client_id,
+            _originating_channel,
             sanitize_text_payload(text),
             voice=voice,
             output_format=output_format,
         )
 
     def send_media(media_url_or_path: str, caption: str = "") -> bool:
-        return ChannelRegistry.send_media(session.client_id, media_url_or_path, sanitize_text_payload(caption))
+        return ChannelRegistry.send_media(_originating_channel, media_url_or_path, sanitize_text_payload(caption))
 
     repl_locals["reply"] = reply
     repl_locals["reply_audio"] = reply_audio

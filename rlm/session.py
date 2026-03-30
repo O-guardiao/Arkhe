@@ -197,6 +197,8 @@ class RLMSession:
         memory_db_path: str | None = None,
         session_id: str = "",
         state_dir: str | None = None,
+        client_id: str = "",
+        user_id: str = "main",
         **rlm_kwargs: Any,
     ):
         # Lazy import para evitar circular no nível de módulo
@@ -246,6 +248,8 @@ class RLMSession:
 
         # Identidade da sessão — isola memórias de longo prazo por sessão
         self._session_id: str = session_id or str(uuid.uuid4())
+        self.client_id: str = client_id
+        self.user_id: str = user_id
 
         # Memória de longo prazo (opcional — nunca trava o init)
         self._memory: Any = None
@@ -1232,7 +1236,8 @@ class RLMSession:
 
             session_data = {
                 "session_id": self._session_id,
-                "client_id": getattr(self, "client_id", ""),
+                "client_id": self.client_id,
+                "user_id": self.user_id,
                 "created_at": getattr(self, "_created_at", ""),
                 "status": "completed",
                 "total_completions": getattr(self._rlm, "_iteration_count", 0),

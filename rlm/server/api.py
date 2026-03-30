@@ -469,6 +469,7 @@ async def receive_webhook(client_id: str, request: Request):
     session = sm.get_or_create(client_id)
     sm.log_event(session.session_id, "webhook_received", {
         "client_id": client_id,
+        "user_id": session.user_id,
         "payload_size": len(json.dumps(payload)),
     })
     services.hooks.trigger(
