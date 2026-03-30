@@ -134,6 +134,18 @@ class SessionManager:
     def _init_db(self):
         """Create the sessions table if it doesn't exist, apply migrations."""
         with self._get_conn() as conn:
+            # --- Migration first: add user_id to legacy tables that lack it --
+            try:
+                cursor = conn.execute("PRAGMA table_info(sessions)")
+                existing_columns = {row[1] for row in cursor.fetchall()}
+                if existing_columns and "user_id" not in existing_columns:
+                    conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'main'")
+                    conn.execute("UPDATE sessions SET user_id = 'main' WHERE user_id = '' OR user_id IS NULL")
+                    conn.commit()
+                    _session_log.info("DB migration: added user_id column to sessions table")
+            except Exception as exc:
+                _session_log.warning(f"DB migration user_id check: {exc}")
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id   TEXT PRIMARY KEY,
@@ -168,19 +180,6 @@ class SessionManager:
                 )
             """)
             conn.commit()
-
-            # --- Migration: add user_id column to existing databases -------
-            try:
-                cursor = conn.execute("PRAGMA table_info(sessions)")
-                columns = {row[1] for row in cursor.fetchall()}
-                if "user_id" not in columns:
-                    conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'main'")
-                    conn.execute("UPDATE sessions SET user_id = 'main' WHERE user_id = '' OR user_id IS NULL")
-                    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
-                    conn.commit()
-                    _session_log.info("DB migration: added user_id column to sessions table")
-            except Exception as exc:
-                _session_log.warn(f"DB migration user_id failed (may be fine): {exc}")
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get a SQLite connection (thread-safe with check_same_thread=False)."""
