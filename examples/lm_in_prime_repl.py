@@ -10,7 +10,7 @@ import os
 from dotenv import load_dotenv
 
 from rlm.clients.portkey import PortkeyClient
-from rlm.core.lm_handler import LMHandler
+from rlm.core.engine.lm_handler import LMHandler
 from rlm.environments.prime_repl import PrimeREPL
 
 load_dotenv()

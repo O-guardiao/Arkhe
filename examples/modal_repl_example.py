@@ -5,7 +5,7 @@ Run with: python -m examples.modal_repl_example
 """
 
 from rlm.clients.base_lm import BaseLM
-from rlm.core.lm_handler import LMHandler
+from rlm.core.engine.lm_handler import LMHandler
 from rlm.core.types import ModelUsageSummary, UsageSummary
 from rlm.environments.modal_repl import ModalREPL
 

@@ -19,7 +19,7 @@ def kb_db_path(tmp_path):
 
 @pytest.fixture
 def kb(kb_db_path):
-    from rlm.core.knowledge_base import GlobalKnowledgeBase
+    from rlm.core.memory.knowledge_base import GlobalKnowledgeBase
     return GlobalKnowledgeBase(db_path=kb_db_path)
 
 
@@ -36,7 +36,7 @@ def vault_path(tmp_path):
 class TestObsidianExport:
 
     def test_export_document_creates_file(self, kb, vault_path):
-        from rlm.core.obsidian_mirror import export_document_to_vault
+        from rlm.core.integrations.obsidian_mirror import export_document_to_vault
 
         doc_id = kb.add_document(
             title="Deploy Docker",
@@ -62,7 +62,7 @@ class TestObsidianExport:
         assert "sess-1" in content
 
     def test_export_document_sanitizes_filename(self, kb, vault_path):
-        from rlm.core.obsidian_mirror import export_document_to_vault
+        from rlm.core.integrations.obsidian_mirror import export_document_to_vault
 
         doc_id = kb.add_document(
             title="Config: nginx/reverse?proxy",
@@ -81,7 +81,7 @@ class TestObsidianExport:
         assert "?" not in filename
 
     def test_export_all_writes_multiple(self, kb, vault_path):
-        from rlm.core.obsidian_mirror import export_all_to_vault
+        from rlm.core.integrations.obsidian_mirror import export_all_to_vault
 
         kb.add_document(title="Doc1", summary="S1", tags=["a"], importance=0.5,
                         domain="d", source_sessions=["s1"])
@@ -110,7 +110,7 @@ class TestObsidianImport:
         return filepath
 
     def test_import_conceito_basic(self, kb, vault_path):
-        from rlm.core.obsidian_mirror import import_conceitos_from_vault
+        from rlm.core.integrations.obsidian_mirror import import_conceitos_from_vault
 
         self._write_conceito(vault_path, "mutex.md", """---
 title: "Mutex e Semáforos"
@@ -135,7 +135,7 @@ Mutex garante exclusão mútua. Semáforo permite N acessos simultâneos.
         assert doc["domain"] == "concurrency"
 
     def test_import_skips_duplicate(self, kb, vault_path):
-        from rlm.core.obsidian_mirror import import_conceitos_from_vault
+        from rlm.core.integrations.obsidian_mirror import import_conceitos_from_vault
 
         # Pre-create a document with same title
         kb.add_document(
@@ -159,12 +159,12 @@ Duplicate should be skipped.
         assert len(imported) == 0
 
     def test_import_no_conceitos_dir(self, kb, vault_path):
-        from rlm.core.obsidian_mirror import import_conceitos_from_vault
+        from rlm.core.integrations.obsidian_mirror import import_conceitos_from_vault
         imported = import_conceitos_from_vault(vault_path, kb)
         assert imported == []
 
     def test_import_no_frontmatter(self, kb, vault_path):
-        from rlm.core.obsidian_mirror import import_conceitos_from_vault
+        from rlm.core.integrations.obsidian_mirror import import_conceitos_from_vault
 
         self._write_conceito(vault_path, "plain.md", """
 Just a plain note without frontmatter.
@@ -182,7 +182,7 @@ Some content here.
 class TestFrontmatterParsing:
 
     def test_parse_with_frontmatter(self):
-        from rlm.core.obsidian_mirror import _parse_frontmatter
+        from rlm.core.integrations.obsidian_mirror import _parse_frontmatter
 
         content = """---
 title: "Test"
@@ -201,7 +201,7 @@ Body content here.
         assert "Body content here." in body
 
     def test_parse_without_frontmatter(self):
-        from rlm.core.obsidian_mirror import _parse_frontmatter
+        from rlm.core.integrations.obsidian_mirror import _parse_frontmatter
 
         content = "Just plain text."
         fm, body = _parse_frontmatter(content)
@@ -212,7 +212,7 @@ Body content here.
 class TestBodySplitting:
 
     def test_split_with_resumo_section(self):
-        from rlm.core.obsidian_mirror import _split_body
+        from rlm.core.integrations.obsidian_mirror import _split_body
 
         body = """## Resumo
 This is the summary.
@@ -225,7 +225,7 @@ Full details here.
         assert "Full details" in full
 
     def test_split_fallback_paragraphs(self):
-        from rlm.core.obsidian_mirror import _split_body
+        from rlm.core.integrations.obsidian_mirror import _split_body
 
         body = """First paragraph is summary.
 

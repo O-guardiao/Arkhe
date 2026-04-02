@@ -1,4 +1,4 @@
-from rlm.core.rlm import RLM
+from rlm.core.engine.rlm import RLM
 
 __all__ = ["RLM"]
 

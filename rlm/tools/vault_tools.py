@@ -110,7 +110,7 @@ def get_vault_tools(rlm_session: Any) -> dict[str, Any]:
 
     def vault_moc(domain: str) -> dict[str, Any]:
         """Get the Map of Content (MOC) for a domain. Returns the MOC note content."""
-        from rlm.core.obsidian_bridge import _safe_filename
+        from rlm.core.integrations.obsidian_bridge import _safe_filename
         safe = _safe_filename(domain)
         filepath = os.path.join(vault_path, "moc", f"{safe}.md")
         if not os.path.isfile(filepath):

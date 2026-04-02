@@ -323,7 +323,7 @@ class TestAllSkillsViaLoader(unittest.TestCase):
         if root not in sys.path:
             sys.path.insert(0, root)
         try:
-            from rlm.core.skill_loader import _parse_skill_file
+            from rlm.core.skillkit.skill_loader import _parse_skill_file
             self._parse = _parse_skill_file
         except ImportError as exc:
             self.skipTest(f"Optional deps missing: {exc}")
@@ -420,7 +420,7 @@ class TestMaxDepthMultiple(unittest.TestCase):
     def test_rlm_accepts_max_depth_3(self):
         """RLM não deve lançar erro com max_depth=3."""
         try:
-            from rlm.core.rlm import RLM
+            from rlm.core.engine.rlm import RLM
             rlm = RLM(
                 backend="anthropic",
                 backend_kwargs={"model": "claude-3-5-haiku-20241022"},
@@ -434,7 +434,7 @@ class TestMaxDepthMultiple(unittest.TestCase):
     def test_rlm_accepts_two_other_backends(self):
         """RLM deve aceitar lista de 2 backends sem ValueError."""
         try:
-            from rlm.core.rlm import RLM
+            from rlm.core.engine.rlm import RLM
             mock_backend_1 = MagicMock()
             mock_backend_2 = MagicMock()
             # Não deve lançar ValueError
@@ -453,7 +453,7 @@ class TestMaxDepthMultiple(unittest.TestCase):
     def test_rlm_raises_on_mismatched_backends_and_kwargs(self):
         """Mismatch entre other_backends e other_backend_kwargs deve lançar ValueError."""
         try:
-            from rlm.core.rlm import RLM
+            from rlm.core.engine.rlm import RLM
         except ImportError as exc:
             self.skipTest(f"Optional deps: {exc}")
 
@@ -471,7 +471,7 @@ class TestMaxDepthMultiple(unittest.TestCase):
     def test_single_backend_still_works(self):
         """Um único other_backend ainda deve funcionar normalmente."""
         try:
-            from rlm.core.rlm import RLM
+            from rlm.core.engine.rlm import RLM
             mock_b = MagicMock()
             rlm = RLM(
                 backend="anthropic",
@@ -500,7 +500,7 @@ class TestRLMSandboxEnvVar(unittest.TestCase):
 
     def test_sandbox_env_var_sets_environment_type(self):
         try:
-            from rlm.core.rlm import RLM
+            from rlm.core.engine.rlm import RLM
         except ImportError as exc:
             self.skipTest(f"Optional deps: {exc}")
 
@@ -517,7 +517,7 @@ class TestRLMSandboxEnvVar(unittest.TestCase):
 
     def test_no_sandbox_env_var_keeps_local(self):
         try:
-            from rlm.core.rlm import RLM
+            from rlm.core.engine.rlm import RLM
         except ImportError as exc:
             self.skipTest(f"Optional deps: {exc}")
 
@@ -533,7 +533,7 @@ class TestRLMSandboxEnvVar(unittest.TestCase):
     def test_explicit_docker_not_overridden(self):
         """Se já passou 'docker' explicitamente, não deve trocar para sandbox mesmo com flag."""
         try:
-            from rlm.core.rlm import RLM
+            from rlm.core.engine.rlm import RLM
         except ImportError as exc:
             self.skipTest(f"Optional deps: {exc}")
 

@@ -40,7 +40,7 @@ class TestNewSkillsParsing:
 
     @pytest.fixture
     def loader(self):
-        from rlm.core.skill_loader import SkillLoader
+        from rlm.core.skillkit.skill_loader import SkillLoader
         return SkillLoader()
 
     NEW_SKILLS = [
@@ -457,10 +457,10 @@ class TestBrowserGlobalsInjectedInRLM:
 
     def test_rlm_imports_make_browser_globals(self):
         """Após refatoração: make_browser_globals deve existir em rlm_context_mixin.py."""
-        mixin_path = PROJ_ROOT / "rlm" / "core" / "rlm_context_mixin.py"
+        mixin_path = PROJ_ROOT / "rlm" / "core" / "engine" / "rlm_context_mixin.py"
         source = mixin_path.read_text(encoding="utf-8")
         assert "make_browser_globals" in source, (
-            "make_browser_globals não encontrado em rlm/core/rlm_context_mixin.py"
+            "make_browser_globals não encontrado em rlm/core/engine/rlm_context_mixin.py"
         )
 
     def test_browser_globals_injected_in_completion_block(self):
@@ -468,7 +468,7 @@ class TestBrowserGlobalsInjectedInRLM:
         Após refatoração, a injeção está em _inject_repl_globals em rlm_context_mixin.py.
         """
         # A lógica foi movida para rlm_context_mixin.py na refatoração de mixins
-        mixin_path = PROJ_ROOT / "rlm" / "core" / "rlm_context_mixin.py"
+        mixin_path = PROJ_ROOT / "rlm" / "core" / "engine" / "rlm_context_mixin.py"
         source = mixin_path.read_text(encoding="utf-8")
         assert "environment.globals.update(make_browser_globals())" in source
 
@@ -489,7 +489,7 @@ class TestBrowserGlobalsInjectedInRLM:
         Após refatoração, o bloco Phase 9.4 está em rlm_context_mixin.py.
         """
         # A lógica foi movida para rlm_context_mixin.py na refatoração de mixins
-        mixin_path = PROJ_ROOT / "rlm" / "core" / "rlm_context_mixin.py"
+        mixin_path = PROJ_ROOT / "rlm" / "core" / "engine" / "rlm_context_mixin.py"
         source = mixin_path.read_text(encoding="utf-8")
         # O comentário explícito de fase foi substituído pelo docstring do método
         assert "browser globals" in source.lower() or "make_browser_globals" in source

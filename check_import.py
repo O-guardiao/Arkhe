@@ -1,14 +1,14 @@
 try:
-    print("Importing rlm.core.fast...")
-    import rlm.core.fast
+    print("Importing rlm.core.optimized.fast...")
+    import rlm.core.optimized.fast
     print("Success fast!")
     
-    print("Importing rlm.core.rlm...")
-    import rlm.core.rlm
+    print("Importing rlm.core.engine.rlm...")
+    import rlm.core.engine.rlm
     print("Success rlm!")
     
-    print("Importing rlm.core.lm_handler...")
-    import rlm.core.lm_handler
+    print("Importing rlm.core.engine.lm_handler...")
+    import rlm.core.engine.lm_handler
     print("Success lm_handler!")
 
     print("Importing rlm.environments.local_repl...")

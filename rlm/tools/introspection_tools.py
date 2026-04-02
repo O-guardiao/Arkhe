@@ -120,7 +120,7 @@ def get_introspection_tools(rlm_session: Any) -> dict[str, Any]:
 
         # --- SIF tools loaded ---
         try:
-            from rlm.core.sif import SIFFactory
+            from rlm.core.skillkit.sif import SIFFactory
             sif_names = list(SIFFactory._usage_stats.keys())
             result["sif_tools_loaded"] = sif_names
             result["sif_tool_count"] = len(sif_names)
@@ -130,7 +130,7 @@ def get_introspection_tools(rlm_session: Any) -> dict[str, Any]:
 
         # --- Skill telemetry summary ---
         try:
-            from rlm.core.skill_telemetry import get_skill_telemetry
+            from rlm.core.skillkit.skill_telemetry import get_skill_telemetry
             store = get_skill_telemetry()
             summary = store.get_summary()
             result["telemetry"] = {
@@ -149,8 +149,8 @@ def get_introspection_tools(rlm_session: Any) -> dict[str, Any]:
         result: dict[str, Any] = {"tools": {}, "recommendations": []}
 
         try:
-            from rlm.core.sif import SIFFactory
-            from rlm.core.skill_telemetry import get_skill_telemetry
+            from rlm.core.skillkit.sif import SIFFactory
+            from rlm.core.skillkit.skill_telemetry import get_skill_telemetry
             store = get_skill_telemetry()
 
             for name, stats in SIFFactory._usage_stats.items():

@@ -32,7 +32,7 @@ import random
 import threading
 from dataclasses import dataclass
 
-from rlm.core.cancellation import CancellationToken
+from rlm.core.lifecycle.cancellation import CancellationToken
 
 
 @dataclass(frozen=True)

@@ -24,8 +24,8 @@ class TestTopLevelImports:
         assert RLM is not None
 
     def test_rlm_core_rlm_import(self):
-        """Test that RLM can be imported from rlm.core.rlm."""
-        from rlm.core.rlm import RLM
+        """Test that RLM can be imported from rlm.core.engine.rlm."""
+        from rlm.core.engine.rlm import RLM
 
         assert RLM is not None
 
@@ -108,19 +108,19 @@ class TestCoreImports:
 
     def test_core_rlm_import(self):
         """Test core RLM import."""
-        from rlm.core.rlm import RLM
+        from rlm.core.engine.rlm import RLM
 
         assert RLM is not None
 
     def test_core_lm_handler_import(self):
         """Test LMHandler import."""
-        from rlm.core.lm_handler import LMHandler
+        from rlm.core.engine.lm_handler import LMHandler
 
         assert LMHandler is not None
 
     def test_core_comms_utils_import(self):
         """Test comms_utils imports."""
-        from rlm.core.comms_utils import (
+        from rlm.core.comms.comms_utils import (
             LMRequest,
             LMResponse,
             send_lm_request,
@@ -311,9 +311,9 @@ class TestImportConflicts:
             "rlm.clients.base_lm",
             "rlm.core",
             "rlm.core.types",
-            "rlm.core.rlm",
-            "rlm.core.lm_handler",
-            "rlm.core.comms_utils",
+            "rlm.core.engine.rlm",
+            "rlm.core.engine.lm_handler",
+            "rlm.core.comms.comms_utils",
             "rlm.environments",
             "rlm.environments.base_env",
             "rlm.environments.local_repl",

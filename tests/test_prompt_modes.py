@@ -1,4 +1,4 @@
-from rlm.core.rlm import RLM
+from rlm.core.engine.rlm import RLM
 from rlm.utils.prompts import build_multimodal_user_prompt, build_user_prompt
 
 

@@ -20,7 +20,7 @@ from contextlib import closing
 from typing import Any
 import sqlite3
 
-from rlm.core.memory_manager import MultiVectorMemory
+from rlm.core.memory.memory_manager import MultiVectorMemory
 
 
 _RAW_LAYER_PREFIX = "raw::"
@@ -76,6 +76,10 @@ class RLMMemory:
         self.scope_name = self._normalize_scope_name(scope_name or self._default_scope_name())
         self.scope_id = f"{self.scope_kind}::{self.scope_name}"
         self.session_id = self.scope_id
+
+        # P0: Agent identity context — injected into every memory write.
+        # Set via local_repl when running as child agent (depth > 1).
+        self._agent_context = None  # type: AgentContext | None
 
     def _default_scope_name(self) -> str:
         if os.path.basename(self.base_dir) == ".rlm_memory":
@@ -136,11 +140,19 @@ class RLMMemory:
                 return mem
         return None
 
+    def _enrich_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        """Merge agent identity fields into metadata when running as child agent."""
+        if self._agent_context is not None:
+            return {**metadata, **self._agent_context.to_metadata()}
+        return metadata
+
     def _save_knowledge_entry(self, entry: KnowledgeEntry) -> None:
         self.db.add_memory(
             session_id=self.session_id,
             content=entry.analysis,
-            metadata={"type": "knowledge", "key": entry.key, "entry": entry.to_dict()},
+            metadata=self._enrich_metadata(
+                {"type": "knowledge", "key": entry.key, "entry": entry.to_dict()}
+            ),
             memory_id=self._knowledge_memory_id(entry.key),
         )
 
@@ -153,7 +165,7 @@ class RLMMemory:
         self.db.add_memory(
             session_id=self.session_id,
             content=content,
-            metadata={"type": "raw", "key": key},
+            metadata=self._enrich_metadata({"type": "raw", "key": key}),
             memory_id=self._raw_memory_id(key)
         )
         return f"Stored {len(content)} chars at key: {key}"

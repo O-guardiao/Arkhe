@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-import rlm.core.rlm_context_mixin as rlm_module
+import rlm.core.engine.rlm_context_mixin as rlm_module
 from rlm import RLM
 from rlm.core.types import ModelUsageSummary, UsageSummary
 

@@ -1,5 +1,5 @@
 
-from rlm.core import fast
+from rlm.core.optimized import fast
 
 def verify():
     print(f"\n[BACKEND CHECK] Active Backend: {fast.BACKEND}")

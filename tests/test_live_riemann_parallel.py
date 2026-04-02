@@ -56,7 +56,7 @@ PARALLEL_TRACE_PATH = TRACE_DIR / "live_riemann_parallel_trace.md"
 class LiveEventLogger:
     """Prints RLM lifecycle events to sys.__stdout__ in real-time.
 
-    Implements the minimal duck-type interface used by rlm.core.rlm:
+    Implements the minimal duck-type interface used by rlm.core.engine.rlm:
       emit(event_type: str, data: dict)
       set_iteration(i: int)
     """

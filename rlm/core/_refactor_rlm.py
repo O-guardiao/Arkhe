@@ -14,10 +14,10 @@ print(f"Source lines: {len(lines)}")
 
 # ── Mixin imports block (inserted after the last import, before class RLM) ──
 MIXIN_IMPORTS = """\
-from rlm.core.rlm_context_mixin import RLMContextMixin
-from rlm.core.rlm_loop_mixin import RLMLoopMixin
-from rlm.core.rlm_mcts_mixin import RLMMCTSMixin
-from rlm.core.rlm_persistence_mixin import RLMPersistenceMixin
+from rlm.core.engine.rlm_context_mixin import RLMContextMixin
+from rlm.core.engine.rlm_loop_mixin import RLMLoopMixin
+from rlm.core.engine.rlm_mcts_mixin import RLMMCTSMixin
+from rlm.core.engine.rlm_persistence_mixin import RLMPersistenceMixin
 
 """
 

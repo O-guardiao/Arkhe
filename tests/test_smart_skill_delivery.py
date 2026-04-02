@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from rlm.core.skill_loader import SkillDef, SkillLoader
+from rlm.core.skillkit.skill_loader import SkillDef, SkillLoader
 
 
 # ---------------------------------------------------------------------------

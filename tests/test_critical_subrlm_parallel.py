@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from rlm.core.cancellation import CancellationToken
+from rlm.core.lifecycle.cancellation import CancellationToken
 from rlm.environments.local_repl import LocalREPL
 
 
@@ -76,11 +76,11 @@ def _make_slow_mock_rlm_cls(response: str, delay_s: float):
 class TestImportsAndSignature:
 
     def test_make_sub_rlm_parallel_fn_importable(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         assert callable(make_sub_rlm_parallel_fn)
 
     def test_SubRLMParallelTaskResult_importable(self):
-        from rlm.core.sub_rlm import SubRLMParallelTaskResult
+        from rlm.core.engine.sub_rlm import SubRLMParallelTaskResult
         import dataclasses
         fields = {f.name for f in dataclasses.fields(SubRLMParallelTaskResult)}
         assert {
@@ -89,21 +89,21 @@ class TestImportsAndSignature:
         } == fields
 
     def test_factory_returns_two_callables(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         par, par_det = make_sub_rlm_parallel_fn(parent)
         assert callable(par)
         assert callable(par_det)
 
     def test_parallel_fn_named_correctly(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         par, par_det = make_sub_rlm_parallel_fn(parent)
         assert par.__name__ == "sub_rlm_parallel"
         assert par_det.__name__ == "sub_rlm_parallel_detailed"
 
     def test_metadata_attached(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock(depth=1, max_depth=4)
         par, _ = make_sub_rlm_parallel_fn(parent)
         assert par._parent_depth == 1
@@ -117,13 +117,13 @@ class TestImportsAndSignature:
 class TestSubRLMParallelBasic:
 
     def test_empty_list_returns_empty(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         par, _ = make_sub_rlm_parallel_fn(parent)
         assert par([]) == []
 
     def test_single_task_returns_list_with_one_element(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         mock_cls, _ = _make_mock_rlm_cls("resposta única")
         par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
@@ -133,7 +133,7 @@ class TestSubRLMParallelBasic:
         assert result[0] == "resposta única"
 
     def test_three_tasks_return_three_results(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         mock_cls, _ = _make_mock_rlm_cls("ok")
         par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
@@ -141,7 +141,7 @@ class TestSubRLMParallelBasic:
         assert len(result) == 3
 
     def test_interaction_modes_are_propagated_per_branch(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
 
         parent = _make_parent_mock()
         created_kwargs = []
@@ -177,7 +177,7 @@ class TestSubRLMParallelBasic:
         ], key=lambda item: ((item[0] or ""), item[1] or ""))
 
     def test_results_are_strings(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         mock_cls, _ = _make_mock_rlm_cls("dado processado")
         par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
@@ -194,7 +194,7 @@ class TestResultOrder:
 
     def test_results_match_input_order(self):
         """Resultado[i] deve corresponder a tasks[i], independente de qual thread terminou primeiro."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
 
         parent = _make_parent_mock()
         responses = ["resposta-A", "resposta-B", "resposta-C"]
@@ -232,7 +232,7 @@ class TestDepthGuardParallel:
 
     def test_depth_at_limit_raises_before_any_thread(self):
         """Se depth + 1 >= max_depth, nenhuma thread é criada."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, SubRLMDepthError
         parent = _make_parent_mock(depth=2, max_depth=3)  # child_depth=3 >= max_depth=3
         mock_cls, _ = _make_mock_rlm_cls("nunca chega")
         par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
@@ -243,7 +243,7 @@ class TestDepthGuardParallel:
 
     def test_depth_0_max_depth_2_allows_parallel(self):
         """depth=0, child=1 < max=2 → OK."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
@@ -259,7 +259,7 @@ class TestIndividualFailureTolerance:
 
     def test_one_task_fails_others_succeed(self):
         """Se 1 de 3 tarefas falhar, as outras 2 retornam normalmente."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
 
         call_count = [0]
@@ -287,7 +287,7 @@ class TestIndividualFailureTolerance:
         assert ok_count >= 2
 
     def test_stop_on_solution_cancels_redundant_branch_and_records_task_binding(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
 
         env = LocalREPL()
         parent = SimpleNamespace(
@@ -340,7 +340,7 @@ class TestIndividualFailureTolerance:
         env.cleanup()
 
     def test_parallel_inherits_active_strategy_policy_when_argument_is_omitted(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
 
         env = LocalREPL()
         env.set_active_recursive_strategy(
@@ -398,7 +398,7 @@ class TestIndividualFailureTolerance:
         env.cleanup()
 
     def test_consensus_policy_waits_for_second_success_before_cancelling(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
 
         env = LocalREPL()
         env.set_active_recursive_strategy(
@@ -462,8 +462,8 @@ class TestIndividualFailureTolerance:
         env.cleanup()
 
     def test_switch_strategy_replans_failed_branch_in_second_phase(self):
-        from rlm.core.mcts import BranchResult, ProgramArchive
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.orchestration.mcts import BranchResult, ProgramArchive
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
 
         env = LocalREPL()
         archive = ProgramArchive()
@@ -552,7 +552,7 @@ class TestIndividualFailureTolerance:
 
     def test_failed_task_result_contains_erro_prefix(self):
         """Tarefa que falha retorna string começando com '[ERRO branch N]' entre as demais."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, SubRLMError
         parent = _make_parent_mock()
 
         def _side_effect(**kwargs):
@@ -581,7 +581,7 @@ class TestIndividualFailureTolerance:
 
     def test_all_fail_raises_SubRLMError(self):
         """Se TODAS as tarefas falharem, levanta SubRLMError."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, SubRLMError
         parent = _make_parent_mock()
         mock_instance = MagicMock()
         mock_instance.completion.side_effect = RuntimeError("falhou")
@@ -598,7 +598,7 @@ class TestIndividualFailureTolerance:
 class TestParallelDetailed:
 
     def test_detailed_returns_task_result_objects(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMParallelTaskResult
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, SubRLMParallelTaskResult
         parent = _make_parent_mock()
         mock_cls, _ = _make_mock_rlm_cls("detalhe")
         _, par_det = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
@@ -608,7 +608,7 @@ class TestParallelDetailed:
             assert isinstance(r, SubRLMParallelTaskResult)
 
     def test_detailed_ok_field_true_on_success(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         mock_cls, _ = _make_mock_rlm_cls("sucesso")
         _, par_det = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
@@ -618,7 +618,7 @@ class TestParallelDetailed:
         assert results[0].error is None
 
     def test_detailed_ok_false_on_failure(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         mock_instance = MagicMock()
         mock_instance.completion.side_effect = ValueError("erro proposital")
@@ -630,7 +630,7 @@ class TestParallelDetailed:
         assert "erro proposital" in results[0].error
 
     def test_detailed_branch_id_matches_index(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         mock_cls, _ = _make_mock_rlm_cls("ok")
         _, par_det = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
@@ -640,7 +640,7 @@ class TestParallelDetailed:
         assert ids == {0, 1, 2}
 
     def test_detailed_elapsed_s_positive(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         mock_cls, _ = _make_mock_rlm_cls("ok")
         _, par_det = make_sub_rlm_parallel_fn(parent, _rlm_cls=mock_cls)
@@ -648,7 +648,7 @@ class TestParallelDetailed:
         assert results[0].elapsed_s >= 0.0
 
     def test_detailed_empty_returns_empty(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMParallelDetailedResults
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, SubRLMParallelDetailedResults
         parent = _make_parent_mock()
         _, par_det = make_sub_rlm_parallel_fn(parent)
         result = par_det([])
@@ -656,7 +656,7 @@ class TestParallelDetailed:
         assert result == []
 
     def test_detailed_records_summary_and_parent_task_tree(self):
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMParallelDetailedResults
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, SubRLMParallelDetailedResults
 
         env = LocalREPL()
         env.create_runtime_task("root", status="in-progress", current=True)
@@ -722,7 +722,7 @@ class TestParallelismTiming:
           - serial:   >= 0.45s
           - parallel: <= 0.35s (deve completar em ~1× o tempo de 1 tarefa)
         """
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
         parent = _make_parent_mock()
         DELAY = 0.15  # segundos por tarefa
 
@@ -750,18 +750,18 @@ class TestInjectionInRLMpy:
     def test_rlm_py_imports_make_sub_rlm_parallel_fn(self):
         # After mixin refactoring, _inject_repl_globals (and its imports) live in
         # rlm_context_mixin.py — not in rlm.py.
-        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "engine" / "rlm_context_mixin.py"
         text = mixin_src.read_text(encoding="utf-8")
         assert "make_sub_rlm_parallel_fn" in text
 
     def test_rlm_py_injects_sub_rlm_parallel(self):
         # After mixin refactoring, _inject_repl_globals lives in rlm_context_mixin.py
-        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "engine" / "rlm_context_mixin.py"
         text = mixin_src.read_text(encoding="utf-8")
         assert 'environment.globals["sub_rlm_parallel"]' in text
 
     def test_rlm_py_injects_sub_rlm_parallel_detailed(self):
         # After mixin refactoring, _inject_repl_globals lives in rlm_context_mixin.py
-        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "engine" / "rlm_context_mixin.py"
         text = mixin_src.read_text(encoding="utf-8")
         assert 'environment.globals["sub_rlm_parallel_detailed"]' in text

@@ -26,7 +26,7 @@ def kb_db_path(tmp_path):
 
 @pytest.fixture
 def kb(kb_db_path):
-    from rlm.core.knowledge_base import GlobalKnowledgeBase
+    from rlm.core.memory.knowledge_base import GlobalKnowledgeBase
     return GlobalKnowledgeBase(db_path=kb_db_path)
 
 
@@ -37,7 +37,7 @@ def vault_path(tmp_path):
 
 @pytest.fixture
 def bridge(vault_path, kb):
-    from rlm.core.obsidian_bridge import ObsidianBridge
+    from rlm.core.integrations.obsidian_bridge import ObsidianBridge
     return ObsidianBridge(vault_path=vault_path, kb=kb)
 
 
@@ -557,19 +557,19 @@ class TestSyncAll:
 class TestHelpers:
 
     def test_safe_filename(self):
-        from rlm.core.obsidian_bridge import _safe_filename
+        from rlm.core.integrations.obsidian_bridge import _safe_filename
         assert _safe_filename('Hello "World"') == "Hello _World_"
         assert _safe_filename("a" * 200) == "a" * 80
 
     def test_content_hash_deterministic(self):
-        from rlm.core.obsidian_bridge import _content_hash
+        from rlm.core.integrations.obsidian_bridge import _content_hash
         h1 = _content_hash("test")
         h2 = _content_hash("test")
         assert h1 == h2
         assert len(h1) == 64  # SHA-256
 
     def test_parse_frontmatter(self):
-        from rlm.core.obsidian_bridge import _parse_frontmatter
+        from rlm.core.integrations.obsidian_bridge import _parse_frontmatter
         content = '---\ntitle: "Test"\nimportance: 0.8\ntags: ["a", "b"]\n---\nBody text'
         fm, body = _parse_frontmatter(content)
         assert fm["title"] == '"Test"'
@@ -578,39 +578,39 @@ class TestHelpers:
         assert body == "Body text"
 
     def test_parse_frontmatter_no_frontmatter(self):
-        from rlm.core.obsidian_bridge import _parse_frontmatter
+        from rlm.core.integrations.obsidian_bridge import _parse_frontmatter
         fm, body = _parse_frontmatter("Just text")
         assert fm == {}
         assert body == "Just text"
 
     def test_extract_human_notes(self):
-        from rlm.core.obsidian_bridge import _extract_human_notes
+        from rlm.core.integrations.obsidian_bridge import _extract_human_notes
         body = "## Resumo\nR\n\n## Notas Humanas\nThis is my note.\n\n## Other"
         notes = _extract_human_notes(body)
         assert notes == "This is my note."
 
     def test_extract_human_notes_empty(self):
-        from rlm.core.obsidian_bridge import _extract_human_notes
+        from rlm.core.integrations.obsidian_bridge import _extract_human_notes
         body = "## Notas Humanas\n<!-- Seção editável. Bridge detecta mudanças via hash. -->"
         notes = _extract_human_notes(body)
         assert notes is None
 
     def test_extract_wikilinks(self):
-        from rlm.core.obsidian_bridge import _extract_wikilinks
+        from rlm.core.integrations.obsidian_bridge import _extract_wikilinks
         body = "See [[Doc A]] and [[Doc B|alias]] but not [[Doc A]] again"
         links = _extract_wikilinks(body)
         assert "Doc A" in links
         assert "Doc B" in links
 
     def test_split_body_with_sections(self):
-        from rlm.core.obsidian_bridge import _split_body
+        from rlm.core.integrations.obsidian_bridge import _split_body
         body = "## Resumo\nMy summary\n\n## Contexto Completo\nFull details"
         summary, ctx = _split_body(body)
         assert summary == "My summary"
         assert ctx == "Full details"
 
     def test_split_body_fallback(self):
-        from rlm.core.obsidian_bridge import _split_body
+        from rlm.core.integrations.obsidian_bridge import _split_body
         body = "First paragraph\n\nSecond paragraph"
         summary, ctx = _split_body(body)
         assert summary == "First paragraph"
@@ -625,11 +625,11 @@ class TestHelpers:
 class TestBackwardCompat:
 
     def test_obsidian_mirror_still_importable(self):
-        from rlm.core.obsidian_mirror import export_document_to_vault
+        from rlm.core.integrations.obsidian_mirror import export_document_to_vault
         assert callable(export_document_to_vault)
 
     def test_obsidian_mirror_re_exports_bridge(self):
-        from rlm.core.obsidian_mirror import ObsidianBridge
+        from rlm.core.integrations.obsidian_mirror import ObsidianBridge
         assert ObsidianBridge is not None
 
 

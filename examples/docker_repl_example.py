@@ -9,7 +9,7 @@ The default image (python:3.11-slim) will be pulled automatically.
 """
 
 from rlm.clients.base_lm import BaseLM
-from rlm.core.lm_handler import LMHandler
+from rlm.core.engine.lm_handler import LMHandler
 from rlm.core.types import ModelUsageSummary, UsageSummary
 from rlm.environments.docker_repl import DockerREPL
 

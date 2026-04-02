@@ -1,7 +1,7 @@
 
 import sys
 import pytest
-from rlm.core import fast
+from rlm.core.optimized import fast
 from rlm.utils import parsing
 
 # Monkey patch parsing module to use optimized functions

@@ -1,10 +1,10 @@
 """Testes críticos pós-refatoração de rlm.py"""
 from unittest.mock import MagicMock, patch
-from rlm.core.rlm import RLM
-from rlm.core.rlm_context_mixin import RLMContextMixin
-from rlm.core.rlm_loop_mixin import RLMLoopMixin
-from rlm.core.rlm_mcts_mixin import RLMMCTSMixin
-from rlm.core.rlm_persistence_mixin import RLMPersistenceMixin
+from rlm.core.engine.rlm import RLM
+from rlm.core.engine.rlm_context_mixin import RLMContextMixin
+from rlm.core.engine.rlm_loop_mixin import RLMLoopMixin
+from rlm.core.engine.rlm_mcts_mixin import RLMMCTSMixin
+from rlm.core.engine.rlm_persistence_mixin import RLMPersistenceMixin
 
 PASS = []
 FAIL = []

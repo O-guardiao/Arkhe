@@ -82,7 +82,7 @@ class TestSleepSync:
 
     def test_sleep_sync_cancelled_by_token(self):
         from rlm.server.backoff import sleep_sync
-        from rlm.core.cancellation import CancellationTokenSource
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
 
         cts = CancellationTokenSource()
         # Cancel after 50ms from another thread
@@ -98,7 +98,7 @@ class TestSleepSync:
 
     def test_sleep_sync_already_cancelled(self):
         from rlm.server.backoff import sleep_sync
-        from rlm.core.cancellation import CancellationToken
+        from rlm.core.lifecycle.cancellation import CancellationToken
         assert sleep_sync(5.0, cancel_token=CancellationToken.CANCELLED) is False
 
 
@@ -114,7 +114,7 @@ class TestSleepAsync:
 
     def test_sleep_async_cancelled(self):
         from rlm.server.backoff import sleep_async
-        from rlm.core.cancellation import CancellationTokenSource
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
 
         async def _run():
             cts = CancellationTokenSource()
@@ -235,7 +235,7 @@ class TestSyncHeartbeat:
 
     def test_cancelled_token_prevents_start(self):
         from rlm.server.heartbeat import SyncHeartbeat
-        from rlm.core.cancellation import CancellationToken
+        from rlm.core.lifecycle.cancellation import CancellationToken
         calls = []
         hb = SyncHeartbeat(
             action=lambda: calls.append(1),

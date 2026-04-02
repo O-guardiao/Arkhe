@@ -372,7 +372,7 @@ def _telegram_notify(text: str) -> bool:
 
 def _run_task(task: ScheduledTask, default_backend: str, default_model: str) -> TaskResult:
     """Executa uma tarefa agendada via rlm.completion()."""
-    from rlm.core.rlm import RLM
+    from rlm.core.engine.rlm import RLM
 
     backend = cast(ClientBackend, task.backend or default_backend)
     model = task.model or default_model

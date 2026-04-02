@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from rlm.core.mcp_client import BaseSyncMCPClient
+    from rlm.core.comms.mcp_client import BaseSyncMCPClient
 
 # Maintain global registry of active clients
 _active_clients: dict[str, "MCPServerNamespace"] = {}
@@ -61,7 +61,7 @@ def _infer_scope_key(scope_key: str = "") -> str:
     if scope_key:
         return scope_key
     try:
-        from rlm.core.skill_telemetry import get_skill_telemetry
+        from rlm.core.skillkit.skill_telemetry import get_skill_telemetry
 
         ctx = get_skill_telemetry().current_context()
         return ctx.get("session_id") or ctx.get("client_id") or ""
@@ -96,7 +96,7 @@ def load_server(
     if existing is not None:
         return existing
 
-    from rlm.core.mcp_client import SyncMCPClient, SyncMCPHttpClient
+    from rlm.core.comms.mcp_client import SyncMCPClient, SyncMCPHttpClient
 
     resolved_transport = transport
     if resolved_transport == "auto":

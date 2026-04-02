@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from rlm.core.operator_surface import apply_operator_command, build_activity_payload, build_runtime_snapshot
+from rlm.core.observability.operator_surface import apply_operator_command, build_activity_payload, build_runtime_snapshot
 from rlm.logging import get_runtime_logger
 from rlm.server.auth_helpers import build_internal_auth_headers
 

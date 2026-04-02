@@ -32,7 +32,7 @@ def _make_mock_session(
 ) -> SimpleNamespace:
     """Create a minimal mock that mimics SessionRecord + RLMSession + RLM core."""
     from rlm.utils.token_utils import get_context_limit
-    from rlm.core.compaction import ContextCompactor, CompactionConfig
+    from rlm.core.engine.compaction import ContextCompactor, CompactionConfig
 
     ctx_limit = get_context_limit(model_name)
 

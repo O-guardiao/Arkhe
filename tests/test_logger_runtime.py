@@ -86,9 +86,9 @@ def test_logging_facade_exposes_distinct_log_responsibilities():
 
 def test_operational_modules_use_runtime_logger():
     modules_and_attrs = [
-        ("rlm.core.lm_handler", "logger"),
-        ("rlm.core.shutdown", "log"),
-        ("rlm.core.disposable", "log"),
+        ("rlm.core.engine.lm_handler", "logger"),
+        ("rlm.core.lifecycle.shutdown", "log"),
+        ("rlm.core.lifecycle.disposable", "log"),
         ("rlm.server.slack_gateway", "log"),
         ("rlm.server.discord_gateway", "log"),
         ("rlm.server.whatsapp_gateway", "log"),

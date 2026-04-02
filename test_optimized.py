@@ -1,5 +1,5 @@
 """Test script for RLM optimized module."""
-from rlm.core.fast import find_code_blocks, find_final_answer, BACKEND
+from rlm.core.optimized.fast import find_code_blocks, find_final_answer, BACKEND
 import time
 
 # Test data with explicit code blocks
@@ -62,7 +62,7 @@ print(f"find_final_answer: {iterations/elapsed:,.0f} ops/sec")
 
 # JSON Benchmark (simulated via socket_send imports if available)
 try:
-    from rlm.core.fast import socket_send
+    from rlm.core.optimized.fast import socket_send
     import socket
     
     # Real socket pair for valid FD

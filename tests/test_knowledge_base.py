@@ -28,7 +28,7 @@ def kb_db_path(tmp_path):
 
 @pytest.fixture
 def kb(kb_db_path):
-    from rlm.core.knowledge_base import GlobalKnowledgeBase
+    from rlm.core.memory.knowledge_base import GlobalKnowledgeBase
     return GlobalKnowledgeBase(db_path=kb_db_path)
 
 
@@ -321,13 +321,13 @@ class TestKBStats:
 
 class TestConsolidator:
     def test_collect_session_nuggets(self, memory_db_path):
-        from rlm.core.knowledge_consolidator import collect_session_nuggets
+        from rlm.core.memory.knowledge_consolidator import collect_session_nuggets
         nuggets = collect_session_nuggets("sess-test", memory_db_path)
         assert len(nuggets) == 5
         assert "workflow" in nuggets[0]["content"].lower()
 
     def test_collect_excludes_deprecated(self, memory_db_path):
-        from rlm.core.knowledge_consolidator import collect_session_nuggets
+        from rlm.core.memory.knowledge_consolidator import collect_session_nuggets
         # Depreca um nugget
         with closing(sqlite3.connect(memory_db_path)) as conn:
             conn.execute("UPDATE memory_chunks SET is_deprecated = 1 WHERE id = 'n5'")
@@ -336,23 +336,23 @@ class TestConsolidator:
         assert len(nuggets) == 4
 
     def test_collect_wrong_session_returns_empty(self, memory_db_path):
-        from rlm.core.knowledge_consolidator import collect_session_nuggets
+        from rlm.core.memory.knowledge_consolidator import collect_session_nuggets
         nuggets = collect_session_nuggets("nonexistent", memory_db_path)
         assert nuggets == []
 
-    @patch("rlm.core.knowledge_consolidator._call_nano")
+    @patch("rlm.core.memory.knowledge_consolidator._call_nano")
     def test_cluster_nuggets_fallback(self, mock_nano):
         """Se nano falha, retorna um único cluster com todos os nuggets."""
-        from rlm.core.knowledge_consolidator import cluster_nuggets
+        from rlm.core.memory.knowledge_consolidator import cluster_nuggets
         mock_nano.return_value = None
         nuggets = [{"content": f"nugget {i}"} for i in range(3)]
         clusters = cluster_nuggets(nuggets)
         assert len(clusters) == 1
         assert len(clusters[0]["nuggets"]) == 3
 
-    @patch("rlm.core.knowledge_consolidator._call_nano")
+    @patch("rlm.core.memory.knowledge_consolidator._call_nano")
     def test_cluster_nuggets_with_nano(self, mock_nano):
-        from rlm.core.knowledge_consolidator import cluster_nuggets
+        from rlm.core.memory.knowledge_consolidator import cluster_nuggets
         mock_nano.return_value = json.dumps([
             {"topic": "deploy", "nugget_indices": [0, 1, 2]},
             {"topic": "python", "nugget_indices": [3, 4]},
@@ -363,9 +363,9 @@ class TestConsolidator:
         assert clusters[0]["topic"] == "deploy"
         assert len(clusters[0]["nuggets"]) == 3
 
-    @patch("rlm.core.knowledge_consolidator._call_nano")
+    @patch("rlm.core.memory.knowledge_consolidator._call_nano")
     def test_generate_document_fields_fallback(self, mock_nano):
-        from rlm.core.knowledge_consolidator import generate_document_fields
+        from rlm.core.memory.knowledge_consolidator import generate_document_fields
         mock_nano.return_value = None
         nuggets = [{"content": "Race condition no deploy"}, {"content": "Fix com mutex"}]
         fields = generate_document_fields("deploy fix", nuggets)
@@ -373,9 +373,9 @@ class TestConsolidator:
         assert fields["title"] == "deploy fix"
         assert "Race condition" in fields["summary"]
 
-    @patch("rlm.core.knowledge_consolidator._call_nano")
+    @patch("rlm.core.memory.knowledge_consolidator._call_nano")
     def test_generate_document_fields_with_nano(self, mock_nano):
-        from rlm.core.knowledge_consolidator import generate_document_fields
+        from rlm.core.memory.knowledge_consolidator import generate_document_fields
         mock_nano.return_value = json.dumps({
             "title": "Deploy Race Condition Fix",
             "summary": "Race condition corrigida com mutex",
@@ -389,7 +389,7 @@ class TestConsolidator:
         assert "deploy" in fields["tags"]
 
     def test_build_full_context(self):
-        from rlm.core.knowledge_consolidator import build_full_context
+        from rlm.core.memory.knowledge_consolidator import build_full_context
         nuggets = [
             {"content": "Nugget 1", "importance_score": 0.8, "timestamp": "2026-03-27 14:00:00"},
             {"content": "Nugget 2", "importance_score": 0.6, "timestamp": "2026-03-27 14:05:00"},
@@ -401,10 +401,10 @@ class TestConsolidator:
         assert "Nugget 2" in ctx
         assert "[0.8]" in ctx
 
-    @patch("rlm.core.knowledge_consolidator._call_nano")
+    @patch("rlm.core.memory.knowledge_consolidator._call_nano")
     def test_consolidate_session_end_to_end(self, mock_nano, kb, memory_db_path):
         """Integração: consolida sessão e verifica documento no KB."""
-        from rlm.core.knowledge_consolidator import consolidate_session
+        from rlm.core.memory.knowledge_consolidator import consolidate_session
 
         # Mock nano: cluster e document generation
         call_count = [0]
@@ -436,10 +436,10 @@ class TestConsolidator:
             assert doc["status"] == "active"
             assert "sess-test" in doc["source_sessions"]
 
-    @patch("rlm.core.knowledge_consolidator._call_nano")
+    @patch("rlm.core.memory.knowledge_consolidator._call_nano")
     def test_consolidate_few_nuggets_skips(self, mock_nano, kb, tmp_path):
         """Sessão com < 2 nuggets não consolida."""
-        from rlm.core.knowledge_consolidator import consolidate_session
+        from rlm.core.memory.knowledge_consolidator import consolidate_session
 
         db_path = str(tmp_path / "few.db")
         with closing(sqlite3.connect(db_path)) as conn:

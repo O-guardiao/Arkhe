@@ -16,13 +16,13 @@ from rich.text import Text
 from rich.tree import Tree
 
 from rlm.cli.context import CliContext
-from rlm.core.operator_surface import apply_operator_command, build_activity_payload, dispatch_operator_prompt
-from rlm.core.exec_approval import ExecApprovalGate
-from rlm.core.hooks import HookSystem
+from rlm.core.observability.operator_surface import apply_operator_command, build_activity_payload, dispatch_operator_prompt
+from rlm.core.engine.hooks import HookSystem
 from rlm.core.session import SessionManager
-from rlm.core.skill_loader import SkillLoader
-from rlm.core.supervisor import RLMSupervisor, SupervisorConfig
+from rlm.core.skillkit.skill_loader import SkillLoader
+from rlm.core.orchestration.supervisor import RLMSupervisor, SupervisorConfig
 from rlm.plugins import PluginLoader
+from rlm.runtime import build_runtime_guard_from_env
 from rlm.server.event_router import EventRouter
 from rlm.server.runtime_pipeline import RuntimeDispatchServices
 from rlm.server.ws_server import RLMEventBus
@@ -73,7 +73,12 @@ def build_local_workbench_runtime() -> WorkbenchRuntime:
     all_skills = skill_loader.load_from_dir(skills_dir)
     eligible_skills = skill_loader.filter_eligible(all_skills)
     skill_context = skill_loader.build_system_prompt_context(eligible_skills, mode="compact")
-    session_manager.add_close_callback(lambda session: skill_loader.deactivate_scope(session.session_id))
+
+    def _deactivate_scope_on_close(session) -> None:
+        skill_loader.deactivate_scope(session.session_id)
+
+    session_manager.add_close_callback(_deactivate_scope_on_close)
+    runtime_guard = build_runtime_guard_from_env()
     dispatch_services = RuntimeDispatchServices(
         session_manager=session_manager,
         supervisor=supervisor,
@@ -81,10 +86,11 @@ def build_local_workbench_runtime() -> WorkbenchRuntime:
         event_router=event_router,
         hooks=hooks,
         skill_loader=skill_loader,
+        runtime_guard=runtime_guard,
         eligible_skills=eligible_skills,
         skill_context=skill_context,
-        exec_approval=ExecApprovalGate(default_timeout_s=int(os.environ.get("RLM_EXEC_APPROVAL_TIMEOUT", "60"))),
-        exec_approval_required=os.environ.get("RLM_EXEC_APPROVAL_REQUIRED", "false").lower() == "true",
+        exec_approval=runtime_guard.approvals,
+        exec_approval_required=runtime_guard.exec_approval_required,
     )
     return WorkbenchRuntime(session_manager=session_manager, supervisor=supervisor, dispatch_services=dispatch_services)
 

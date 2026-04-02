@@ -7,11 +7,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from rlm.core import optimized_wire
-from rlm.core.optimized_parsing import find_code_blocks as optimized_find_code_blocks
-from rlm.core.optimized_parsing import format_iteration_rs as optimized_format_iteration
-from rlm.core.optimized_parsing import find_final_answer as optimized_find_final_answer
-from rlm.core.optimized_parsing import compute_hash as optimized_compute_hash
+from rlm.core.optimized import wire as optimized_wire
+from rlm.core.optimized.parsing import find_code_blocks as optimized_find_code_blocks
+from rlm.core.optimized.parsing import format_iteration_rs as optimized_format_iteration
+from rlm.core.optimized.parsing import find_final_answer as optimized_find_final_answer
+from rlm.core.optimized.parsing import compute_hash as optimized_compute_hash
 from rlm.utils.parsing import find_code_blocks as original_find_code_blocks
 from rlm.utils.parsing import find_final_answer as original_find_final_answer
 
@@ -126,7 +126,11 @@ def test_socket_send_serializes_datetime_and_roundtrips_json() -> None:
 
     payload = sock.data[optimized_wire._LENGTH_STRUCT.size :]
     parsed = optimized_wire.json_loads(payload)
-    assert parsed == {"when": "2026-03-30 12:00:00"}
+    # orjson serialises datetime natively as ISO-8601 (with T separator);
+    # Rust uses datetime.isoformat() which also uses T separator;
+    # stdlib json falls through to _json_default → str() which uses a space.
+    expected = "2026-03-30T12:00:00" if optimized_wire.JSON_BACKEND in ("orjson", "rust") else "2026-03-30 12:00:00"
+    assert parsed == {"when": expected}
 
 
 def test_socket_send_sanitizes_invalid_unicode() -> None:

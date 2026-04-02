@@ -19,7 +19,7 @@ import shutil
 import pytest
 from unittest.mock import MagicMock, patch
 
-from rlm.core.skill_loader import SkillDef, SkillLoader
+from rlm.core.skillkit.skill_loader import SkillDef, SkillLoader
 
 
 # ---------------------------------------------------------------------------
@@ -692,14 +692,14 @@ class TestActivate:
 class TestApiSkillIntegration:
 
     def test_skill_loader_importable(self):
-        from rlm.core.skill_loader import SkillLoader, SkillDef
+        from rlm.core.skillkit.skill_loader import SkillLoader, SkillDef
         assert SkillLoader is not None
         assert SkillDef is not None
 
     def test_api_imports_skill_loader(self):
         api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
         text = api_src.read_text(encoding="utf-8")
-        assert "from rlm.core.skill_loader import SkillLoader" in text
+        assert "from rlm.core.skillkit.skill_loader import SkillLoader" in text
 
     def test_api_has_skills_endpoint(self):
         api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
@@ -749,7 +749,7 @@ class TestApiSkillIntegration:
 class TestMCPClientRecovery:
 
     def test_health_check_reports_ok(self):
-        from rlm.core.mcp_client import BaseSyncMCPClient
+        from rlm.core.comms.mcp_client import BaseSyncMCPClient
 
         client = BaseSyncMCPClient.__new__(BaseSyncMCPClient)
         client.transport_name = "fake"
@@ -762,7 +762,7 @@ class TestMCPClientRecovery:
         assert status["tool_count"] == 1
 
     def test_call_tool_reconnects_after_transport_failure(self):
-        from rlm.core.mcp_client import BaseSyncMCPClient
+        from rlm.core.comms.mcp_client import BaseSyncMCPClient
 
         class _Text:
             type = "text"

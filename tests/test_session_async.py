@@ -86,7 +86,7 @@ def _make_mock_rlm_cls_with_log(response: str, log_msg: str):
 class TestAsyncHandle:
 
     def _make_handle(self, response: str = "ok", delay_s: float = 0.0):
-        from rlm.core.sub_rlm import AsyncHandle
+        from rlm.core.engine.sub_rlm import AsyncHandle
         result_holder: list = []
         error_holder: list = []
         log_q: queue.Queue = queue.Queue()
@@ -122,13 +122,13 @@ class TestAsyncHandle:
         assert handle.result(timeout_s=3.0) == "resposta final"
 
     def test_result_timeout_raises(self):
-        from rlm.core.sub_rlm import SubRLMTimeoutError
+        from rlm.core.engine.sub_rlm import SubRLMTimeoutError
         handle = self._make_handle(delay_s=10.0)
         with pytest.raises(SubRLMTimeoutError):
             handle.result(timeout_s=0.05)
 
     def test_result_propagates_error(self):
-        from rlm.core.sub_rlm import AsyncHandle, SubRLMError
+        from rlm.core.engine.sub_rlm import AsyncHandle, SubRLMError
         error_holder: list = []
         result_holder: list = []
         log_q: queue.Queue = queue.Queue()
@@ -144,7 +144,7 @@ class TestAsyncHandle:
             handle.result(timeout_s=3.0)
 
     def test_log_poll_returns_messages(self):
-        from rlm.core.sub_rlm import AsyncHandle
+        from rlm.core.engine.sub_rlm import AsyncHandle
         log_q: queue.Queue = queue.Queue()
         log_q.put("msg 1")
         log_q.put("msg 2")
@@ -157,14 +157,14 @@ class TestAsyncHandle:
         assert msgs == ["msg 1", "msg 2"]
 
     def test_log_poll_empty_returns_empty_list(self):
-        from rlm.core.sub_rlm import AsyncHandle
+        from rlm.core.engine.sub_rlm import AsyncHandle
         t = threading.Thread(target=lambda: None, daemon=True)
         t.start()
         handle = AsyncHandle("t", 1, t, [], [], queue.Queue())
         assert handle.log_poll() == []
 
     def test_log_poll_drains_incrementally(self):
-        from rlm.core.sub_rlm import AsyncHandle
+        from rlm.core.engine.sub_rlm import AsyncHandle
         log_q: queue.Queue = queue.Queue()
         t = threading.Thread(target=lambda: None, daemon=True)
         t.start()
@@ -209,7 +209,7 @@ class TestAsyncHandle:
 
     def test_cancel_event_param_is_shared(self):
         """AsyncHandle aceita cancel_event externo e o compartilha."""
-        from rlm.core.sub_rlm import AsyncHandle
+        from rlm.core.engine.sub_rlm import AsyncHandle
         event = threading.Event()
         t = threading.Thread(target=lambda: None, daemon=True)
         t.start()
@@ -225,33 +225,33 @@ class TestAsyncHandle:
 class TestMakeSubRLMAsyncFn:
 
     def test_returns_callable(self):
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock()
         fn = make_sub_rlm_async_fn(parent)
         assert callable(fn)
 
     def test_callable_named_sub_rlm_async(self):
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock()
         fn = make_sub_rlm_async_fn(parent)
         assert fn.__name__ == "sub_rlm_async"
 
     def test_has_parent_depth_attribute(self):
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=1, max_depth=4)
         fn = make_sub_rlm_async_fn(parent)
         assert fn._parent_depth == 1
         assert fn._parent_max_depth == 4
 
     def test_depth_guard_raises_on_max(self):
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn, SubRLMDepthError
         parent = _make_parent_mock(depth=2, max_depth=2)
         fn = make_sub_rlm_async_fn(parent)
         with pytest.raises(SubRLMDepthError):
             fn("tarefa")
 
     def test_returns_async_handle_immediately(self):
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn, AsyncHandle
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn, AsyncHandle
         parent = _make_parent_mock(depth=0, max_depth=3)
         mock_cls, _ = _make_mock_rlm_cls("resposta async")
         fn = make_sub_rlm_async_fn(parent, _rlm_cls=mock_cls)
@@ -264,7 +264,7 @@ class TestMakeSubRLMAsyncFn:
         assert elapsed < 0.2
 
     def test_handle_result_correct(self):
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         mock_cls, _ = _make_mock_rlm_cls("valor esperado")
         fn = make_sub_rlm_async_fn(parent, _rlm_cls=mock_cls)
@@ -274,7 +274,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_log_queue_injected_into_child_env_kwargs(self):
         """_parent_log_queue deve ser passado nos environment_kwargs do filho."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         captured_kwargs: list[dict] = []
 
@@ -295,7 +295,7 @@ class TestMakeSubRLMAsyncFn:
         assert "_parent_log_queue" in env_kwargs
 
     def test_two_calls_produce_independent_handles(self):
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         fn = make_sub_rlm_async_fn(parent, _rlm_cls=mock_cls)
@@ -311,8 +311,8 @@ class TestMakeSubRLMAsyncFn:
 
     def test_creates_async_bus_on_parent(self):
         """make_sub_rlm_async_fn deve criar _async_bus no pai."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
-        from rlm.core.sibling_bus import SiblingBus
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.comms.sibling_bus import SiblingBus
         # SimpleNamespace — hasattr() retorna False real (sem auto-create como MagicMock)
         parent = _make_parent_simple()
         assert not hasattr(parent, "_async_bus")
@@ -322,7 +322,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_bus_reused_across_calls_same_parent(self):
         """Duas chamadas a make_sub_rlm_async_fn no mesmo pai devem reusar o bus."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock()
         make_sub_rlm_async_fn(parent)
         bus1 = parent._async_bus
@@ -332,7 +332,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_different_parents_get_different_buses(self):
         """Pais diferentes devem ter buses independentes."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         p1 = _make_parent_mock()
         p2 = _make_parent_mock()
         make_sub_rlm_async_fn(p1)
@@ -341,7 +341,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_handle_has_bus_reference(self):
         """AsyncHandle deve expor o mesmo bus do pai."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         fn = make_sub_rlm_async_fn(parent, _rlm_cls=mock_cls)
@@ -350,7 +350,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_handles_have_unique_branch_ids(self):
         """Cada handle deve ter um branch_id único e monotônico."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         fn = make_sub_rlm_async_fn(parent, _rlm_cls=mock_cls)
@@ -363,7 +363,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_sibling_bus_injected_into_child_env_kwargs(self):
         """_sibling_bus do pai deve ser passado nos env_kwargs de cada filho."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         captured_kwargs: list[dict] = []
 
@@ -385,7 +385,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_branch_id_injected_into_child_env_kwargs(self):
         """_sibling_branch_id do filho deve estar nos env_kwargs."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         captured_kwargs: list[dict] = []
 
@@ -407,8 +407,8 @@ class TestMakeSubRLMAsyncFn:
 
     def test_bus_communication_between_two_children(self):
         """Dois filhos com mock manual conseguem se comunicar via bus."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
-        from rlm.core.sibling_bus import SiblingBus
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.comms.sibling_bus import SiblingBus
         # SimpleNamespace garante que parent._async_bus será um SiblingBus real
         parent = _make_parent_simple(depth=0, max_depth=3)
         make_sub_rlm_async_fn(parent)  # inicializa o bus no pai
@@ -437,7 +437,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_parent_can_publish_to_bus(self):
         """O pai deve poder publicar no bus e os filhos lerão via sibling_subscribe."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         # SimpleNamespace garante bus real (MagicMock tornaria peek() um mock)
         parent = _make_parent_simple(depth=0, max_depth=3)
         make_sub_rlm_async_fn(parent)
@@ -451,7 +451,7 @@ class TestMakeSubRLMAsyncFn:
         assert msgs == [True]
 
     def test_repr_shows_branch_id(self):
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         fn = make_sub_rlm_async_fn(parent, _rlm_cls=mock_cls)
@@ -461,7 +461,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_cancel_event_injected_into_child_env_kwargs(self):
         """_cancel_event deve estar nos env_kwargs do filho."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         captured_kwargs: list[dict] = []
 
@@ -483,7 +483,7 @@ class TestMakeSubRLMAsyncFn:
 
     def test_cancel_event_shared_between_handle_and_child(self):
         """O evento no handle deve ser o mesmo passado ao filho."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         captured_kwargs: list[dict] = []
 
@@ -614,7 +614,7 @@ class TestCheckCancel:
 
     def test_cancel_handle_propagates_to_check_cancel(self):
         """handle.cancel() deve fazer check_cancel() retornar True no filho."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         captured_kwargs: list[dict] = []
 
@@ -647,7 +647,7 @@ class TestRLMSessionChat:
 
     def _make_session(self, responses: list[str]):
         """Cria RLMSession com RLM mockado que retorna responses em sequência."""
-        import rlm.core.rlm_context_mixin as rlm_module
+        import rlm.core.engine.rlm_context_mixin as rlm_module
         from rlm.session import RLMSession
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
@@ -674,7 +674,7 @@ class TestRLMSessionChat:
 
     def test_chat_returns_response(self):
         from rlm.session import RLMSession
-        import rlm.core.rlm_context_mixin as rlm_module
+        import rlm.core.engine.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -698,7 +698,7 @@ class TestRLMSessionChat:
 
     def test_turns_accumulate(self):
         from rlm.session import RLMSession
-        import rlm.core.rlm_context_mixin as rlm_module
+        import rlm.core.engine.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -725,7 +725,7 @@ class TestRLMSessionChat:
     def test_build_prompt_injects_previous_turns(self):
         """_build_prompt deve incluir turnos anteriores no texto gerado."""
         from rlm.session import RLMSession, SessionTurn, SessionState
-        import rlm.core.rlm_context_mixin as rlm_module
+        import rlm.core.engine.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -755,7 +755,7 @@ class TestRLMSessionChat:
     def test_build_prompt_includes_compacted_summary(self):
         """Resumo compactado deve aparecer no prompt quando existir."""
         from rlm.session import RLMSession
-        import rlm.core.rlm_context_mixin as rlm_module
+        import rlm.core.engine.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -782,7 +782,7 @@ class TestRLMSessionChat:
 
     def test_reset_clears_state(self):
         from rlm.session import RLMSession, SessionTurn
-        import rlm.core.rlm_context_mixin as rlm_module
+        import rlm.core.engine.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -958,7 +958,7 @@ class TestPollLogs:
 
     def test_poll_logs_aggregates_from_multiple_handles(self):
         from rlm.session import RLMSession, SessionAsyncHandle
-        import rlm.core.rlm_context_mixin as rlm_module
+        import rlm.core.engine.rlm_context_mixin as rlm_module
         from rlm.core.types import ModelUsageSummary, UsageSummary
 
         mock_lm = MagicMock()
@@ -988,7 +988,7 @@ class TestPollLogs:
         assert "log de h2" in all_msgs
 
     def test_poll_logs_empty_handles(self):
-        import rlm.core.rlm_context_mixin as rlm_module
+        import rlm.core.engine.rlm_context_mixin as rlm_module
         from rlm.session import RLMSession
         from rlm.core.types import ModelUsageSummary, UsageSummary
 

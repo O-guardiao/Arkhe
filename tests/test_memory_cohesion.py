@@ -4,7 +4,7 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from rlm.core.supervisor import RLMSupervisor
+from rlm.core.orchestration.supervisor import RLMSupervisor
 from rlm.server.runtime_pipeline import _fire_post_turn_memory, _prepend_memory_block
 from rlm.tools.memory import RLMMemory
 
@@ -78,12 +78,12 @@ class TestRuntimePipelineMemoryDelegation:
 
 class TestRLMSessionMemoryLifecycle:
     def test_close_releases_hot_cache(self):
-        from rlm.core.memory_hot_cache import get_or_create_cache, registry_size, _registry
+        from rlm.core.memory.memory_hot_cache import get_or_create_cache, registry_size, _registry
         from rlm.session import RLMSession
 
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_rlm = MagicMock()
-            with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+            with patch("rlm.core.engine.rlm.RLM", return_value=fake_rlm):
                 session = RLMSession(memory_db_path=f"{tmpdir}/memory.db", session_id="sess-close")
 
             cache = get_or_create_cache("sess-close")
@@ -100,12 +100,12 @@ class TestRLMSessionMemoryLifecycle:
 
     def test_close_multi_session_isolamento(self):
         """Fechar sessão A não afeta sessão B — contrato multi-tenant."""
-        from rlm.core.memory_hot_cache import get_or_create_cache, evict_cache, _registry
+        from rlm.core.memory.memory_hot_cache import get_or_create_cache, evict_cache, _registry
         from rlm.session import RLMSession
 
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_rlm = MagicMock()
-            with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+            with patch("rlm.core.engine.rlm.RLM", return_value=fake_rlm):
                 session_a = RLMSession(memory_db_path=f"{tmpdir}/a.db", session_id="sess-multi-a")
                 session_b = RLMSession(memory_db_path=f"{tmpdir}/b.db", session_id="sess-multi-b")
 
@@ -131,7 +131,7 @@ class TestRLMSessionMemoryLifecycle:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_rlm = MagicMock()
-            with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+            with patch("rlm.core.engine.rlm.RLM", return_value=fake_rlm):
                 session = RLMSession(memory_db_path=f"{tmpdir}/memory.db", session_id="sess-reset")
 
             session._memory_cache.chunks = [{"content": "cached"}]
@@ -152,7 +152,7 @@ class TestRuntimeInfrastructureAwareness:
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_rlm = MagicMock()
             fake_rlm.system_prompt = "base prompt"
-            with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+            with patch("rlm.core.engine.rlm.RLM", return_value=fake_rlm):
                 session = RLMSession(
                     memory_db_path=f"{tmpdir}/memory.db",
                     session_id="sess-infra",
@@ -173,7 +173,7 @@ class TestRuntimeInfrastructureAwareness:
             db_path = f"{tmpdir}/memory.db"
             fake_rlm = MagicMock()
             fake_rlm.system_prompt = "base prompt"
-            with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+            with patch("rlm.core.engine.rlm.RLM", return_value=fake_rlm):
                 session = RLMSession(
                     memory_db_path=db_path,
                     session_id="sess-derive",
@@ -188,7 +188,7 @@ class TestRuntimeInfrastructureAwareness:
 
         fake_rlm = MagicMock()
         fake_rlm.system_prompt = "base prompt"
-        with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+        with patch("rlm.core.engine.rlm.RLM", return_value=fake_rlm):
             session = RLMSession(
                 session_id="sess-no-infra",
             )
@@ -202,7 +202,7 @@ class TestRuntimeInfrastructureAwareness:
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_rlm = MagicMock()
             fake_rlm.system_prompt = "base prompt"
-            with patch("rlm.core.rlm.RLM", return_value=fake_rlm):
+            with patch("rlm.core.engine.rlm.RLM", return_value=fake_rlm):
                 session = RLMSession(
                     memory_db_path=f"{tmpdir}/memory.db",
                     state_dir=tmpdir,

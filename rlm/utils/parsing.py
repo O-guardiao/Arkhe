@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from rlm.environments.base_env import BaseEnv
 
 try:
-    from rlm.core.fast import format_iteration_rs as _format_iteration_fast
+    from rlm.core.optimized.fast import format_iteration_rs as _format_iteration_fast
     if _format_iteration_fast is None:
         raise ImportError
 except (ImportError, AttributeError):

@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rlm.core.mcts import (
+from rlm.core.orchestration.mcts import (
     apply_search_replace_blocks,
     BranchResult,
     build_strategy_prompt,
@@ -276,7 +276,7 @@ def _make_mock_repl(results_by_code=None, default_stdout="ok", default_stderr=""
 class TestMCTSOrchestratorRun:
     """Testes de run() usando mock para SandboxREPL."""
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_single_branch_success(self, mock_cls):
         """Uma branch com sucesso → retorna essa branch."""
         mock_cls.side_effect = _make_mock_repl(
@@ -289,7 +289,7 @@ class TestMCTSOrchestratorRun:
         assert result.branch_id == 0
         assert result.total_score > 0
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_best_branch_wins(self, mock_cls):
         """Com N branches, a de maior score é selecionada."""
         mock_cls.side_effect = _make_mock_repl(
@@ -304,7 +304,7 @@ class TestMCTSOrchestratorRun:
 
         assert result.branch_id == 1  # "good" tem maior score
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_pruning_first_step_negative(self, mock_cls):
         """Branch com score ≤ 0 no primeiro step → pruned (-999)."""
         mock_cls.side_effect = _make_mock_repl(
@@ -322,7 +322,7 @@ class TestMCTSOrchestratorRun:
         assert result.branch_id == 1  # branch 0 foi pruned
         assert result.total_score > -999
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_pruning_skips_remaining_steps(self, mock_cls):
         """Branch pruned no step 0 não executa step 1."""
         call_log = []
@@ -349,7 +349,7 @@ class TestMCTSOrchestratorRun:
         branch0_calls = [code for bid, code in call_log if bid == 0]
         assert branch0_calls == ["fail"]
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_all_branches_fail_returns_least_bad(self, mock_cls):
         """Todas as branches pruned → retorna a menos ruim (todas -999)."""
         mock_cls.side_effect = _make_mock_repl(
@@ -364,7 +364,7 @@ class TestMCTSOrchestratorRun:
         assert result is not None
         assert result.total_score == -999
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_max_depth_limits_steps(self, mock_cls):
         """max_depth=2 → apenas 2 steps executam mesmo com 5 code blocks."""
         call_log = []
@@ -387,7 +387,7 @@ class TestMCTSOrchestratorRun:
 
         assert call_log == ["s1", "s2"]
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_exception_in_branch_returns_minus_999(self, mock_cls):
         """Exception não-tratada em _run_branch → BranchResult com -999."""
         class ExplodingREPL:
@@ -408,14 +408,14 @@ class TestMCTSOrchestratorRun:
         assert result.total_score == -999
         assert result.steps[0].get("error") == "kaboom"
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_empty_branch_code_blocks_raises(self, mock_cls):
         """run([]) → ValueError de max() em sequência vazia."""
         orch = MCTSOrchestrator(branches=1, max_depth=1)
         with pytest.raises(ValueError):
             orch.run([])
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_event_bus_emits_events(self, mock_cls):
         """Event bus recebe mcts_branch_done e mcts_selected."""
         mock_cls.side_effect = _make_mock_repl(
@@ -429,7 +429,7 @@ class TestMCTSOrchestratorRun:
         assert "mcts_branch_done" in events
         assert "mcts_selected" in events
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_event_bus_prune_event(self, mock_cls):
         """Branch pruned → event bus recebe mcts_prune."""
         mock_cls.side_effect = _make_mock_repl(
@@ -442,7 +442,7 @@ class TestMCTSOrchestratorRun:
         events = [call[0][0] for call in bus.emit.call_args_list]
         assert "mcts_prune" in events
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_repl_locals_captured(self, mock_cls):
         """repl_locals do BranchResult contém variáveis criadas."""
         mock_cls.side_effect = _make_mock_repl(
@@ -455,7 +455,7 @@ class TestMCTSOrchestratorRun:
         assert result.repl_locals.get("x") == 42
         assert result.aggregated_metrics["heuristic"] > 0
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_steps_truncate_output(self, mock_cls):
         """stdout/stderr nos steps são truncados em 500 chars."""
         long_out = "A" * 1000
@@ -466,7 +466,7 @@ class TestMCTSOrchestratorRun:
         result = orch.run([["c"]])
         assert len(result.steps[0]["stdout"]) == 500
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_custom_score_fn_used(self, mock_cls):
         """score_fn customizada é realmente usada, não a default."""
         mock_cls.side_effect = _make_mock_repl()
@@ -475,7 +475,7 @@ class TestMCTSOrchestratorRun:
         result = orch.run([["code"]])
         assert result.total_score == pytest.approx(77.0)
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_cumulative_score_across_steps(self, mock_cls):
         """Score total = soma dos scores de cada step."""
         mock_cls.side_effect = _make_mock_repl(
@@ -488,7 +488,7 @@ class TestMCTSOrchestratorRun:
         # c1, c2, c3 têm 2 chars → -0.5 cada → score per step = 3.5
         assert result.total_score == pytest.approx(3.5 * 3)
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_top_results_returns_sorted_branches(self, mock_cls):
         mock_cls.side_effect = _make_mock_repl(
             results_by_code={
@@ -503,7 +503,7 @@ class TestMCTSOrchestratorRun:
         ranked = orch.top_results(2, include_pruned=True)
         assert [branch.branch_id for branch in ranked] == [2, 1]
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_evaluation_stage_contributes_to_score(self, mock_cls):
         """Stages extras somam ao score e ficam registrados nas métricas."""
         mock_cls.side_effect = _make_mock_repl(
@@ -521,7 +521,7 @@ class TestMCTSOrchestratorRun:
         assert result.aggregated_metrics["has_x"] == pytest.approx(2.0)
         assert result.steps[0]["metrics"]["has_x"] == pytest.approx(2.0)
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_evaluation_stage_can_prune_branch(self, mock_cls):
         """Stage com threshold falhando derruba a branch cedo."""
         mock_cls.side_effect = _make_mock_repl(
@@ -542,7 +542,7 @@ class TestMCTSOrchestratorRun:
         assert result.total_score == -999
         assert result.pruned_reason == "stage:reject"
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_stage_events_emitted(self, mock_cls):
         """Event bus recebe eventos de score e prune de stages."""
         mock_cls.side_effect = _make_mock_repl(
@@ -567,7 +567,7 @@ class TestMCTSOrchestratorRun:
 # ===========================================================================
 
 class TestMCTSOrchestratorThreadSafety:
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_parallel_branches_no_race(self, mock_cls):
         """N branches concorrentes não produzem race condition."""
         counter = {"value": 0}
@@ -795,7 +795,7 @@ value = 2
         )
         assert result == ["value = 2\nprint(value)"]
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_evolutionary_branch_search_uses_second_round_feedback(self, mock_cls):
         mock_cls.side_effect = _make_mock_repl(
             results_by_code={
@@ -834,7 +834,7 @@ print('improved 42')
         assert result["best_branch"].strategy_name == "refine"
         assert any("Current elite code" in prompt for prompt in prompts)
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_evolutionary_branch_search_updates_archive(self, mock_cls):
         mock_cls.side_effect = _make_mock_repl(
             results_by_code={"print('42')": {"stdout": "42", "stderr": ""}}
@@ -978,7 +978,7 @@ class TestKnownBugs:
         with pytest.raises(ValueError, match="at least one branch"):
             orch.run([])
 
-    @patch("rlm.core.mcts.SandboxREPL")
+    @patch("rlm.core.orchestration.mcts.SandboxREPL")
     def test_all_none_results_crashes(self, mock_cls):
         """BUG POTENCIAL: se todas as futures falharem com exceções
         que não são capturadas, results seria [None] e max() crasharia.

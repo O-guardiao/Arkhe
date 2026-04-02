@@ -24,10 +24,10 @@ import pytest
 # Imports dos módulos sob teste
 # ---------------------------------------------------------------------------
 
-from rlm.core.hooks import HookSystem, HookEvent
-from rlm.core.scheduler import RLMScheduler, CronJob, parse_interval_seconds, compute_next_run
-from rlm.core.memory_manager import MultiVectorMemory, cosine_similarity
-from rlm.core.compaction import (
+from rlm.core.engine.hooks import HookSystem, HookEvent
+from rlm.core.orchestration.scheduler import RLMScheduler, CronJob, parse_interval_seconds, compute_next_run
+from rlm.core.memory.memory_manager import MultiVectorMemory, cosine_similarity
+from rlm.core.engine.compaction import (
     CompactionConfig,
     ContextCompactor,
     estimate_tokens,
@@ -218,7 +218,7 @@ class TestTemporalDecay:
 
     def _make_memory_db(self, tmp_path: str) -> MultiVectorMemory:
         """Cria instância sem OpenAI (mocked)."""
-        with patch("rlm.core.memory_manager.openai", None):
+        with patch("rlm.core.memory.memory_manager.openai", None):
             mem = MultiVectorMemory(db_path=tmp_path)
         return mem
 
@@ -333,7 +333,7 @@ class TestQueryExpansion:
     """Testa search_with_query_expansion: variantes, deduplicação, fallback."""
 
     def _make_memory_db(self, db_path: str) -> MultiVectorMemory:
-        with patch("rlm.core.memory_manager.openai", None):
+        with patch("rlm.core.memory.memory_manager.openai", None):
             mem = MultiVectorMemory(db_path=db_path)
         return mem
 
@@ -660,11 +660,11 @@ class TestApiIntegration:
 
     def test_hooks_importable_from_api_module(self):
         """api.py deve expor HookSystem via importação transitiva."""
-        from rlm.core.hooks import HookSystem
+        from rlm.core.engine.hooks import HookSystem
         assert HookSystem is not None
 
     def test_scheduler_importable_from_api_module(self):
-        from rlm.core.scheduler import RLMScheduler, CronJob
+        from rlm.core.orchestration.scheduler import RLMScheduler, CronJob
         assert RLMScheduler is not None
         assert CronJob is not None
 
@@ -673,8 +673,8 @@ class TestApiIntegration:
         import pathlib
         api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
         text = api_src.read_text(encoding="utf-8")
-        assert "from rlm.core.hooks import HookSystem" in text, "HookSystem não importado em api.py"
-        assert "from rlm.core.scheduler import RLMScheduler" in text, "RLMScheduler não importado em api.py"
+        assert "from rlm.core.engine.hooks import HookSystem" in text, "HookSystem não importado em api.py"
+        assert "from rlm.core.orchestration.scheduler import RLMScheduler" in text, "RLMScheduler não importado em api.py"
         assert "CronJob" in text, "CronJob não referenciado em api.py"
 
     def test_cron_endpoints_defined_in_api(self):
@@ -720,17 +720,18 @@ class TestApiIntegration:
 # ===========================================================================
 
 class TestCosineSimilarity:
-    """Regressão rápida para garantir que cosine_similarity não foi quebrada."""
+    """Regressão rápida para garantir que cosine_similarity não foi quebrada.
+    Tolerância 1e-6 para compatibilidade com backend Rust f32 (arkhe-memory)."""
 
     def test_identical_vectors_return_one(self):
         v = [1.0, 2.0, 3.0]
-        assert abs(cosine_similarity(v, v) - 1.0) < 1e-9
+        assert abs(cosine_similarity(v, v) - 1.0) < 1e-6
 
     def test_orthogonal_vectors_return_zero(self):
-        assert cosine_similarity([1, 0], [0, 1]) == 0.0
+        assert abs(cosine_similarity([1, 0], [0, 1])) < 1e-6
 
     def test_opposite_vectors_return_minus_one(self):
-        assert abs(cosine_similarity([1, 0], [-1, 0]) - (-1.0)) < 1e-9
+        assert abs(cosine_similarity([1, 0], [-1, 0]) - (-1.0)) < 1e-6
 
     def test_empty_vectors_return_zero(self):
         assert cosine_similarity([], [1, 2]) == 0.0

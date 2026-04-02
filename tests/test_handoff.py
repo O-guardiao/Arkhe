@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from rlm.core.handoff import HandoffRecord, make_handoff_fn
-from rlm.core.skill_telemetry import SkillTelemetryStore
+from rlm.core.orchestration.handoff import HandoffRecord, make_handoff_fn
+from rlm.core.skillkit.skill_telemetry import SkillTelemetryStore
 
 
 class TestHandoffRecord:

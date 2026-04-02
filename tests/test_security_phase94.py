@@ -89,7 +89,7 @@ class TestJWT:
         )
 
     def test_issue_and_verify(self):
-        from rlm.core.auth import issue_token, verify_token
+        from rlm.core.security.auth import issue_token, verify_token
 
         token = issue_token("device_01", profile="default")
         payload = verify_token(token)
@@ -100,13 +100,13 @@ class TestJWT:
         assert "iat" in payload
 
     def test_expired_token_rejected(self):
-        from rlm.core.auth import issue_token, verify_token
+        from rlm.core.security.auth import issue_token, verify_token
 
         token = issue_token("device_x", ttl_hours=-1)  # already expired
         assert verify_token(token) is None
 
     def test_tampered_token_rejected(self):
-        from rlm.core.auth import issue_token, verify_token
+        from rlm.core.security.auth import issue_token, verify_token
 
         token = issue_token("device_02")
         # Flip a character in the signature
@@ -118,7 +118,7 @@ class TestJWT:
         assert verify_token(tampered) is None
 
     def test_wrong_secret_rejected(self, monkeypatch):
-        from rlm.core.auth import issue_token, verify_token
+        from rlm.core.security.auth import issue_token, verify_token
 
         token = issue_token("device_03")
         monkeypatch.setenv(
@@ -129,27 +129,27 @@ class TestJWT:
 
     def test_short_secret_raises(self, monkeypatch):
         monkeypatch.setenv("RLM_JWT_SECRET", "short")
-        from rlm.core.auth import issue_token
+        from rlm.core.security.auth import issue_token
 
         with pytest.raises(RuntimeError, match="at least"):
             issue_token("x")
 
     def test_permissions_in_payload(self):
-        from rlm.core.auth import issue_token, verify_token
+        from rlm.core.security.auth import issue_token, verify_token
 
         token = issue_token("d", permissions=["read", "admin"])
         payload = verify_token(token)
         assert payload["prm"] == ["read", "admin"]
 
     def test_extra_claims(self):
-        from rlm.core.auth import issue_token, verify_token
+        from rlm.core.security.auth import issue_token, verify_token
 
         token = issue_token("d", extra_claims={"org": "acme"})
         payload = verify_token(token)
         assert payload["org"] == "acme"
 
     def test_malformed_token_returns_none(self):
-        from rlm.core.auth import verify_token
+        from rlm.core.security.auth import verify_token
 
         assert verify_token("not.a.jwt.at.all") is None
         assert verify_token("") is None
@@ -159,7 +159,7 @@ class TestJWT:
         """Tokens without HS256 algorithm must be rejected."""
         import base64
         import json
-        from rlm.core.auth import verify_token
+        from rlm.core.security.auth import verify_token
 
         header = base64.urlsafe_b64encode(
             json.dumps({"alg": "none", "typ": "JWT"}).encode()
@@ -171,7 +171,7 @@ class TestJWT:
         assert verify_token(fake) is None
 
     def test_hash_token_deterministic(self):
-        from rlm.core.auth import hash_token
+        from rlm.core.security.auth import hash_token
 
         h1 = hash_token("my-secret-token")
         h2 = hash_token("my-secret-token")
@@ -193,7 +193,7 @@ class TestClientRegistry:
             "RLM_JWT_SECRET",
             "test-secret-that-is-at-least-32-characters-long-ok",
         )
-        from rlm.core.client_registry import ClientRegistry
+        from rlm.core.session.client_registry import ClientRegistry
 
         db = str(tmp_path / "test_clients.db")
         return ClientRegistry(db_path=db)
@@ -263,7 +263,7 @@ class TestClientRegistry:
         assert registry.get_client("nonexistent") is None
 
     def test_issue_jwt_for_client(self, registry):
-        from rlm.core.auth import verify_token
+        from rlm.core.security.auth import verify_token
 
         registry.register_client("jwt_test", profile="admin")
         jwt = registry.issue_jwt("jwt_test", ttl_hours=1)
@@ -297,7 +297,7 @@ class TestAuditLog:
             "RLM_JWT_SECRET",
             "test-secret-that-is-at-least-32-characters-long-ok",
         )
-        from rlm.core.client_registry import ClientRegistry
+        from rlm.core.session.client_registry import ClientRegistry
 
         db = str(tmp_path / "test_audit.db")
         return ClientRegistry(db_path=db)

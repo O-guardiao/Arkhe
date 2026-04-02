@@ -51,28 +51,28 @@ def _make_mock_rlm_cls(response: str = "resultado", artifacts: dict | None = Non
 class TestSubRLMArtifactResult:
 
     def test_import(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         assert SubRLMArtifactResult is not None
 
     def test_has_required_fields(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         r = SubRLMArtifactResult(answer="ok", artifacts={"fn": lambda: 1, "x": 42})
         assert r.answer == "ok"
         assert "fn" in r.artifacts
         assert "x" in r.artifacts
 
     def test_depth_default_zero(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         r = SubRLMArtifactResult(answer="ok", artifacts={})
         assert r.depth == 0
 
     def test_depth_custom(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         r = SubRLMArtifactResult(answer="ok", artifacts={}, depth=2)
         assert r.depth == 2
 
     def test_callables_filters_only_callables(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
 
         def my_fn(): return 42
 
@@ -87,7 +87,7 @@ class TestSubRLMArtifactResult:
         assert "name" not in callables
 
     def test_values_filters_only_non_callables(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
 
         def my_fn(): return 42
 
@@ -101,17 +101,17 @@ class TestSubRLMArtifactResult:
         assert "my_fn" not in values
 
     def test_callables_empty_when_no_callables(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         r = SubRLMArtifactResult(answer="ok", artifacts={"a": 1, "b": "texto"})
         assert r.callables() == {}
 
     def test_values_empty_when_all_callables(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         r = SubRLMArtifactResult(answer="ok", artifacts={"fn": lambda: None})
         assert r.values() == {}
 
     def test_as_custom_tools_returns_full_copy(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
 
         def my_fn(): return 42
 
@@ -125,27 +125,27 @@ class TestSubRLMArtifactResult:
 
     def test_as_custom_tools_isolated_mutation(self):
         """Mutação em as_custom_tools() não deve afetar artifacts original."""
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         r = SubRLMArtifactResult(answer="ok", artifacts={"x": 1})
         tools = r.as_custom_tools()
         tools["y"] = 99
         assert "y" not in r.artifacts
 
     def test_empty_artifacts(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         r = SubRLMArtifactResult(answer="nada", artifacts={})
         assert r.callables() == {}
         assert r.values() == {}
         assert r.as_custom_tools() == {}
 
     def test_lambda_is_callable(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         lam = lambda x: x * 2
         r = SubRLMArtifactResult(answer="ok", artifacts={"double": lam})
         assert "double" in r.callables()
 
     def test_class_is_callable(self):
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
         class MyTransformer:
             pass
         r = SubRLMArtifactResult(answer="ok", artifacts={"MyTransformer": MyTransformer})
@@ -159,7 +159,7 @@ class TestSubRLMArtifactResult:
 class TestSubRLMReturnArtifactsFalse:
 
     def test_returns_string_by_default(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("resposta do filho")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -168,7 +168,7 @@ class TestSubRLMReturnArtifactsFalse:
         assert result == "resposta do filho"
 
     def test_returns_string_with_return_artifacts_false_explicit(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("resposta")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -178,7 +178,7 @@ class TestSubRLMReturnArtifactsFalse:
 
     def test_completion_called_without_capture_artifacts_when_false(self):
         """Quando return_artifacts=False, completion() NÃO deve receber capture_artifacts=True."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, mock_instance = _make_mock_rlm_cls("resp")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -198,7 +198,7 @@ class TestSubRLMReturnArtifactsFalse:
 class TestSubRLMReturnArtifactsTrue:
 
     def test_returns_SubRLMArtifactResult_when_true(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMArtifactResult
         parent = _make_parent_mock(depth=0, max_depth=2)
 
         def my_fn(): return 42
@@ -215,7 +215,7 @@ class TestSubRLMReturnArtifactsTrue:
         assert "data" in result.artifacts
 
     def test_depth_set_correctly_in_result(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMArtifactResult
         parent = _make_parent_mock(depth=0, max_depth=3)
         mock_cls, _ = _make_mock_rlm_cls("ok", artifacts={"x": 1})
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -226,7 +226,7 @@ class TestSubRLMReturnArtifactsTrue:
 
     def test_completion_called_with_capture_artifacts_true(self):
         """Quando return_artifacts=True, completion() deve receber capture_artifacts=True."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, mock_instance = _make_mock_rlm_cls("resp", artifacts={})
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -244,7 +244,7 @@ class TestSubRLMReturnArtifactsTrue:
 
     def test_artifacts_empty_dict_when_none_returned(self):
         """artifacts=None no completion → SubRLMArtifactResult.artifacts == {}."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMArtifactResult
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("ok", artifacts=None)
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -255,7 +255,7 @@ class TestSubRLMReturnArtifactsTrue:
 
     def test_chained_usage_as_custom_tools(self):
         """Fluxo completo: filho sintetiza fn, pai a usa via as_custom_tools()."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMArtifactResult
         parent = _make_parent_mock(depth=0, max_depth=3)
 
         def parse_log(line: str) -> dict:
@@ -276,7 +276,7 @@ class TestSubRLMReturnArtifactsTrue:
 
     def test_depth_guard_still_works_with_return_artifacts(self):
         """Depth guard deve funcionar mesmo com return_artifacts=True."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
         parent = _make_parent_mock(depth=1, max_depth=2)
         fn = make_sub_rlm_fn(parent)
         with pytest.raises(SubRLMDepthError):
@@ -285,7 +285,7 @@ class TestSubRLMReturnArtifactsTrue:
     def test_timeout_still_raises_with_return_artifacts(self):
         """Timeout deve funcionar mesmo com return_artifacts=True."""
         import time
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMTimeoutError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMTimeoutError
 
         parent = _make_parent_mock(depth=0, max_depth=2)
 
@@ -485,8 +485,8 @@ class TestSiblingBusInjectionInSubRLM:
 
     def test_sibling_bus_injected_in_env_kwargs(self):
         """Quando _sibling_bus é passado, deve aparecer nos env_kwargs do filho."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
-        from rlm.core.sibling_bus import SiblingBus
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
+        from rlm.core.comms.sibling_bus import SiblingBus
 
         parent = _make_parent_mock(depth=0, max_depth=2)
         parent.environment_kwargs = {"timeout": 30}
@@ -510,7 +510,7 @@ class TestSiblingBusInjectionInSubRLM:
 
     def test_no_sibling_bus_when_not_provided(self):
         """Sem _sibling_bus, env_kwargs não deve ter _sibling_bus."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
 
         parent = _make_parent_mock(depth=0, max_depth=2)
         parent.environment_kwargs = {}

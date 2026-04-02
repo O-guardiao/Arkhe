@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from rlm.core.execution_policy import CostSlice, estimate_architecture_cost, parse_price_table
+from rlm.core.security.execution_policy import CostSlice, estimate_architecture_cost, parse_price_table
 
 
 def _build_parser() -> argparse.ArgumentParser:

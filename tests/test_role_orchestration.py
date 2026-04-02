@@ -3,9 +3,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
 
-from rlm.core.handoff import HandoffRecord
-from rlm.core.role_orchestrator import PENDING_HANDOFFS_KEY, orchestrate_roles, pop_pending_handoffs
-from rlm.core.skill_loader import SkillDef, SkillPromptPlan
+from rlm.core.orchestration.handoff import HandoffRecord
+from rlm.core.orchestration.role_orchestrator import PENDING_HANDOFFS_KEY, orchestrate_roles, pop_pending_handoffs
+from rlm.core.skillkit.skill_loader import SkillDef, SkillPromptPlan
 
 
 def _make_plan() -> SkillPromptPlan:
@@ -50,7 +50,7 @@ def test_worker_handoff_executa_sub_rlm():
         ]
     }
     fake_sub = MagicMock(return_value="deploy executado")
-    with patch("rlm.core.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
+    with patch("rlm.core.orchestration.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
         outcome = orchestrate_roles(
             rlm=MagicMock(),
             prompt="faça deploy",
@@ -79,7 +79,7 @@ def test_evaluator_retry_refaz_resposta():
         '{"action": "retry", "retry_prompt": "refaça usando fallback"}',
         "resposta refeita",
     ])
-    with patch("rlm.core.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
+    with patch("rlm.core.orchestration.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
         outcome = orchestrate_roles(
             rlm=MagicMock(),
             prompt="colete logs",
@@ -115,7 +115,7 @@ def test_evaluator_retry_reusa_task_id_do_handoff():
         _persistent_env=SimpleNamespace(update_runtime_task=update_runtime_task)
     )
 
-    with patch("rlm.core.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
+    with patch("rlm.core.orchestration.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
         outcome = orchestrate_roles(
             rlm=fake_rlm,
             prompt="colete logs",
@@ -137,7 +137,7 @@ def test_evaluator_retry_reusa_task_id_do_handoff():
 def test_auto_eval_escalate_sem_handoff():
     plan = _make_plan()
     fake_sub = MagicMock(return_value='{"action": "escalate", "rationale": "risco alto", "escalation_target": "human"}')
-    with patch("rlm.core.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
+    with patch("rlm.core.orchestration.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
         outcome = orchestrate_roles(
             rlm=MagicMock(),
             prompt="executar ação sensível",

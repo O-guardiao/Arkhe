@@ -28,7 +28,7 @@ from unittest.mock import MagicMock, patch
 class TestExecApprovalGate:
 
     def test_approve_from_thread_returns_true(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=5)
 
         results = []
@@ -52,7 +52,7 @@ class TestExecApprovalGate:
         assert results == [True]
 
     def test_deny_raises_permission_error(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=5)
         errors = []
 
@@ -74,7 +74,7 @@ class TestExecApprovalGate:
         assert "denied" in errors[0].lower()
 
     def test_timeout_raises_timeout_error(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=0.1)
         errors = []
 
@@ -92,7 +92,7 @@ class TestExecApprovalGate:
         assert "timed out" in errors[0].lower()
 
     def test_list_pending_shows_active_request(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=5)
         barrier = threading.Barrier(2)
 
@@ -117,7 +117,7 @@ class TestExecApprovalGate:
         t.join(timeout=2)
 
     def test_list_pending_empty_after_resolution(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=5)
 
         t_done = threading.Event()
@@ -137,19 +137,19 @@ class TestExecApprovalGate:
         assert gate.list_pending() == []
 
     def test_approve_nonexistent_returns_false(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate()
         result = gate.approve("nonexistent_id")
         assert result is False
 
     def test_deny_nonexistent_returns_false(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate()
         result = gate.deny("nonexistent_id")
         assert result is False
 
     def test_get_record_while_pending(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=5)
 
         def _req():
@@ -174,7 +174,7 @@ class TestExecApprovalGate:
         t.join(timeout=2)
 
     def test_get_record_after_approve_in_grace(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=5)
 
         t = threading.Thread(
@@ -192,12 +192,12 @@ class TestExecApprovalGate:
         assert record["status"] == "approved"
 
     def test_get_record_not_found_returns_none(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate()
         assert gate.get_record("does_not_exist") is None
 
     def test_stats_returns_expected_keys(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=45)
         stats = gate.stats()
         assert "pending" in stats
@@ -205,14 +205,14 @@ class TestExecApprovalGate:
         assert stats["default_timeout_s"] == 45
 
     def test_make_repl_fn_returns_callable(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate()
         fn = gate.make_repl_fn("session_abc")
         assert callable(fn)
         assert fn.__name__ == "confirm_exec"
 
     def test_make_repl_fn_approve_flow(self):
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=5)
         confirm = gate.make_repl_fn("sess_repl")
         results = []
@@ -233,7 +233,7 @@ class TestExecApprovalGate:
 
     def test_concurrent_multiple_requests(self):
         """Múltiplas threads pedindo aprovação simultaneamente."""
-        from rlm.core.exec_approval import ExecApprovalGate
+        from rlm.core.security.exec_approval import ExecApprovalGate
         gate = ExecApprovalGate(default_timeout_s=5)
         results = []
 
@@ -709,7 +709,7 @@ class TestApiIntegration:
     def test_exec_approval_imported_in_api(self):
         api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
         text = api_src.read_text(encoding="utf-8")
-        assert "from rlm.core.exec_approval import ExecApprovalGate" in text
+        assert "from rlm.core.security.exec_approval import ExecApprovalGate" in text
 
     def test_webhook_dispatch_imported_in_api(self):
         api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
@@ -759,7 +759,7 @@ class TestApiIntegration:
         assert "RLM_HOOK_TOKEN" in text
 
     def test_all_three_modules_importable(self):
-        from rlm.core.exec_approval import ExecApprovalGate, ApprovalRecord
+        from rlm.core.security.exec_approval import ExecApprovalGate, ApprovalRecord
         from rlm.server.webhook_dispatch import create_webhook_router, HookDispatchBody
         from rlm.server.openai_compat import create_openai_compat_router, ChatCompletionRequest
         assert all([ExecApprovalGate, ApprovalRecord, create_webhook_router,

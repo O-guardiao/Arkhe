@@ -8,9 +8,9 @@ import asyncio
 from types import SimpleNamespace
 from pathlib import Path
 
-from rlm.core.sibling_bus import SiblingBus
-from rlm.core.mcts import BranchResult, ProgramArchive
-from rlm.core.rlm import RLM
+from rlm.core.comms.sibling_bus import SiblingBus
+from rlm.core.orchestration.mcts import BranchResult, ProgramArchive
+from rlm.core.engine.rlm import RLM
 from rlm.environments.local_repl import LocalREPL
 
 

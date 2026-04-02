@@ -38,7 +38,7 @@ def _make_mock_parent(
 
     # CancelToken
     if cancel_token is None:
-        from rlm.core.cancellation import CancellationToken
+        from rlm.core.lifecycle.cancellation import CancellationToken
         cancel_token = CancellationToken.NONE
     parent._cancel_token = cancel_token
 
@@ -100,7 +100,7 @@ class TestGap1SharedMemory:
 
     def test_serial_child_receives_parent_memory(self):
         """sub_rlm() deve passar _parent_memory via env_kwargs."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
 
         fake_memory = MagicMock()
         parent = _make_mock_parent(shared_memory=fake_memory)
@@ -112,7 +112,7 @@ class TestGap1SharedMemory:
 
     def test_serial_child_env_kwargs_contains_memory(self):
         """Verifica que env_kwargs do filho contém _parent_memory."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
 
         fake_memory = MagicMock()
         parent = _make_mock_parent(shared_memory=fake_memory)
@@ -134,7 +134,7 @@ class TestGap1SharedMemory:
 
     def test_no_memory_when_parent_has_none(self):
         """Se pai não tem memória, env_kwargs não deve conter _parent_memory."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
 
         parent = _make_mock_parent(shared_memory=None)
 
@@ -154,7 +154,7 @@ class TestGap1SharedMemory:
 
     def test_async_child_receives_parent_memory(self):
         """sub_rlm_async() deve passar _parent_memory."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
 
         fake_memory = MagicMock()
         parent = _make_mock_parent(shared_memory=fake_memory)
@@ -198,8 +198,8 @@ class TestGap2CancelTokenPropagation:
 
     def test_serial_child_gets_cancel_token(self):
         """Filho serial deve ter _cancel_token derivado do pai."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
-        from rlm.core.cancellation import CancellationTokenSource
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
 
         parent_cts = CancellationTokenSource()
         parent = _make_mock_parent(cancel_token=parent_cts.token)
@@ -226,8 +226,8 @@ class TestGap2CancelTokenPropagation:
 
     def test_async_child_gets_cancel_token(self):
         """Filho async deve ter _cancel_token derivado do pai."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
-        from rlm.core.cancellation import CancellationTokenSource
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
 
         parent_cts = CancellationTokenSource()
         parent = _make_mock_parent(cancel_token=parent_cts.token)
@@ -252,8 +252,8 @@ class TestGap2CancelTokenPropagation:
 
     def test_cancel_token_none_parent_no_crash(self):
         """Se pai tem CancellationToken.NONE, filho não deve crashar."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
-        from rlm.core.cancellation import CancellationToken
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
+        from rlm.core.lifecycle.cancellation import CancellationToken
 
         parent = _make_mock_parent(cancel_token=CancellationToken.NONE)
         fn = make_sub_rlm_fn(parent, _rlm_cls=FakeRLM)
@@ -270,8 +270,8 @@ class TestGap3UnifiedSiblingBus:
 
     def test_parallel_creates_bus_on_parent(self):
         """make_sub_rlm_parallel_fn deve criar _async_bus no pai se ausente."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
-        from rlm.core.sibling_bus import SiblingBus
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.comms.sibling_bus import SiblingBus
 
         parent = _make_mock_parent()
         parent._async_bus = None
@@ -283,8 +283,8 @@ class TestGap3UnifiedSiblingBus:
 
     def test_async_reuses_existing_bus(self):
         """make_sub_rlm_async_fn deve reutilizar _async_bus se já existir."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, make_sub_rlm_async_fn
-        from rlm.core.sibling_bus import SiblingBus
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, make_sub_rlm_async_fn
+        from rlm.core.comms.sibling_bus import SiblingBus
 
         parent = _make_mock_parent()
         parent._async_bus = None
@@ -301,8 +301,8 @@ class TestGap3UnifiedSiblingBus:
 
     def test_parallel_reuses_async_bus(self):
         """make_sub_rlm_parallel_fn deve reutilizar _async_bus criado por async."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, make_sub_rlm_async_fn
-        from rlm.core.sibling_bus import SiblingBus
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, make_sub_rlm_async_fn
+        from rlm.core.comms.sibling_bus import SiblingBus
 
         parent = _make_mock_parent()
         parent._async_bus = None
@@ -327,7 +327,7 @@ class TestGap4EventBusPropagation:
 
     def test_serial_child_receives_event_bus(self):
         """Filho serial deve receber event_bus do pai."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
 
         mock_bus = MagicMock()
         parent = _make_mock_parent(event_bus=mock_bus)
@@ -348,7 +348,7 @@ class TestGap4EventBusPropagation:
 
     def test_async_child_receives_event_bus(self):
         """Filho async deve receber event_bus do pai."""
-        from rlm.core.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
 
         mock_bus = MagicMock()
         parent = _make_mock_parent(event_bus=mock_bus)
@@ -370,7 +370,7 @@ class TestGap4EventBusPropagation:
 
     def test_no_event_bus_doesnt_crash(self):
         """Se pai não tem event_bus, filhos recebem None sem crash."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
 
         parent = _make_mock_parent(event_bus=None)
         fn = make_sub_rlm_fn(parent, _rlm_cls=FakeRLM)
@@ -387,7 +387,7 @@ class TestGap5ParallelArtifacts:
 
     def test_parallel_returns_artifact_results(self):
         """sub_rlm_parallel com return_artifacts=True retorna SubRLMArtifactResult."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, SubRLMArtifactResult
 
         parent = _make_mock_parent()
 
@@ -409,7 +409,7 @@ class TestGap5ParallelArtifacts:
 
     def test_parallel_without_artifacts_returns_strings(self):
         """sub_rlm_parallel sem return_artifacts retorna list[str] normalmente."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
 
         parent = _make_mock_parent()
 
@@ -427,7 +427,7 @@ class TestGap5ParallelArtifacts:
 
     def test_parallel_empty_tasks_returns_empty(self):
         """sub_rlm_parallel([]) retorna [] independente de return_artifacts."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
 
         parent = _make_mock_parent()
         _par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=FakeRLM)
@@ -437,7 +437,7 @@ class TestGap5ParallelArtifacts:
 
     def test_artifact_callables_and_values(self):
         """SubRLMArtifactResult.callables() e .values() filtram corretamente."""
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
 
         art = SubRLMArtifactResult(
             answer="ok",
@@ -456,7 +456,7 @@ class TestGap5ParallelArtifacts:
 
     def test_artifact_as_custom_tools(self):
         """SubRLMArtifactResult.as_custom_tools() retorna dict completo."""
-        from rlm.core.sub_rlm import SubRLMArtifactResult
+        from rlm.core.engine.sub_rlm import SubRLMArtifactResult
 
         fn = lambda x: x * 2
         art = SubRLMArtifactResult(
@@ -478,8 +478,8 @@ class TestCrossGapIntegration:
 
     def test_serial_child_gets_all_propagations(self):
         """Filho serial deve receber memória, cancel_token e event_bus."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
-        from rlm.core.cancellation import CancellationTokenSource
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
 
         fake_memory = MagicMock()
         mock_bus = MagicMock()
@@ -514,7 +514,7 @@ class TestCrossGapIntegration:
 
     def test_depth_guard_still_works(self):
         """Depth guard deve continuar funcionando após todas as modificações."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
 
         parent = _make_mock_parent(depth=2, max_depth=3)
         fn = make_sub_rlm_fn(parent, _rlm_cls=FakeRLM)
@@ -523,7 +523,7 @@ class TestCrossGapIntegration:
 
     def test_parallel_depth_guard_still_works(self):
         """Parallel depth guard deve funcionar após modificações."""
-        from rlm.core.sub_rlm import make_sub_rlm_parallel_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, SubRLMDepthError
 
         parent = _make_mock_parent(depth=2, max_depth=3)
         _par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=FakeRLM)

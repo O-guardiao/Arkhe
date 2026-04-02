@@ -44,7 +44,7 @@ import asyncio
 import threading
 from typing import Callable, Any
 
-from rlm.core.cancellation import CancellationToken
+from rlm.core.lifecycle.cancellation import CancellationToken
 from rlm.logging import get_runtime_logger
 
 log = get_runtime_logger("heartbeat")

@@ -56,19 +56,19 @@ def _make_mock_rlm_cls(response: str = "resultado final"):
 class TestSubRLMExceptions:
 
     def test_SubRLMError_is_runtime_error(self):
-        from rlm.core.sub_rlm import SubRLMError
+        from rlm.core.engine.sub_rlm import SubRLMError
         assert issubclass(SubRLMError, RuntimeError)
 
     def test_SubRLMDepthError_is_SubRLMError(self):
-        from rlm.core.sub_rlm import SubRLMDepthError, SubRLMError
+        from rlm.core.engine.sub_rlm import SubRLMDepthError, SubRLMError
         assert issubclass(SubRLMDepthError, SubRLMError)
 
     def test_SubRLMTimeoutError_is_SubRLMError(self):
-        from rlm.core.sub_rlm import SubRLMTimeoutError, SubRLMError
+        from rlm.core.engine.sub_rlm import SubRLMTimeoutError, SubRLMError
         assert issubclass(SubRLMTimeoutError, SubRLMError)
 
     def test_exceptions_can_be_raised_with_message(self):
-        from rlm.core.sub_rlm import SubRLMDepthError, SubRLMTimeoutError, SubRLMError
+        from rlm.core.engine.sub_rlm import SubRLMDepthError, SubRLMTimeoutError, SubRLMError
         with pytest.raises(SubRLMError, match="falhou"):
             raise SubRLMError("falhou")
         with pytest.raises(SubRLMDepthError, match="profundidade"):
@@ -84,26 +84,26 @@ class TestSubRLMExceptions:
 class TestMakeSubRLMFn:
 
     def test_returns_callable(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         fn = make_sub_rlm_fn(parent)
         assert callable(fn)
 
     def test_callable_named_sub_rlm(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         fn = make_sub_rlm_fn(parent)
         assert fn.__name__ == "sub_rlm"
 
     def test_has_parent_depth_attribute(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=1, max_depth=3)
         fn = make_sub_rlm_fn(parent)
         assert fn._parent_depth == 1
         assert fn._parent_max_depth == 3
 
     def test_different_parents_produce_independent_functions(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         p1 = _make_parent_mock(depth=0, max_depth=2)
         p2 = _make_parent_mock(depth=1, max_depth=3)
         fn1 = make_sub_rlm_fn(p1)
@@ -121,7 +121,7 @@ class TestDepthGuard:
 
     def test_depth_1_max_depth_2_allows_spawn(self):
         """depth=0, child_depth=1 < max_depth=2 → OK."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("resposta do filho")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -130,7 +130,7 @@ class TestDepthGuard:
 
     def test_depth_1_max_depth_2_blocks_spawn(self):
         """depth=1, child_depth=2 >= max_depth=2 → SubRLMDepthError."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
         parent = _make_parent_mock(depth=1, max_depth=2)
         fn = make_sub_rlm_fn(parent)
         with pytest.raises(SubRLMDepthError, match="profundidade máxima"):
@@ -138,7 +138,7 @@ class TestDepthGuard:
 
     def test_depth_0_max_depth_1_blocks_spawn(self):
         """depth=0, child_depth=1 >= max_depth=1 → SubRLMDepthError."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
         parent = _make_parent_mock(depth=0, max_depth=1)
         fn = make_sub_rlm_fn(parent)
         with pytest.raises(SubRLMDepthError):
@@ -146,7 +146,7 @@ class TestDepthGuard:
 
     def test_error_message_contains_depths(self):
         """Mensagem de erro deve mostrar depth atual e max_depth."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
         parent = _make_parent_mock(depth=2, max_depth=3)
         fn = make_sub_rlm_fn(parent)
         with pytest.raises(SubRLMDepthError) as exc_info:
@@ -157,7 +157,7 @@ class TestDepthGuard:
 
     def test_child_spawned_with_incremented_depth(self):
         """Filho é criado com depth = parent.depth + 1."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -172,7 +172,7 @@ class TestDepthGuard:
         assert passed_depth == 1
 
     def test_child_receives_custom_prompt_and_text_mode(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=3)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -193,7 +193,7 @@ class TestTimeoutMechanism:
 
     def test_timeout_raises_SubRLMTimeoutError(self):
         """Filho que demora mais que timeout_s levanta SubRLMTimeoutError."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMTimeoutError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMTimeoutError
         parent = _make_parent_mock(depth=0, max_depth=2)
 
         slow_completion = MagicMock()
@@ -207,7 +207,7 @@ class TestTimeoutMechanism:
             fn("tarefa lenta", timeout_s=0.05)  # 50ms timeout
 
     def test_timeout_message_contains_timeout_value(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMTimeoutError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMTimeoutError
         parent = _make_parent_mock(depth=0, max_depth=2)
 
         mock_instance = MagicMock()
@@ -221,7 +221,7 @@ class TestTimeoutMechanism:
 
     def test_fast_execution_does_not_timeout(self):
         """Chamada rápida (mock instantâneo) não deve levantar timeout."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("rápido")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -236,7 +236,7 @@ class TestTimeoutMechanism:
 class TestSuccessfulExecution:
 
     def test_returns_response_string(self):
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("resultado ETL")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -246,7 +246,7 @@ class TestSuccessfulExecution:
 
     def test_context_prepended_to_prompt(self):
         """context deve ser prefixado antes do task no prompt enviado ao filho."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
 
         received_prompts = []
@@ -268,8 +268,8 @@ class TestSuccessfulExecution:
         assert received_prompts[0].index("Dados") < received_prompts[0].index("calcula")
 
     def test_serial_sub_rlm_injects_active_strategy_and_archive_guidance(self):
-        from rlm.core.mcts import BranchResult, ProgramArchive
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.orchestration.mcts import BranchResult, ProgramArchive
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
 
         parent = _make_parent_mock(depth=0, max_depth=2)
         archive = ProgramArchive()
@@ -326,7 +326,7 @@ class TestSuccessfulExecution:
 
     def test_max_iterations_clamped_to_50(self):
         """max_iterations acima de 50 é reduzido a 50."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -341,7 +341,7 @@ class TestSuccessfulExecution:
 
     def test_max_iterations_clamped_to_1_minimum(self):
         """max_iterations < 1 é elevado a 1."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -356,7 +356,7 @@ class TestSuccessfulExecution:
 
     def test_child_is_verbose_false(self):
         """Filho deve ser silencioso (verbose=False) por padrão."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("ok")
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -371,7 +371,7 @@ class TestSuccessfulExecution:
 
     def test_exception_in_child_raises_SubRLMError(self):
         """Se o filho levantar exceção, sub_rlm deve levantar SubRLMError."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMError
         parent = _make_parent_mock(depth=0, max_depth=2)
         mock_instance = MagicMock()
         mock_instance.completion.side_effect = ConnectionError("socket morreu")
@@ -382,7 +382,7 @@ class TestSuccessfulExecution:
 
     def test_child_inherits_backend_from_parent(self):
         """Filho deve usar o mesmo backend do pai."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)
         parent.backend = "anthropic"
         mock_cls, _ = _make_mock_rlm_cls("ok")
@@ -404,7 +404,7 @@ class TestSuccessfulExecution:
 class TestStaticIntegrity:
 
     def test_sub_rlm_module_importable(self):
-        from rlm.core.sub_rlm import (
+        from rlm.core.engine.sub_rlm import (
             SubRLMError,
             SubRLMDepthError,
             SubRLMTimeoutError,
@@ -417,24 +417,24 @@ class TestStaticIntegrity:
     def test_make_sub_rlm_fn_imported_in_rlm_py(self):
         # After mixin refactoring, _inject_repl_globals (and its imports) live in
         # rlm_context_mixin.py — not in rlm.py.
-        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "engine" / "rlm_context_mixin.py"
         text = mixin_src.read_text(encoding="utf-8")
         assert "make_sub_rlm_fn" in text
 
     def test_sub_rlm_injected_in_environment_globals(self):
         # After mixin refactoring, _inject_repl_globals lives in rlm_context_mixin.py
-        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "rlm_context_mixin.py"
+        mixin_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "engine" / "rlm_context_mixin.py"
         text = mixin_src.read_text(encoding="utf-8")
         assert 'environment.globals["sub_rlm"]' in text
         assert "make_sub_rlm_fn(self)" in text
 
     def test_sub_rlm_py_has_docstring(self):
-        sub_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "sub_rlm.py"
+        sub_src = pathlib.Path(__file__).parent.parent / "rlm" / "core" / "engine" / "sub_rlm.py"
         text = sub_src.read_text(encoding="utf-8")
         assert "Decomposição Explícita" in text or "sub_rlm" in text[:300]
 
     def test_SubRLMResult_dataclass_fields(self):
-        from rlm.core.sub_rlm import SubRLMResult
+        from rlm.core.engine.sub_rlm import SubRLMResult
         import dataclasses
         fields = {f.name for f in dataclasses.fields(SubRLMResult)}
         assert "task" in fields
@@ -445,7 +445,7 @@ class TestStaticIntegrity:
 
     def test_depth_1_max_depth_3_allows_two_levels(self):
         """Verifica que cenário ETL (parent=0, filho=1, max=2) funciona."""
-        from rlm.core.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn, SubRLMDepthError
         parent_depth0 = _make_parent_mock(depth=0, max_depth=2)
         mock_cls, _ = _make_mock_rlm_cls("dados limpos")
         fn = make_sub_rlm_fn(parent_depth0, _rlm_cls=mock_cls)

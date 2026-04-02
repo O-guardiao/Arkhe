@@ -33,13 +33,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from rlm.core.session import SessionManager
-from rlm.core.supervisor import RLMSupervisor, SupervisorConfig, ExecutionResult
-from rlm.core.hooks import HookSystem
-from rlm.core.handoff import make_handoff_fn, VALID_HANDOFF_ROLES
-from rlm.core.role_orchestrator import PENDING_HANDOFFS_KEY, orchestrate_roles
-from rlm.core.scheduler import RLMScheduler, CronJob
-from rlm.core.skill_loader import SkillLoader
-from rlm.core.exec_approval import ExecApprovalGate
+from rlm.core.orchestration.supervisor import RLMSupervisor, SupervisorConfig, ExecutionResult
+from rlm.core.engine.hooks import HookSystem
+from rlm.core.orchestration.handoff import make_handoff_fn, VALID_HANDOFF_ROLES
+from rlm.core.orchestration.role_orchestrator import PENDING_HANDOFFS_KEY, orchestrate_roles
+from rlm.core.orchestration.scheduler import RLMScheduler, CronJob
+from rlm.core.skillkit.skill_loader import SkillLoader
+from rlm.core.security.exec_approval import ExecApprovalGate
 from rlm.server.webhook_dispatch import create_webhook_router
 from rlm.server.openai_compat import create_openai_compat_router
 from rlm.server.runtime_pipeline import RuntimeDispatchRejected, RuntimeDispatchServices, dispatch_runtime_prompt_sync
@@ -49,9 +49,10 @@ from rlm.server.drain import DrainGuard
 from rlm.server.health_monitor import HealthMonitor
 from rlm.plugins.channel_registry import sanitize_text_payload
 from rlm.plugins import PluginLoader
+from rlm.runtime import build_runtime_guard_from_env
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
-from rlm.core.skill_telemetry import get_skill_telemetry
+from rlm.core.skillkit.skill_telemetry import get_skill_telemetry
 
 # Channel gateways — importados aqui; registrados condicionalmente abaixo
 try:
@@ -210,11 +211,10 @@ async def lifespan(app: FastAPI):
     # Event Router
     app.state.event_router = EventRouter()
 
-    # Phase 9.2: Exec Approval Gate
-    _approval_timeout = int(os.environ.get("RLM_EXEC_APPROVAL_TIMEOUT", "60"))
-    _approval_required = os.environ.get("RLM_EXEC_APPROVAL_REQUIRED", "false").lower() == "true"
-    app.state.exec_approval = ExecApprovalGate(default_timeout_s=_approval_timeout)
-    app.state.exec_approval_required = _approval_required
+    # Runtime guard boundary — first compatibility layer for future native extraction
+    app.state.runtime_guard = build_runtime_guard_from_env()
+    app.state.exec_approval = app.state.runtime_guard.approvals
+    app.state.exec_approval_required = app.state.runtime_guard.exec_approval_required
 
     # Phase 9.1: MCP Skills
     _skills_dir = os.environ.get(
@@ -278,7 +278,10 @@ async def lifespan(app: FastAPI):
     gateway_log.info("✓ HookSystem initialized")
     _skill_names = [s.name for s in _eligible_skills]
     gateway_log.info(f"✓ Skills eligible: {_skill_names} ({len(_all_skills)} total)")
-    gateway_log.info(f"✓ ExecApprovalGate: required={_approval_required} timeout={_approval_timeout}s")
+    _approval_stats = app.state.exec_approval.stats()
+    gateway_log.info(
+        f"✓ ExecApprovalGate: required={app.state.exec_approval_required} timeout={_approval_stats.get('default_timeout_s', '?')}s"
+    )
     if os.environ.get("RLM_HOOK_TOKEN"):
         gateway_log.info("✓ External webhook receiver: POST /api/hooks/{token}")
     if os.environ.get("RLM_API_TOKEN"):
@@ -481,6 +484,7 @@ async def receive_webhook(client_id: str, request: Request):
         event_router=request.app.state.event_router,
         hooks=request.app.state.hooks,
         skill_loader=request.app.state.skill_loader,
+        runtime_guard=request.app.state.runtime_guard,
         eligible_skills=request.app.state.skills_eligible,
         skill_context=request.app.state.skill_context,
         exec_approval=request.app.state.exec_approval,

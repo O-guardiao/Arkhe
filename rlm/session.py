@@ -25,10 +25,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from rlm.core.compaction import ContextCompactor, CompactionConfig, estimate_tokens
+from rlm.core.engine.compaction import ContextCompactor, CompactionConfig, estimate_tokens
 from rlm.core.types import ClientBackend
-from rlm.core.control_flow import ReentrancyBarrier
-from rlm.core.cancellation import CancellationToken
+from rlm.core.engine.control_flow import ReentrancyBarrier
+from rlm.core.lifecycle.cancellation import CancellationToken
 
 # Pipeline de memória expandido (importação lazy nas classes para evitar circular)
 # TurnTelemetryStore, MemorySessionCache, inject_memory_with_budget
@@ -202,7 +202,7 @@ class RLMSession:
         **rlm_kwargs: Any,
     ):
         # Lazy import para evitar circular no nível de módulo
-        from rlm.core.rlm import RLM
+        from rlm.core.engine.rlm import RLM
 
         self._rlm = RLM(
             backend=backend,
@@ -254,7 +254,7 @@ class RLMSession:
         # Memória de longo prazo (opcional — nunca trava o init)
         self._memory: Any = None
         try:
-            from rlm.core.memory_manager import MultiVectorMemory
+            from rlm.core.memory.memory_manager import MultiVectorMemory
             self._memory = MultiVectorMemory(db_path=memory_db_path or "rlm_memory_v2.db")
         except Exception:
             pass
@@ -263,7 +263,7 @@ class RLMSession:
         self._kb: Any = None
         self._memory_db_path: str = memory_db_path or "rlm_memory_v2.db"
         try:
-            from rlm.core.knowledge_base import GlobalKnowledgeBase
+            from rlm.core.memory.knowledge_base import GlobalKnowledgeBase
             _kb_dir = os.path.join(
                 os.path.dirname(_effective_state_dir), "global"
             ) if _effective_state_dir else None
@@ -281,7 +281,7 @@ class RLMSession:
             _default_vault = os.path.join(os.path.expanduser("~"), ".arkhe", "vault")
             vault_path = os.environ.get("ARKHE_VAULT_PATH", "") or _default_vault
             if vault_path and self._kb is not None:
-                from rlm.core.obsidian_bridge import ObsidianBridge
+                from rlm.core.integrations.obsidian_bridge import ObsidianBridge
                 self._obsidian_bridge = ObsidianBridge(
                     vault_path=vault_path, kb=self._kb
                 )
@@ -292,7 +292,7 @@ class RLMSession:
         # Telemetria de turno — rastreia tokens, latência, memória injetada
         self._telemetry: Any = None
         try:
-            from rlm.core.turn_telemetry import TurnTelemetryStore
+            from rlm.core.observability.turn_telemetry import TurnTelemetryStore
             _model_name = (backend_kwargs or {}).get("model_name", backend)
             self._telemetry = TurnTelemetryStore(
                 session_id=self._session_id,
@@ -304,7 +304,7 @@ class RLMSession:
         # Cache quente de memória — leitura síncrona <1ms, atualização em background
         self._memory_cache: Any = None
         try:
-            from rlm.core.memory_hot_cache import get_or_create_cache
+            from rlm.core.memory.memory_hot_cache import get_or_create_cache
             self._memory_cache = get_or_create_cache(self._session_id)
         except Exception:
             pass
@@ -743,7 +743,7 @@ class RLMSession:
             )
             return selected_chunks, tokens_used
 
-        from rlm.core.memory_budget import inject_memory_with_budget
+        from rlm.core.memory.memory_budget import inject_memory_with_budget
 
         selected_chunks, tokens_used = inject_memory_with_budget(
             query=query_text,
@@ -772,7 +772,7 @@ class RLMSession:
         if not selected_chunks:
             return ""
 
-        from rlm.core.memory_budget import format_memory_block
+        from rlm.core.memory.memory_budget import format_memory_block
 
         mem_block = format_memory_block(selected_chunks)
         if not mem_block:
@@ -820,7 +820,7 @@ class RLMSession:
         self._memory_injection_pending = False
         if self._memory_cache is not None:
             try:
-                from rlm.core.memory_hot_cache import evict_cache
+                from rlm.core.memory.memory_hot_cache import evict_cache
 
                 evict_cache(self._session_id)
             except Exception:
@@ -845,7 +845,7 @@ class RLMSession:
         if self._kb is None:
             return []
         try:
-            from rlm.core.knowledge_consolidator import consolidate_session
+            from rlm.core.memory.knowledge_consolidator import consolidate_session
             doc_ids = consolidate_session(
                 memory_db_path=self._memory_db_path,
                 session_id=self._session_id,
@@ -967,7 +967,7 @@ class RLMSession:
             return
 
         try:
-            from rlm.core.memory_mini_agent import (
+            from rlm.core.memory.memory_mini_agent import (
                 extract_memory_nuggets,
                 assign_importance,
                 identify_edge,

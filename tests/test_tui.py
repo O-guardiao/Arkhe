@@ -133,7 +133,7 @@ def _make_session():
 
 
 def test_apply_operator_command_updates_focus() -> None:
-    from rlm.core.operator_surface import apply_operator_command
+    from rlm.core.observability.operator_surface import apply_operator_command
 
     session = _make_session()
     manager = _DummySessionManager(session)
@@ -154,7 +154,7 @@ def test_apply_operator_command_updates_focus() -> None:
 
 
 def test_dispatch_operator_prompt_records_response() -> None:
-    from rlm.core.operator_surface import dispatch_operator_prompt
+    from rlm.core.observability.operator_surface import dispatch_operator_prompt
 
     session = _make_session()
     manager = _DummySessionManager(session)
@@ -177,7 +177,7 @@ def test_dispatch_operator_prompt_records_response() -> None:
 
 
 def test_dispatch_operator_prompt_uses_runtime_pipeline_when_available() -> None:
-    from rlm.core.operator_surface import dispatch_operator_prompt
+    from rlm.core.observability.operator_surface import dispatch_operator_prompt
 
     session = _make_session()
     manager = _DummySessionManager(session)
@@ -222,7 +222,7 @@ def test_dispatch_operator_prompt_uses_runtime_pipeline_when_available() -> None
 
 
 def test_dispatch_operator_prompt_records_worker_error_when_pipeline_fails_early() -> None:
-    from rlm.core.operator_surface import dispatch_operator_prompt
+    from rlm.core.observability.operator_surface import dispatch_operator_prompt
 
     session = _make_session()
     manager = _DummySessionManager(session)
@@ -251,7 +251,7 @@ def test_dispatch_operator_prompt_records_worker_error_when_pipeline_fails_early
 
 
 def test_apply_operator_command_resume_runtime_uses_transition_status() -> None:
-    from rlm.core.operator_surface import apply_operator_command
+    from rlm.core.observability.operator_surface import apply_operator_command
 
     session = _make_session()
     session.status = "aborted"
@@ -274,7 +274,7 @@ def test_apply_operator_command_resume_runtime_uses_transition_status() -> None:
 
 
 def test_apply_operator_command_rejects_unknown_command_type() -> None:
-    from rlm.core.operator_surface import apply_operator_command
+    from rlm.core.observability.operator_surface import apply_operator_command
 
     session = _make_session()
     manager = _DummySessionManager(session)

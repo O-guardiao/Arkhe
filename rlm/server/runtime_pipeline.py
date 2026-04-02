@@ -6,16 +6,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from rlm.core.execution_policy import RuntimeExecutionPolicy, infer_runtime_execution_policy
-from rlm.core.exec_approval import ExecApprovalGate
-from rlm.core.handoff import VALID_HANDOFF_ROLES, make_handoff_fn
-from rlm.core.role_orchestrator import PENDING_HANDOFFS_KEY, orchestrate_roles
+from rlm.core.security.execution_policy import RuntimeExecutionPolicy, infer_runtime_execution_policy
+from rlm.core.orchestration.handoff import VALID_HANDOFF_ROLES, make_handoff_fn
+from rlm.core.orchestration.role_orchestrator import PENDING_HANDOFFS_KEY, orchestrate_roles
 from rlm.core.session import SessionManager
-from rlm.core.skill_loader import SkillLoader
-from rlm.core.skill_telemetry import get_skill_telemetry
-from rlm.core.supervisor import ExecutionResult, RLMSupervisor, SupervisorConfig
+from rlm.core.skillkit.skill_loader import SkillLoader
+from rlm.core.skillkit.skill_telemetry import get_skill_telemetry
+from rlm.core.orchestration.supervisor import ExecutionResult, RLMSupervisor, SupervisorConfig
 from rlm.plugins import PluginLoader
 from rlm.plugins.channel_registry import sanitize_text_payload
+from rlm.runtime import RuntimeGuard
+from rlm.runtime.contracts import RuntimeApprovalPort
 from rlm.server.event_router import EventRouter
 
 
@@ -27,9 +28,10 @@ class RuntimeDispatchServices:
     event_router: EventRouter
     hooks: Any
     skill_loader: SkillLoader
+    runtime_guard: RuntimeGuard | None = None
     eligible_skills: list[Any] = field(default_factory=list)
     skill_context: str = ""
-    exec_approval: ExecApprovalGate | None = None
+    exec_approval: RuntimeApprovalPort | None = None
     exec_approval_required: bool = False
 
 
@@ -89,7 +91,7 @@ def _prepend_memory_block(rlm_session: Any, query_text: str, prompt: Any) -> Any
         if cached_chunks:
             selected_chunks = cached_chunks
         else:
-            from rlm.core.memory_budget import inject_memory_with_budget
+            from rlm.core.memory.memory_budget import inject_memory_with_budget
             selected_chunks, _ = inject_memory_with_budget(
                 query=query_text,
                 session_id=session_id,
@@ -100,7 +102,7 @@ def _prepend_memory_block(rlm_session: Any, query_text: str, prompt: Any) -> Any
         if not selected_chunks:
             return prompt
 
-        from rlm.core.memory_budget import format_memory_block
+        from rlm.core.memory.memory_budget import format_memory_block
         mem_block = format_memory_block(selected_chunks)
         if not mem_block:
             return prompt
@@ -317,8 +319,12 @@ def _apply_repl_injections(
 
         # Vault tools — Obsidian vault search / read / corrections
         try:
-            from rlm.tools.vault_tools import get_vault_tools
-            _vault_tools = get_vault_tools(_rlm_session)
+            if services.runtime_guard is not None:
+                _vault_tools = services.runtime_guard.vaults.get_tools(_rlm_session)
+            else:
+                from rlm.tools.vault_tools import get_vault_tools
+
+                _vault_tools = get_vault_tools(_rlm_session)
             for _name, _fn in _vault_tools.items():
                 repl_locals[_name] = _fn
             if _vault_tools:
@@ -367,6 +373,8 @@ def _apply_repl_injections(
         repl_locals["skill_list"] = skill_list_fn
 
     approval_gate = services.exec_approval
+    if services.runtime_guard is not None:
+        approval_gate = services.runtime_guard.approvals
     if approval_gate is not None:
         repl_locals["confirm_exec"] = approval_gate.make_repl_fn(session.session_id)
 
@@ -513,10 +521,16 @@ def dispatch_runtime_prompt_sync(
     if isinstance(prompt, str):
         prompt = _sanitize_input(prompt)
 
-    from rlm.core.security import auditor as security_auditor
-
     if query_text:
-        threat = security_auditor.audit_input(query_text, session_id=session_obj.session_id)
+        if services.runtime_guard is not None:
+            threat = services.runtime_guard.security.audit_input(
+                query_text,
+                session_id=session_obj.session_id,
+            )
+        else:
+            from rlm.core.security import auditor as security_auditor
+
+            threat = security_auditor.audit_input(query_text, session_id=session_obj.session_id)
         if threat.threat_level == "high":
             services.session_manager.log_event(
                 session_obj.session_id,
@@ -554,12 +568,20 @@ def dispatch_runtime_prompt_sync(
     root_model = None
     if session_obj.rlm_instance is not None:
         root_model = ((getattr(getattr(session_obj.rlm_instance, "_rlm", None), "backend_kwargs", None) or {}).get("model_name"))
-    execution_policy = infer_runtime_execution_policy(
-        query_text,
-        client_id=client_id,
-        prompt_plan=prompt_plan,
-        default_model=str(root_model) if root_model is not None else None,
-    )
+    if services.runtime_guard is not None:
+        execution_policy = services.runtime_guard.policy.infer_runtime_execution_policy(
+            query_text,
+            client_id=client_id,
+            prompt_plan=prompt_plan,
+            default_model=str(root_model) if root_model is not None else None,
+        )
+    else:
+        execution_policy = infer_runtime_execution_policy(
+            query_text,
+            client_id=client_id,
+            prompt_plan=prompt_plan,
+            default_model=str(root_model) if root_model is not None else None,
+        )
     if query_text:
         estimate = services.skill_loader.estimate_tokens(services.eligible_skills, query=query_text)
         ranked_payload = [
@@ -657,6 +679,21 @@ def dispatch_runtime_prompt_sync(
     rlm_core = getattr(getattr(session_obj, "rlm_instance", None), "_rlm", None)
     if rlm_core is not None:
         rlm_core._runtime_execution_policy = execution_policy
+        # Multichannel: inject originating channel into env kwargs and live env
+        _ekw = getattr(rlm_core, "environment_kwargs", None)
+        if _ekw is None:
+            try:
+                rlm_core.environment_kwargs = {"_originating_channel": client_id}
+            except AttributeError:
+                pass  # mock / read-only object
+        else:
+            _ekw["_originating_channel"] = client_id
+        _live_env = getattr(rlm_core, "_persistent_env", None)
+        if _live_env is not None:
+            _live_env._originating_channel = client_id
+            _live_ctx = getattr(getattr(_live_env, "_memory", None), "_agent_context", None)
+            if _live_ctx is not None:
+                _live_ctx.channel = client_id
 
     def _execute_with_skill_context() -> ExecutionResult:
         skill_ctx_tokens = services.skill_loader.set_request_context(

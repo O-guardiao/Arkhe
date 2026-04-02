@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from rlm.core.sif import (  # noqa: E402
+from rlm.core.skillkit.sif import (  # noqa: E402
     SIFCodexBuilder,
     SIFCompositionGraph,
     SIFEntry,
@@ -19,9 +19,9 @@ from rlm.core.sif import (  # noqa: E402
     estimate_sif_vs_full,
     parse_sif_block,
 )
-from rlm.core.skill_loader import SkillDef, SkillLoader  # noqa: E402
-from rlm.core.skill_loader import SkillRuntimeMeta  # noqa: E402
-from rlm.core.skill_telemetry import SkillTelemetryStore, get_skill_telemetry  # noqa: E402
+from rlm.core.skillkit.skill_loader import SkillDef, SkillLoader  # noqa: E402
+from rlm.core.skillkit.skill_loader import SkillRuntimeMeta  # noqa: E402
+from rlm.core.skillkit.skill_telemetry import SkillTelemetryStore, get_skill_telemetry  # noqa: E402
 
 
 def make_skill_with_sif(

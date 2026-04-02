@@ -1,6 +1,6 @@
 
 import pytest
-from rlm.core import fast
+from rlm.core.optimized import fast
 
 def test_backend_is_optimized_python():
     """Verify that the repository runs on the optimized Python backend."""

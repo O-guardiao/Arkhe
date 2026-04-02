@@ -13,8 +13,8 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, cast
 
-from rlm.core.fast import LMRequest, send_lm_request, send_lm_request_batched
-from rlm.core.runtime_workbench import (
+from rlm.core.optimized.fast import LMRequest, send_lm_request, send_lm_request_batched
+from rlm.core.engine.runtime_workbench import (
     CoordinationDigest,
     ContextAttachmentStore,
     ExecutionTimeline,
@@ -216,6 +216,8 @@ class LocalREPL(NonIsolatedEnv):
         self._cancel_event: "threading.Event | None" = kwargs.pop("_cancel_event", None)
         # Lacuna 1: Aceitar memória compartilhada do pai
         self._parent_memory = kwargs.pop("_parent_memory", None)
+        # Multichannel: canal de origem (e.g. "telegram:123", "tui:default")
+        self._originating_channel: str | None = kwargs.pop("_originating_channel", None)
 
         super().__init__(persistent=persistent, depth=depth, **kwargs)
 
@@ -755,7 +757,7 @@ class LocalREPL(NonIsolatedEnv):
 
             Cost: 1 REPL execution per approach per depth step. No LLM calls.
             """
-            from rlm.core.mcts import EvaluationStage, MCTSOrchestrator, ProgramArchive, evolutionary_branch_search
+            from rlm.core.orchestration.mcts import EvaluationStage, MCTSOrchestrator, ProgramArchive, evolutionary_branch_search
 
             resolved_evaluators = list(evaluators or [])
             if not resolved_evaluators and callable(self.globals.get("evaluate")):
@@ -1756,17 +1758,28 @@ class LocalREPL(NonIsolatedEnv):
         Injects code analysis tools into the REPL and generates an initial
         overview as the context variable.
         """
+        import copy
         from rlm.tools.codebase import get_codebase_tools
         from rlm.utils.code_tools import directory_tree, file_stats
         from rlm.tools.memory import RLMMemory
         from rlm.tools.memory_tools import get_memory_tools
+        from rlm.core.engine.runtime_workbench import AgentContext
 
         # Lacuna 1: Reutilizar memória compartilhada do pai quando disponível
+        # P1: Shallow-copy para isolar agent_context sem criar novo db
         if self._parent_memory is not None:
-            self._memory = self._parent_memory
+            self._memory = copy.copy(self._parent_memory)
+            self._memory._agent_context = AgentContext(
+                depth=self.depth,
+                branch_id=self._sibling_branch_id,
+                parent_session_id=getattr(self._parent_memory, "session_id", None),
+                role="child_parallel" if self._sibling_branch_id is not None else "child_serial",
+                channel=self._originating_channel,
+            )
         else:
             memory_dir = os.path.join(codebase_path, ".rlm_memory")
             self._memory = RLMMemory(memory_dir, scope_name=os.path.basename(os.path.abspath(codebase_path)))
+            self._memory._agent_context = AgentContext(depth=self.depth, role="root", channel=self._originating_channel)
 
         # Inject sandboxed codebase tools into globals
         tools = get_codebase_tools(codebase_path)
@@ -2165,15 +2178,17 @@ class LocalREPL(NonIsolatedEnv):
             from rlm.tools.codebase import get_codebase_tools
             from rlm.tools.memory import RLMMemory
             from rlm.tools.memory_tools import get_memory_tools
+            from rlm.core.engine.runtime_workbench import AgentContext
 
             # Re-inject codebase tools
             tools = get_codebase_tools(codebase_path)
             for name, func in tools.items():
                 self.globals[name] = func
 
-            # Re-initialize memory
+            # Re-initialize memory (preserving agent context from current instance)
             memory_dir = os.path.join(codebase_path, ".rlm_memory")
             self._memory = RLMMemory(memory_dir, scope_name=os.path.basename(os.path.abspath(codebase_path)))
+            self._memory._agent_context = AgentContext(depth=self.depth, role="root", channel=self._originating_channel)
             memory_tools = get_memory_tools(self._memory, codebase_path, llm_query_batched_fn=self._llm_query_batched)
             for name, func in memory_tools.items():
                 self.globals[name] = func
