@@ -317,8 +317,8 @@ class TelegramGateway:
 
     # ── Bridge: encaminha para api.py ─────────────────────────────────────
 
-    def _process_via_bridge(self, chat_id: int, text: str, username: str) -> str:
-        """Encaminha mensagem para o api.py via HTTP e retorna a resposta."""
+    def _process_via_bridge(self, chat_id: int, text: str, username: str) -> tuple[str, bool]:
+        """Encaminha mensagem para o api.py via HTTP e retorna (resposta, already_replied)."""
         if len(text) > self.config.max_message_length:
             text = text[: self.config.max_message_length] + "\n[... truncada ...]"
 
@@ -340,7 +340,9 @@ class TelegramGateway:
             self._stats["bridge_errors"] += 1
             error_detail = result.get("detail", result["error"])
             logger.error("Bridge response error", chat_id=chat_id, error=error_detail)
-            return f"⚠️ Erro no servidor: {error_detail[:200]}"
+            return f"⚠️ Erro no servidor: {error_detail[:200]}", False
+
+        already_replied = result.get("already_replied", False)
 
         # Extrair resposta do resultado do api.py
         # O dispatch_runtime_prompt_sync retorna dict com chave "response"
@@ -351,7 +353,7 @@ class TelegramGateway:
         if not response:
             response = json.dumps(result, ensure_ascii=False, indent=2)
 
-        return str(response)
+        return str(response), already_replied
 
     # ── Handler de update ────────────────────────────────────────────────
 
@@ -410,7 +412,7 @@ class TelegramGateway:
                     )
                     hb.start()
 
-                response = self._process_via_bridge(chat_id, text, username)
+                response, already_replied = self._process_via_bridge(chat_id, text, username)
 
                 if hb is not None:
                     hb.dispose()
@@ -420,7 +422,8 @@ class TelegramGateway:
                 if self.config.log_messages:
                     logger.info("Resposta enviada", username=username, chat_id=chat_id, text_preview=response[:100])
 
-                _send_message(self.token, chat_id, response)
+                if not already_replied:
+                    _send_message(self.token, chat_id, response)
 
             except Exception as e:
                 self._stats["errors"] += 1

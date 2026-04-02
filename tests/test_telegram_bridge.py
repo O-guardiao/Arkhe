@@ -146,14 +146,16 @@ class TestProcessViaBridge:
     def test_extracts_response(self):
         gw = self._make_gw()
         with patch("rlm.server.telegram_gateway._bridge_post", return_value={"status": "completed", "response": "Resposta OK"}):
-            result = gw._process_via_bridge(chat_id=123, text="oi", username="user")
+            result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
         assert result == "Resposta OK"
+        assert already_replied is False
 
     def test_returns_error_on_bridge_failure(self):
         gw = self._make_gw()
         with patch("rlm.server.telegram_gateway._bridge_post", return_value={"error": "timeout"}):
-            result = gw._process_via_bridge(chat_id=123, text="oi", username="user")
+            result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
         assert "Erro" in result or "erro" in result.lower()
+        assert already_replied is False
         assert gw._stats["bridge_errors"] == 1
 
     def test_truncates_long_input(self):
@@ -173,7 +175,7 @@ class TestProcessViaBridge:
     def test_fallback_to_json_dumps_when_no_response_key(self):
         gw = self._make_gw()
         with patch("rlm.server.telegram_gateway._bridge_post", return_value={"status": "completed", "unusual_key": "data"}):
-            result = gw._process_via_bridge(chat_id=123, text="oi", username="user")
+            result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
         # Deve fazer json.dumps do resultado
         assert "unusual_key" in result
 
@@ -190,6 +192,22 @@ class TestProcessViaBridge:
 
         assert captured_client_id["id"] == "telegram:1968290446"
 
+    def test_already_replied_flag_propagated(self):
+        gw = self._make_gw()
+        with patch("rlm.server.telegram_gateway._bridge_post", return_value={
+            "status": "completed", "response": "answer", "already_replied": True,
+        }):
+            result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
+        assert result == "answer"
+        assert already_replied is True
+
+    def test_already_replied_defaults_false(self):
+        gw = self._make_gw()
+        with patch("rlm.server.telegram_gateway._bridge_post", return_value={
+            "status": "completed", "response": "answer",
+        }):
+            result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
+        assert already_replied is False
 
 # ---------------------------------------------------------------------------
 # _handle_update (fluxo completo)

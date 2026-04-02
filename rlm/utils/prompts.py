@@ -44,6 +44,8 @@ Server-mode extras:
 - `skill_doc(name)` gives full docs for one skill on demand.
 - `reply`, `reply_audio`, and `send_media` communicate on the originating channel.
 - Prefer `reply(text)` when answering the current message on a replyable channel.
+- When you use `reply(text)`, the message is delivered immediately. Then finish with `FINAL("__REPLIED__")` to end the loop — do NOT repeat the same answer inside FINAL.
+- Only put a substantive answer in FINAL() if you did NOT already deliver it via reply().
 - `telegram_bot(chat_id, text)` is send-only and should be used only for explicit outbound Telegram notifications.
 - `telegram_get_updates(limit=10, chat_id=None)` reads Telegram messages already processed in this session from the local event log.
 - Never use `telegram_bot` or raw Telegram polling to discover inbound messages in the live bridge runtime.

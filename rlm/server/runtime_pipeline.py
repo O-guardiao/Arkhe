@@ -254,7 +254,10 @@ def _apply_repl_injections(
     _originating_channel = client_id
 
     def reply(message: str) -> bool:
-        return ChannelRegistry.reply(_originating_channel, sanitize_text_payload(message))
+        delivered = ChannelRegistry.reply(_originating_channel, sanitize_text_payload(message))
+        if delivered:
+            session.__reply_delivered__ = True
+        return delivered
 
     def reply_audio(text: str, voice: str = "alloy", output_format: str = "mp3") -> bool:
         return ChannelRegistry.reply_audio(
@@ -508,6 +511,7 @@ def dispatch_runtime_prompt_sync(
     on_complete: Callable[[dict[str, Any], Any], None] | None = None,
 ) -> dict[str, Any]:
     session_obj = session or services.session_manager.get_or_create(client_id)
+    session_obj.__reply_delivered__ = False  # reset per-request
 
     prepared_payload = EventRouter.preprocess_audio(client_id, dict(payload))
     prompt, plugins_to_load = services.event_router.route(client_id, prepared_payload)
@@ -849,6 +853,7 @@ def dispatch_runtime_prompt_sync(
         "execution_time": round(result.execution_time, 2),
         "abort_reason": result.abort_reason,
         "error_detail": result.error_detail,
+        "already_replied": getattr(session_obj, "__reply_delivered__", False),
     }
     if on_complete is not None:
         on_complete(payload_result, session_obj)
