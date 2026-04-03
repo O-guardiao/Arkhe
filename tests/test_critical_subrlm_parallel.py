@@ -60,7 +60,7 @@ def _make_slow_mock_rlm_cls(response: str, delay_s: float):
     mock_completion.response = response
     mock_instance = MagicMock()
 
-    def _slow_completion(prompt):
+    def _slow_completion(prompt, **kw):
         time.sleep(delay_s)
         return mock_completion
 
@@ -310,7 +310,7 @@ class TestIndividualFailureTolerance:
             cancel_event = kwargs["environment_kwargs"]["_cancel_event"]
             instance = MagicMock()
 
-            def _completion(prompt):
+            def _completion(prompt, **kw):
                 completion = MagicMock()
                 if branch_id == 0:
                     completion.response = "winner-result"
@@ -373,7 +373,7 @@ class TestIndividualFailureTolerance:
             cancel_event = kwargs["environment_kwargs"]["_cancel_event"]
             instance = MagicMock()
 
-            def _completion(prompt):
+            def _completion(prompt, **kw):
                 completion = MagicMock()
                 if branch_id == 0:
                     completion.response = "winner-result"
@@ -431,7 +431,7 @@ class TestIndividualFailureTolerance:
             cancel_event = kwargs["environment_kwargs"]["_cancel_event"]
             instance = MagicMock()
 
-            def _completion(prompt):
+            def _completion(prompt, **kw):
                 completion = MagicMock()
                 if branch_id in {0, 1}:
                     time.sleep(0.03 * branch_id)
@@ -520,7 +520,7 @@ class TestIndividualFailureTolerance:
             branch_id = kwargs["environment_kwargs"]["_sibling_branch_id"]
             instance = MagicMock()
 
-            def _completion(prompt):
+            def _completion(prompt, **kw):
                 branch_calls[branch_id] += 1
                 completion = MagicMock()
                 if branch_id == 0:
@@ -560,7 +560,7 @@ class TestIndividualFailureTolerance:
             ok_completion = MagicMock()
             ok_completion.response = "ok"
 
-            def _completion(prompt):
+            def _completion(prompt, **kw):
                 # Falha somente quando a tarefa contém "FALHA"
                 if "FALHA" in prompt:
                     raise ConnectionError("timeout")
@@ -680,7 +680,7 @@ class TestParallelDetailed:
             cancel_event = kwargs["environment_kwargs"]["_cancel_event"]
             instance = MagicMock()
 
-            def _completion(prompt):
+            def _completion(prompt, **kw):
                 completion = MagicMock()
                 if branch_id == 0:
                     completion.response = "winner-detailed"

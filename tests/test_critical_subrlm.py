@@ -199,7 +199,7 @@ class TestTimeoutMechanism:
         slow_completion = MagicMock()
         slow_completion.response = "nunca chega"
         mock_instance = MagicMock()
-        mock_instance.completion.side_effect = lambda p: (time.sleep(10), slow_completion)[1]
+        mock_instance.completion.side_effect = lambda p, **kw: (time.sleep(10), slow_completion)[1]
         mock_cls = MagicMock(return_value=mock_instance)
 
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -211,7 +211,7 @@ class TestTimeoutMechanism:
         parent = _make_parent_mock(depth=0, max_depth=2)
 
         mock_instance = MagicMock()
-        mock_instance.completion.side_effect = lambda p: time.sleep(10)
+        mock_instance.completion.side_effect = lambda p, **kw: time.sleep(10)
         mock_cls = MagicMock(return_value=mock_instance)
 
         fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
@@ -253,7 +253,7 @@ class TestSuccessfulExecution:
         mock_completion = MagicMock()
         mock_completion.response = "ok"
         mock_instance = MagicMock()
-        def _capture(prompt):
+        def _capture(prompt, **kw):
             received_prompts.append(prompt)
             return mock_completion
         mock_instance.completion.side_effect = _capture
@@ -307,7 +307,7 @@ class TestSuccessfulExecution:
         mock_completion.response = "ok"
         mock_instance = MagicMock()
 
-        def _capture(prompt):
+        def _capture(prompt, **kw):
             received_prompts.append(prompt)
             return mock_completion
 

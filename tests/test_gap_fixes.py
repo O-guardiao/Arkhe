@@ -82,7 +82,7 @@ class FakeRLM:
         self._async_bus = None
         self._async_branch_counter = 0
 
-    def completion(self, prompt: str, capture_artifacts: bool = False):
+    def completion(self, prompt: str, capture_artifacts: bool = False, **kw):
         if capture_artifacts:
             return _FakeCompletion(
                 response=f"processed: {prompt[:30]}",
@@ -757,3 +757,118 @@ class TestExtractTurnOutcome:
         result = mixin._extract_turn_outcome(history)
         # Deve ter no máximo 5 bullets de erro
         assert result.count("•") <= 5
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Lacuna 10: sub_rlm child root_prompt injection
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestSubRLMRootPromptInjection:
+    """Verifica que sub_rlm passa root_prompt=task ao child.completion().
+
+    Antes desse fix, o user message do filho era genérico —
+    o LLM não via a task no prompt e declarava 'nenhum contexto fornecido'.
+    """
+
+    def test_serial_sub_rlm_passes_root_prompt(self):
+        """child.completion() deve receber root_prompt igual à task."""
+        from unittest.mock import MagicMock
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
+
+        # Cria pai mock
+        parent = MagicMock()
+        parent.depth = 0
+        parent.max_depth = 3
+        parent.backend = "openai"
+        parent.backend_kwargs = {"model": "gpt-4o-mini"}
+        parent.environment_type = "local"
+        parent.environment_kwargs = {}
+        parent.event_bus = None
+        parent._cancel_token = MagicMock()
+        parent._cancel_token.is_cancelled = False
+        parent._shared_memory = None
+        parent._persistent_env = None
+        parent._async_bus = None
+        parent._async_branch_counter = 0
+
+        # Filho mock que captura os kwargs de completion()
+        captured = {}
+        fake_completion = MagicMock()
+        fake_completion.response = "ok"
+
+        class FakeRLM:
+            def __init__(self, **kw):
+                self._cancel_token = MagicMock()
+                self._cancel_token.is_cancelled = False
+
+            def completion(self, prompt, root_prompt=None, **kw):
+                captured["prompt"] = prompt
+                captured["root_prompt"] = root_prompt
+                return fake_completion
+
+        fn = make_sub_rlm_fn(parent, _rlm_cls=FakeRLM)
+        task_text = "Calcule 2+2 e retorne"
+        result = fn(task_text, timeout_s=10)
+
+        assert result == "ok"
+        assert captured.get("root_prompt") is not None, (
+            "root_prompt deve ser passado ao child — era None antes do fix"
+        )
+        assert task_text in captured["root_prompt"]
+
+    def test_serial_sub_rlm_artifacts_passes_root_prompt(self):
+        """Mesmo caminho com return_artifacts=True."""
+        from unittest.mock import MagicMock
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
+
+        parent = MagicMock()
+        parent.depth = 0
+        parent.max_depth = 3
+        parent.backend = "openai"
+        parent.backend_kwargs = {"model": "gpt-4o-mini"}
+        parent.environment_type = "local"
+        parent.environment_kwargs = {}
+        parent.event_bus = None
+        parent._cancel_token = MagicMock()
+        parent._cancel_token.is_cancelled = False
+        parent._shared_memory = None
+        parent._persistent_env = None
+        parent._async_bus = None
+        parent._async_branch_counter = 0
+
+        captured = {}
+        fake_completion = MagicMock()
+        fake_completion.response = "ok"
+        fake_completion.artifacts = {}
+
+        class FakeRLM:
+            def __init__(self, **kw):
+                self._cancel_token = MagicMock()
+                self._cancel_token.is_cancelled = False
+
+            def completion(self, prompt, root_prompt=None, capture_artifacts=False, **kw):
+                captured["root_prompt"] = root_prompt
+                captured["capture_artifacts"] = capture_artifacts
+                return fake_completion
+
+        fn = make_sub_rlm_fn(parent, _rlm_cls=FakeRLM)
+        fn("Gere JSON com nomes", timeout_s=10, return_artifacts=True)
+
+        assert captured.get("root_prompt") is not None
+        assert captured.get("capture_artifacts") is True
+
+    def test_user_prompt_includes_task_preview_when_root_prompt_set(self):
+        """build_user_prompt com root_prompt deve incluir preview da task."""
+        from rlm.utils.prompts import build_user_prompt
+
+        msg = build_user_prompt(root_prompt="Analise vendas.csv", iteration=0)
+        assert "Analise vendas.csv" in msg["content"]
+        assert "Current task preview" in msg["content"]
+
+    def test_user_prompt_generic_when_root_prompt_none(self):
+        """build_user_prompt sem root_prompt é genérico (comportamento anterior)."""
+        from rlm.utils.prompts import build_user_prompt
+
+        msg = build_user_prompt(root_prompt=None, iteration=0)
+        assert "Current task preview" not in msg["content"]
+        assert "Use the REPL" in msg["content"]

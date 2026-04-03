@@ -736,10 +736,12 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
         def _run():
             try:
                 if return_artifacts:
-                    completion = child.completion(full_prompt, capture_artifacts=True)
+                    completion = child.completion(
+                        full_prompt, root_prompt=task, capture_artifacts=True,
+                    )
                     result_holder.append((completion.response, completion.artifacts or {}))
                 else:
-                    completion = child.completion(full_prompt)
+                    completion = child.completion(full_prompt, root_prompt=task)
                     result_holder.append(completion.response)
             except Exception as exc:  # noqa: BLE001
                 error_holder.append(exc)
@@ -1220,7 +1222,7 @@ def make_sub_rlm_async_fn(
 
         def _run() -> None:
             try:
-                completion = child.completion(full_prompt)
+                completion = child.completion(full_prompt, root_prompt=task)
                 result_holder.append(completion.response)
                 _record_parent_runtime_event(
                     parent,
