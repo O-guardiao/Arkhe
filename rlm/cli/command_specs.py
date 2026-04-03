@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
-from rlm.cli.commands.channel import cmd_channel_list, cmd_channel_status, cmd_channel_probe
-from rlm.cli.commands.client import cmd_client_add, cmd_client_list, cmd_client_revoke, cmd_client_status
-from rlm.cli.commands.doctor import cmd_doctor
-from rlm.cli.commands.peer import cmd_peer_add
-from rlm.cli.commands.service import cmd_start, cmd_status, cmd_stop, cmd_update
-from rlm.cli.commands.setup import cmd_setup
-from rlm.cli.commands.skill import cmd_skill_install, cmd_skill_list
-from rlm.cli.commands.token import cmd_token_rotate
-from rlm.cli.commands.tui import cmd_tui
-from rlm.cli.commands.version import cmd_version
+
+def _lazy(module: str, attr: str) -> Callable[..., int]:
+    """Proxy que importa *module.attr* somente na primeira chamada."""
+
+    def _wrapper(*args: Any, **kwargs: Any) -> int:
+        mod = importlib.import_module(module)
+        fn = getattr(mod, attr)
+        return fn(*args, **kwargs)  # type: ignore[no-any-return]
+
+    _wrapper.__qualname__ = f"{module}.{attr}"
+    return _wrapper
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +63,7 @@ def get_command_specs() -> tuple[CommandSpec, ...]:
         CommandSpec(
             name="tui",
             help="Abre o workbench TUI da sessão viva",
-            handler=cmd_tui,
+            handler=_lazy("rlm.cli.commands.workbench", "cmd_tui"),
             description="Inicia um painel operacional em terminal sobre a mesma sessão recursiva viva, com árvores de branches, eventos, timeline e controles do operador.",
             epilog="""
 Exemplos:
@@ -84,7 +86,7 @@ Controles:
         CommandSpec(
             name="setup",
             help="Wizard interativo de instalação",
-            handler=cmd_setup,
+            handler=_lazy("rlm.cli.commands.setup", "cmd_setup"),
             description="Configura um ambiente Arkhe local ou remoto com wizard interativo.",
             arguments=(
                 ArgumentSpec(
@@ -100,7 +102,7 @@ Controles:
         CommandSpec(
             name="start",
             help="Inicia o servidor Arkhe",
-            handler=cmd_start,
+            handler=_lazy("rlm.cli.commands.ops", "cmd_start"),
             description="Inicia o runtime Arkhe, cujo destino principal é manter API, observabilidade e gateways de canais operando de forma contínua.",
             epilog="""
 Exemplos:
@@ -118,11 +120,11 @@ Recuperação:
                 ArgumentSpec(flags=("--ws-only",), kwargs={"action": "store_true", "help": "Inicia somente o servidor WebSocket"}),
             ),
         ),
-        CommandSpec(name="stop", help="Para o daemon Arkhe", handler=cmd_stop),
+        CommandSpec(name="stop", help="Para o daemon Arkhe", handler=_lazy("rlm.cli.commands.ops", "cmd_stop")),
         CommandSpec(
             name="status",
             help="Mostra status dos processos e configuração",
-            handler=cmd_status,
+            handler=_lazy("rlm.cli.commands.ops", "cmd_status"),
             aliases=("ps",),
             arguments=(
                 ArgumentSpec(
@@ -134,11 +136,11 @@ Recuperação:
                 ),
             ),
         ),
-        CommandSpec(name="version", help="Exibe versão do Arkhe", handler=cmd_version),
+        CommandSpec(name="version", help="Exibe versão do Arkhe", handler=_lazy("rlm.cli.commands.version", "cmd_version")),
         CommandSpec(
             name="update",
             help="Atualiza checkout git e dependências",
-            handler=cmd_update,
+            handler=_lazy("rlm.cli.commands.ops", "cmd_update"),
             description="Atualiza um checkout operacional do Arkhe e ressincroniza dependências do runtime.",
             epilog="""
 Exemplos:
@@ -160,7 +162,7 @@ Recuperação:
         CommandSpec(
             name="doctor",
             help="Valida configuração e testa conexões",
-            handler=cmd_doctor,
+            handler=_lazy("rlm.cli.commands.doctor", "cmd_doctor"),
             aliases=("diag",),
             description="Executa diagnóstico operacional do Arkhe: runtime, tokens, servidor local e handshakes com gateways externos.",
             epilog="""
@@ -187,7 +189,7 @@ Recuperação:
             help="Gerencia tokens de segurança",
             metavar="<ação>",
             subcommands=(
-                CommandSpec(name="rotate", help="Regenera todos os tokens de segurança do runtime", handler=cmd_token_rotate),
+                CommandSpec(name="rotate", help="Regenera todos os tokens de segurança do runtime", handler=_lazy("rlm.cli.commands.token", "cmd_token_rotate")),
             ),
         ),
         CommandSpec(
@@ -198,7 +200,7 @@ Recuperação:
                 CommandSpec(
                     name="add",
                     help="Adiciona peer WireGuard",
-                    handler=cmd_peer_add,
+                    handler=_lazy("rlm.cli.commands.peer", "cmd_peer_add"),
                     arguments=(
                         ArgumentSpec(flags=("--name",), kwargs={"required": True, "help": "Nome do peer (ex: laptop)"}),
                         ArgumentSpec(flags=("--pubkey",), kwargs={"required": True, "help": "Chave pública WireGuard do peer"}),
@@ -212,11 +214,11 @@ Recuperação:
             help="Gerencia skills do Arkhe",
             metavar="<ação>",
             subcommands=(
-                CommandSpec(name="list", help="Lista skills instaladas", handler=cmd_skill_list, aliases=("ls",)),
+                CommandSpec(name="list", help="Lista skills instaladas", handler=_lazy("rlm.cli.commands.skill", "cmd_skill_list"), aliases=("ls",)),
                 CommandSpec(
                     name="install",
                     help="Instala skill remota",
-                    handler=cmd_skill_install,
+                    handler=_lazy("rlm.cli.commands.skill", "cmd_skill_install"),
                     arguments=(
                         ArgumentSpec(flags=("source",), kwargs={"help": "Fonte da skill: github:usuario/repo  ou  github:usuario/repo@branch"}),
                         ArgumentSpec(flags=("--force",), kwargs={"action": "store_true", "help": "Sobrescreve se já existir"}),
@@ -229,12 +231,12 @@ Recuperação:
             help="Gerencia canais de mensagem",
             metavar="<ação>",
             subcommands=(
-                CommandSpec(name="list", help="Lista canais disponíveis e seu estado", handler=cmd_channel_list, aliases=("ls",)),
-                CommandSpec(name="status", help="Mostra status runtime dos canais via API", handler=cmd_channel_status),
+                CommandSpec(name="list", help="Lista canais disponíveis e seu estado", handler=_lazy("rlm.cli.commands.channel", "cmd_channel_list"), aliases=("ls",)),
+                CommandSpec(name="status", help="Mostra status runtime dos canais via API", handler=_lazy("rlm.cli.commands.channel", "cmd_channel_status")),
                 CommandSpec(
                     name="probe",
                     help="Executa probe sob demanda para um canal",
-                    handler=cmd_channel_probe,
+                    handler=_lazy("rlm.cli.commands.channel", "cmd_channel_probe"),
                     arguments=(
                         ArgumentSpec(flags=("channel_id",), kwargs={"help": "ID do canal (telegram, discord, whatsapp, slack, webchat)"}),
                     ),
@@ -249,7 +251,7 @@ Recuperação:
                 CommandSpec(
                     name="add",
                     help="Registra novo dispositivo e emite token",
-                    handler=cmd_client_add,
+                    handler=_lazy("rlm.cli.commands.client", "cmd_client_add"),
                     arguments=(
                         ArgumentSpec(flags=("client_id",), kwargs={"help": "ID do cliente (ex: esp32-sala, iphone-demet)"}),
                         ArgumentSpec(flags=("--profile", "-p"), kwargs={"default": "default", "help": "Perfil de comportamento (referência [[profiles]] no rlm.toml)"}),
@@ -261,7 +263,7 @@ Recuperação:
                 CommandSpec(
                     name="list",
                     help="Lista clientes registrados",
-                    handler=cmd_client_list,
+                    handler=_lazy("rlm.cli.commands.client", "cmd_client_list"),
                     aliases=("ls",),
                     arguments=(
                         ArgumentSpec(flags=("--all", "-a"), kwargs={"action": "store_true", "help": "Mostra também clientes revogados"}),
@@ -270,7 +272,7 @@ Recuperação:
                 CommandSpec(
                     name="revoke",
                     help="Revoga acesso de um cliente (sem deletar)",
-                    handler=cmd_client_revoke,
+                    handler=_lazy("rlm.cli.commands.client", "cmd_client_revoke"),
                     arguments=(
                         ArgumentSpec(flags=("client_id",), kwargs={"help": "ID do cliente a revogar"}),
                     ),
@@ -278,7 +280,7 @@ Recuperação:
                 CommandSpec(
                     name="status",
                     help="Mostra status detalhado de um cliente",
-                    handler=cmd_client_status,
+                    handler=_lazy("rlm.cli.commands.client", "cmd_client_status"),
                     arguments=(
                         ArgumentSpec(flags=("client_id",), kwargs={"help": "ID do cliente"}),
                     ),

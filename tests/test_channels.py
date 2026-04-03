@@ -2205,9 +2205,12 @@ class TestCLINewParsers:
         assert args.channel_command == "list"
 
     def test_doctor_in_dispatch(self) -> None:
-        from rlm.cli.commands.doctor import cmd_doctor
         from rlm.cli.main import DISPATCH
-        assert DISPATCH.get("doctor") is cmd_doctor
+        handler = DISPATCH.get("doctor")
+        assert handler is not None
+        assert callable(handler)
+        # Lazy proxy: qualname aponta para o handler real
+        assert "cmd_doctor" in getattr(handler, "__qualname__", "")
 
     def test_skill_subcommand_without_action_shows_help(self) -> None:
         from rlm.cli.main import main

@@ -481,7 +481,7 @@ class TestDoctorHelpers:
         mock_run.assert_not_called()
 
     def test_cmd_start_blocks_old_python(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from rlm.cli.commands.service import cmd_start
+        from rlm.cli.commands.ops import cmd_start
 
         monkeypatch.setattr(sys, "version_info", (3, 10, 11, "final", 0))
         args = argparse.Namespace(foreground=False, api_only=False, ws_only=False)

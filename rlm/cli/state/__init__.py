@@ -1,6 +1,5 @@
-﻿"""Backward-compat shim -- todo o codigo agora vive em ``rlm.cli.state``."""
+"""Subpacote de estado do launcher — re-exports públicos."""
 
-# Re-exports para que ``from rlm.cli.launcher_state import X`` continue funcionando.
 from rlm.cli.state.diagnosis import (  # noqa: F401
     build_launcher_state_diagnosis,
     diagnose_launcher_state_alignment,
@@ -21,9 +20,8 @@ from rlm.cli.state.launcher import (  # noqa: F401
     update_launcher_state,
 )
 from rlm.cli.state.pid import (  # noqa: F401
-    pid_alive as _pid_alive,
-    read_pid_file as _read_pid_file,
-)
-from rlm.cli.service_runtime import (  # noqa: F401
-    port_accepting_connections,
+    pid_alive,
+    read_pid_file,
+    remove_pid,
+    write_pid,
 )

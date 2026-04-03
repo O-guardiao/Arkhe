@@ -8,15 +8,15 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable, cast
 
 from rlm.cli.context import CliContext
 from rlm.cli.json_output import build_cli_json_envelope
-from rlm.cli.launcher_state import (
-    build_launcher_state_diagnosis,
+from rlm.cli.output import HAS_RICH, _err, _info, _ok, _warn
+from rlm.cli.state.diagnosis import build_launcher_state_diagnosis
+from rlm.cli.state.launcher import (
     mark_bootstrap_success,
     mark_daemon_installed,
     mark_runtime_status,
@@ -24,6 +24,7 @@ from rlm.cli.launcher_state import (
     mark_update,
     summarize_launcher_state,
 )
+from rlm.cli.state.pid import pid_alive as _pid_alive, read_pid_file as _read_pid, remove_pid as _remove_pid, write_pid as _write_pid
 from rlm.cli.service_installers import install_launchd_service_impl, install_systemd_service_impl
 from rlm.cli.service_runtime import (
     ServiceRuntimeLayout,
@@ -39,100 +40,47 @@ from rlm.cli.service_wireguard import add_wireguard_peer_impl
 
 
 # --------------------------------------------------------------------------- #
-# Configuração                                                                 #
+# Configuração  (lazy — evita side-effect no import)                           #
 # --------------------------------------------------------------------------- #
 
-_DEFAULT_CONTEXT = CliContext.from_environment(load_env=False)
-
-_PID_DIR = _DEFAULT_CONTEXT.paths.runtime_dir
-_PID_API = _PID_DIR / "api.pid"
-_PID_WS  = _PID_DIR / "ws.pid"
-_LOG_DIR = _DEFAULT_CONTEXT.paths.log_dir
 _SERVICE_NAME = "rlm"
+
+# Patchable overrides — testes usam patch("rlm.cli.service._PID_DIR", ...) etc.
+_PID_DIR: Path | None = None
+_PID_API: Path | None = None
+_PID_WS: Path | None = None
+_LOG_DIR: Path | None = None
+
+
+def _default_paths() -> tuple[Path, Path]:
+    """Retorna (pid_dir, log_dir) do contexto padrão sem load_env."""
+    ctx = CliContext.from_environment(load_env=False)
+    return ctx.paths.runtime_dir, ctx.paths.log_dir
 
 
 def _runtime_layout() -> ServiceRuntimeLayout:
+    if _PID_DIR is not None:
+        pid_dir = _PID_DIR
+        log_dir = _LOG_DIR or pid_dir.parent / "log"
+    else:
+        pid_dir, log_dir = _default_paths()
     return ServiceRuntimeLayout(
-        pid_dir=_PID_DIR,
-        pid_api=_PID_API,
-        pid_ws=_PID_WS,
-        log_dir=_LOG_DIR,
+        pid_dir=pid_dir,
+        pid_api=_PID_API or pid_dir / "api.pid",
+        pid_ws=_PID_WS or pid_dir / "ws.pid",
+        log_dir=_LOG_DIR or log_dir,
         service_name=_SERVICE_NAME,
     )
 
 
 # --------------------------------------------------------------------------- #
-# Helpers de console (rich disponível após `uv pip install -e .`)             #
+# Rich Table (re-export para show_status)                                      #
 # --------------------------------------------------------------------------- #
 
 try:
-    from rich.console import Console
     from rich.table import Table
-
-    _c = Console()
-    _e = Console(stderr=True)
-
-    def _ok(msg: str) -> None:   _c.print(f"[bold green]✓[/] {msg}")
-    def _warn(msg: str) -> None: _c.print(f"[yellow]⚠[/]  {msg}")
-    def _err(msg: str) -> None:  _e.print(f"[bold red]✗[/] {msg}")
-    def _info(msg: str) -> None: _c.print(f"[dim]→[/] {msg}")
-
-    HAS_RICH = True
-
 except ImportError:
-    Console = None
     Table = None
-    HAS_RICH = False
-
-    def _ok(msg: str) -> None:   print(f"✓ {msg}")
-    def _warn(msg: str) -> None: print(f"⚠  {msg}", file=sys.stderr)
-    def _err(msg: str) -> None:  print(f"✗ {msg}", file=sys.stderr)
-    def _info(msg: str) -> None: print(f"→ {msg}")
-
-
-# --------------------------------------------------------------------------- #
-# PID helpers                                                                  #
-# --------------------------------------------------------------------------- #
-
-def _read_pid(pid_file: Path) -> int | None:
-    try:
-        return int(pid_file.read_text().strip())
-    except Exception:
-        return None
-
-
-def _write_pid(pid_file: Path, pid: int) -> None:
-    pid_file.parent.mkdir(parents=True, exist_ok=True)
-    pid_file.write_text(str(pid))
-
-
-def _remove_pid(pid_file: Path) -> None:
-    pid_file.unlink(missing_ok=True)
-
-
-def _pid_alive(pid: int) -> bool:
-    """Retorna True se o processo com `pid` está em execução.
-
-    Usa abordagem compatível com Windows (tasklist) e POSIX (os.kill sig=0).
-    No Windows, os.kill(pid, 0) equivale a CTRL_C_EVENT — NÃO usar para check.
-    """
-    if sys.platform == "win32":
-        try:
-            result = subprocess.run(
-                ["tasklist", "/fi", f"PID eq {pid}", "/nh", "/fo", "csv"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return f'"{pid}"' in result.stdout or str(pid) in result.stdout
-        except Exception:
-            return False
-    else:
-        try:
-            os.kill(pid, 0)
-            return True
-        except (ProcessLookupError, PermissionError):
-            return False
 
 
 def _load_env_settings() -> dict[str, str]:
@@ -211,8 +159,9 @@ def stop_services(context: CliContext | None = None) -> int:
 
 
 def _build_status_snapshot(context: CliContext) -> dict[str, Any]:
-    api_pid = _read_pid(_PID_API)
-    ws_pid = _read_pid(_PID_WS)
+    layout = _runtime_layout()
+    api_pid = _read_pid(layout.pid_api)
+    ws_pid = _read_pid(layout.pid_ws)
     api_running = bool(api_pid and _pid_alive(api_pid))
     ws_running = bool(ws_pid and _pid_alive(ws_pid))
     api_port_open = port_accepting_connections(context.api_host(), context.api_port())
@@ -228,14 +177,14 @@ def _build_status_snapshot(context: CliContext) -> dict[str, Any]:
                 "port_open": api_port_open,
                 "url": f"{context.api_base_url()}/",
                 "docs_url": context.docs_url(),
-                "log_file": str((_LOG_DIR / "api.log").resolve()),
+                "log_file": str((layout.log_dir / "api.log").resolve()),
             },
             "ws": {
                 "pid": ws_pid,
                 "running": ws_running,
                 "port_open": ws_port_open,
                 "url": context.ws_base_url(),
-                "log_file": str((_LOG_DIR / "ws.log").resolve()),
+                "log_file": str((layout.log_dir / "ws.log").resolve()),
             },
             "webchat_url": context.webchat_url(),
         },
@@ -321,10 +270,11 @@ def install_systemd_service(project_root: Path, env_path: Path) -> int:
 
 
 def install_launchd_service(project_root: Path, env_path: Path) -> int:
+    _, log_dir = _default_paths()
     rc, plist_path = install_launchd_service_impl(
         project_root,
         env_path,
-        _LOG_DIR,
+        log_dir,
         os_getuid=_os_getuid,
         ok=_ok,
         info=_info,

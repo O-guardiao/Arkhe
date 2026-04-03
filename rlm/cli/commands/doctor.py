@@ -12,7 +12,6 @@ from urllib import request as urllib_request
 
 from rlm.cli.context import CliContext, doctor_runtime_requirement
 from rlm.cli.json_output import build_cli_json_envelope
-from rlm.cli.launcher_state import build_launcher_state_diagnosis, diagnose_launcher_state_alignment
 
 
 def _doctor_preferred_token(env: Mapping[str, str], *names: str) -> str:
@@ -248,10 +247,14 @@ def _doctor_channel_handshake(
 
 
 def _doctor_launcher_state_status(context: CliContext, *, server_online: bool) -> tuple[str, str]:
+    from rlm.cli.launcher_state import diagnose_launcher_state_alignment
+
     return diagnose_launcher_state_alignment(context, server_online=server_online)
 
 
 def _doctor_launcher_state_json(context: CliContext, *, server_online: bool) -> dict[str, Any]:
+    from rlm.cli.launcher_state import build_launcher_state_diagnosis
+
     return build_launcher_state_diagnosis(context, health_online=server_online)
 
 

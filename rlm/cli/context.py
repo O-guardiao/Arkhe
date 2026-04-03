@@ -7,39 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import MutableMapping
 
-
-def print_error(msg: str) -> None:
-    try:
-        from rich.console import Console
-
-        Console(stderr=True).print(f"[bold red]✗ Erro:[/] {msg}")
-    except ImportError:
-        print(f"✗ Erro: {msg}", file=sys.stderr)
-
-
-def print_success(msg: str) -> None:
-    try:
-        from rich.console import Console
-
-        Console().print(f"[bold green]✓[/] {msg}")
-    except ImportError:
-        print(f"✓ {msg}")
-
-
-def doctor_runtime_requirement() -> tuple[bool, str]:
-    required = (3, 11)
-    current = sys.version_info[:3]
-    if current < required:
-        return False, f"Python {current[0]}.{current[1]}.{current[2]} em uso; requer >= 3.11"
-    return True, f"Python {current[0]}.{current[1]}.{current[2]}"
-
-
-def require_supported_runtime(command_name: str) -> bool:
-    ok, detail = doctor_runtime_requirement()
-    if ok:
-        return True
-    print_error(f"{command_name} bloqueado: {detail}")
-    return False
+# Backward-compat: re-export from new homes so existing "from rlm.cli.context import X" still works
+from rlm.cli.output import print_error, print_success  # noqa: F401
+from rlm.cli.checks import doctor_runtime_requirement, require_supported_runtime  # noqa: F401
 
 
 def _discover_project_root(start: Path) -> Path:
