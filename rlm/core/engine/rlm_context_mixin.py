@@ -99,6 +99,13 @@ class RLMContextMixin:
             if callable(reset_turn_state):
                 reset_turn_state()
             environment.add_context(repl_context)
+
+            # Cross-turn outcome: injeta resumo conciso do turno anterior
+            # para que o LLM tenha visibilidade imediata de erros/resultados
+            # sem precisar mergulhar na variável `history` (grande e opaca).
+            _outcome = getattr(self, "_last_turn_outcome", None)
+            if _outcome and hasattr(environment, "locals"):
+                environment.locals["_last_turn_outcome"] = _outcome
         else:
             env_kwargs = self.environment_kwargs.copy()
             env_kwargs["lm_handler_address"] = (lm_handler.host, lm_handler.port)

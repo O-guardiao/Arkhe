@@ -404,5 +404,10 @@ def build_user_prompt(
             prompt += "\n\nNote: You have 1 prior conversation history available in the `history` variable."
         else:
             prompt += f"\n\nNote: You have {history_count} prior conversation histories available (history_0 through history_{history_count - 1})."
+        prompt += (
+            "\nIMPORTANT: Variable `_last_turn_outcome` contains a concise summary of the previous turn's "
+            "result (errors, status, response preview). ALWAYS check it FIRST when the user asks about "
+            "prior failures, errors, or results — it is far more efficient than inspecting `history` directly."
+        )
 
     return {"role": "user", "content": prompt}

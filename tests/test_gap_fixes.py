@@ -685,3 +685,75 @@ class TestCancelTokenEventBridge:
         assert child_event.is_set(), (
             "Cascata falhou: cancel do avô não chegou ao threading.Event do neto"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Teste: _extract_turn_outcome — visibilidade cross-turn
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestExtractTurnOutcome:
+    """Testa extração de resumo conciso de turnos anteriores."""
+
+    @staticmethod
+    def _get_mixin():
+        from rlm.core.engine.rlm_loop_mixin import RLMLoopMixin
+        return RLMLoopMixin
+
+    def test_empty_history(self):
+        mixin = self._get_mixin()
+        result = mixin._extract_turn_outcome([])
+        assert "LAST TURN OUTCOME" in result
+        assert "no errors detected" in result
+
+    def test_detects_error_in_tool_output(self):
+        mixin = self._get_mixin()
+        history = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Run sub_rlm"},
+            {"role": "assistant", "content": "```repl\nsub_rlm('do X')\n```"},
+            {"role": "tool", "content": "SubRLMDepthError: sub_rlm: profundidade máxima atingida (depth=0, max_depth=1)"},
+        ]
+        result = mixin._extract_turn_outcome(history)
+        assert "ERRORS detected" in result
+        assert "SubRLMDepthError" in result
+
+    def test_detects_traceback(self):
+        mixin = self._get_mixin()
+        history = [
+            {"role": "assistant", "content": "```repl\nx = 1/0\n```"},
+            {"role": "user", "content": "Traceback (most recent call last):\n  File ...\nZeroDivisionError: division by zero"},
+        ]
+        result = mixin._extract_turn_outcome(history)
+        assert "ERRORS detected" in result
+        assert "ZeroDivisionError" in result
+
+    def test_no_errors_clean_turn(self):
+        mixin = self._get_mixin()
+        history = [
+            {"role": "system", "content": "System prompt"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "FINAL(\"Hello, how can I help?\")"},
+        ]
+        result = mixin._extract_turn_outcome(history)
+        assert "no errors detected" in result
+        assert "FINAL" in result  # preview da última resposta assistant
+
+    def test_last_response_preview_truncated(self):
+        mixin = self._get_mixin()
+        long_response = "A" * 500
+        history = [
+            {"role": "assistant", "content": long_response},
+        ]
+        result = mixin._extract_turn_outcome(history)
+        # Preview deve ter no máximo 300 chars
+        assert "AAAA" in result
+        assert len(result) < 500  # truncado, não inteiro
+
+    def test_multiple_errors_capped_at_5(self):
+        mixin = self._get_mixin()
+        history = []
+        for i in range(10):
+            history.append({"role": "user", "content": f"Error line {i}: something failed here"})
+        result = mixin._extract_turn_outcome(history)
+        # Deve ter no máximo 5 bullets de erro
+        assert result.count("•") <= 5

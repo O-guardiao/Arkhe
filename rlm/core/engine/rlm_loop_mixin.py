@@ -47,6 +47,60 @@ class RLMLoopMixin:
     """
 
     # =========================================================================
+    # Cross-turn outcome summary
+    # =========================================================================
+
+    @staticmethod
+    def _extract_turn_outcome(message_history: list[dict[str, Any]]) -> str:
+        """
+        Extrai um resumo conciso do resultado de um turno a partir do
+        message_history completo.  Retorna uma string curta que pode ser
+        injetada no REPL como ``_last_turn_outcome``, permitindo que o LLM
+        no turno seguinte tenha visibilidade imediata sobre erros/resultados
+        sem precisar mergulhar na variável ``history`` (que é grande e opaca).
+        """
+        errors: list[str] = []
+        last_assistant_text = ""
+        code_blocks_count = 0
+
+        for msg in message_history:
+            role = msg.get("role", "")
+            content = msg.get("content", "") or ""
+
+            if role == "assistant":
+                last_assistant_text = content
+                # Conta blocos de código (heurística rápida)
+                code_blocks_count += content.count("```repl")
+
+            # Tool/execution results frequentemente reportam erros
+            if role in ("tool", "system", "user"):
+                lower = content.lower()
+                for marker in ("error", "traceback", "exception", "falha", "failed"):
+                    if marker in lower:
+                        # Extrai linhas relevantes (até 3 linhas com o marker)
+                        for line in content.splitlines():
+                            if marker in line.lower() and len(line) < 500:
+                                errors.append(line.strip())
+                                if len(errors) >= 5:
+                                    break
+                        break
+
+        parts: list[str] = ["=== LAST TURN OUTCOME ==="]
+        if errors:
+            parts.append("ERRORS detected in previous turn:")
+            for err in errors[:5]:
+                parts.append(f"  • {err}")
+        else:
+            parts.append("Status: no errors detected")
+
+        if last_assistant_text:
+            preview = last_assistant_text.strip()[:300]
+            parts.append(f"Last response preview: {preview}")
+
+        parts.append("=== END LAST TURN OUTCOME ===")
+        return "\n".join(parts)
+
+    # =========================================================================
     # Nudge helpers
     # =========================================================================
 
@@ -287,6 +341,7 @@ class RLMLoopMixin:
                     else None
                 )
                 self._last_message_history = list(message_history)
+                self._last_turn_outcome = self._extract_turn_outcome(message_history)
                 return RLMChatCompletion(
                     root_model=self.backend_kwargs.get("model_name", "unknown")
                     if self.backend_kwargs else "unknown",
@@ -350,6 +405,7 @@ class RLMLoopMixin:
             else None
         )
         self._last_message_history = list(message_history)
+        self._last_turn_outcome = self._extract_turn_outcome(message_history)
         return RLMChatCompletion(
             root_model=self.backend_kwargs.get("model_name", "unknown")
             if self.backend_kwargs else "unknown",
