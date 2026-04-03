@@ -247,13 +247,13 @@ def _doctor_channel_handshake(
 
 
 def _doctor_launcher_state_status(context: CliContext, *, server_online: bool) -> tuple[str, str]:
-    from rlm.cli.launcher_state import diagnose_launcher_state_alignment
+    from rlm.cli.state.diagnosis import diagnose_launcher_state_alignment
 
     return diagnose_launcher_state_alignment(context, server_online=server_online)
 
 
 def _doctor_launcher_state_json(context: CliContext, *, server_online: bool) -> dict[str, Any]:
-    from rlm.cli.launcher_state import build_launcher_state_diagnosis
+    from rlm.cli.state.diagnosis import build_launcher_state_diagnosis
 
     return build_launcher_state_diagnosis(context, health_online=server_online)
 

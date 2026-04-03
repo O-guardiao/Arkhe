@@ -423,7 +423,7 @@ class TestDoctorHelpers:
 
         context = CliContext(env={}, cwd=tmp_path, home=tmp_path)
 
-        with patch("rlm.cli.launcher_state.port_accepting_connections", return_value=False):
+        with patch("rlm.cli.state.diagnosis.port_accepting_connections", return_value=False):
             status, detail = _doctor_launcher_state_status(context, server_online=True)
 
         assert status == "⚠"
@@ -432,7 +432,7 @@ class TestDoctorHelpers:
     def test_doctor_launcher_state_warns_when_persisted_running_but_offline(self, tmp_path: Path) -> None:
         from rlm.cli.commands.doctor import _doctor_launcher_state_status
         from rlm.cli.context import CliContext
-        from rlm.cli.launcher_state import mark_bootstrap_success
+        from rlm.cli.state.launcher import mark_bootstrap_success
 
         context = CliContext(env={}, cwd=tmp_path, home=tmp_path)
         mark_bootstrap_success(
@@ -443,7 +443,7 @@ class TestDoctorHelpers:
             ws_enabled=True,
         )
 
-        with patch("rlm.cli.launcher_state.port_accepting_connections", return_value=False):
+        with patch("rlm.cli.state.diagnosis.port_accepting_connections", return_value=False):
             status, detail = _doctor_launcher_state_status(context, server_online=False)
 
         assert status == "⚠"
@@ -457,7 +457,7 @@ class TestDoctorHelpers:
 
         with (
             patch("rlm.cli.commands.doctor._doctor_http_request", side_effect=Exception("offline")),
-            patch("rlm.cli.launcher_state.port_accepting_connections", return_value=False),
+            patch("rlm.cli.state.diagnosis.port_accepting_connections", return_value=False),
         ):
             rc = cmd_doctor(argparse.Namespace(launcher_state_json=True), context=context)
 

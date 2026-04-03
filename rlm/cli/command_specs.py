@@ -63,7 +63,7 @@ def get_command_specs() -> tuple[CommandSpec, ...]:
         CommandSpec(
             name="tui",
             help="Abre o workbench TUI da sessão viva",
-            handler=_lazy("rlm.cli.commands.workbench", "cmd_tui"),
+            handler=_lazy("rlm.cli.commands.tui", "cmd_tui"),
             description="Inicia um painel operacional em terminal sobre a mesma sessão recursiva viva, com árvores de branches, eventos, timeline e controles do operador.",
             epilog="""
 Exemplos:

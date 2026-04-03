@@ -1,0 +1,11 @@
+{
+  "backend": "openai",
+  "backend_kwargs": {
+    "model_name": "gpt-4o-mini"
+  },
+  "environment_type": "local",
+  "depth": 0,
+  "max_depth": 3,
+  "max_iterations": 30,
+  "persistent": true
+}

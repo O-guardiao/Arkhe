@@ -1,29 +1,47 @@
-﻿"""Backward-compat shim -- todo o codigo agora vive em ``rlm.cli.state``."""
+﻿"""Backward-compat shim — DEPRECATED. Use ``rlm.cli.state.*`` diretamente.
 
-# Re-exports para que ``from rlm.cli.launcher_state import X`` continue funcionando.
-from rlm.cli.state.diagnosis import (  # noqa: F401
-    build_launcher_state_diagnosis,
-    diagnose_launcher_state_alignment,
+Este módulo será removido numa próxima versão.
+"""
+
+import warnings as _warnings
+
+_warnings.warn(
+    "rlm.cli.launcher_state está deprecated; importe de rlm.cli.state.* diretamente.",
+    DeprecationWarning,
+    stacklevel=2,
 )
-from rlm.cli.state.launcher import (  # noqa: F401
-    BootstrapRecord,
-    LauncherMetadata,
-    LauncherState,
-    RuntimeArtifacts,
-    load_launcher_state,
-    mark_bootstrap_success,
-    mark_daemon_installed,
-    mark_runtime_status,
-    mark_stopped,
-    mark_update,
-    save_launcher_state,
-    summarize_launcher_state,
-    update_launcher_state,
-)
-from rlm.cli.state.pid import (  # noqa: F401
-    pid_alive as _pid_alive,
-    read_pid_file as _read_pid_file,
-)
-from rlm.cli.service_runtime import (  # noqa: F401
-    port_accepting_connections,
-)
+
+_LAZY: dict[str, str] = {
+    # diagnosis
+    "build_launcher_state_diagnosis": "rlm.cli.state.diagnosis",
+    "diagnose_launcher_state_alignment": "rlm.cli.state.diagnosis",
+    # launcher
+    "BootstrapRecord": "rlm.cli.state.launcher",
+    "LauncherMetadata": "rlm.cli.state.launcher",
+    "LauncherState": "rlm.cli.state.launcher",
+    "RuntimeArtifacts": "rlm.cli.state.launcher",
+    "load_launcher_state": "rlm.cli.state.launcher",
+    "mark_bootstrap_success": "rlm.cli.state.launcher",
+    "mark_daemon_installed": "rlm.cli.state.launcher",
+    "mark_runtime_status": "rlm.cli.state.launcher",
+    "mark_stopped": "rlm.cli.state.launcher",
+    "mark_update": "rlm.cli.state.launcher",
+    "save_launcher_state": "rlm.cli.state.launcher",
+    "summarize_launcher_state": "rlm.cli.state.launcher",
+    "update_launcher_state": "rlm.cli.state.launcher",
+    # pid
+    "pid_alive": "rlm.cli.state.pid",
+    "read_pid_file": "rlm.cli.state.pid",
+    # service_runtime
+    "port_accepting_connections": "rlm.cli.service_runtime",
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY:
+        import importlib
+        mod = importlib.import_module(_LAZY[name])
+        value = getattr(mod, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
