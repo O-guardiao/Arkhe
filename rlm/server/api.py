@@ -48,8 +48,12 @@ from rlm.server.auth_helpers import configured_tokens, require_token
 from rlm.server.ws_server import RLMEventBus, start_ws_server
 from rlm.server.drain import DrainGuard
 from rlm.server.health_monitor import HealthMonitor
-from rlm.plugins.channel_registry import sanitize_text_payload
+from rlm.plugins.channel_registry import ChannelRegistry, sanitize_text_payload
 from rlm.plugins import PluginLoader
+from rlm.core.comms.outbox import OutboxStore
+from rlm.core.comms.routing_policy import RoutingPolicy
+from rlm.core.comms.message_bus import init_message_bus
+from rlm.core.comms.delivery_worker import DeliveryWorker
 from rlm.runtime import build_runtime_guard_from_env
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
@@ -316,6 +320,25 @@ async def lifespan(app: FastAPI):
     app.state.health_monitor.start()
     gateway_log.info("✓ Health Monitor started")
 
+    # MessageBus + DeliveryWorker (multichannel Phase 1)
+    _outbox = OutboxStore(db_path=db_path)
+    _bus = init_message_bus(
+        outbox=_outbox,
+        routing_policy=RoutingPolicy(),
+        event_bus=app.state.event_bus,
+    )
+    app.state.message_bus = _bus
+    app.state.delivery_worker = DeliveryWorker(
+        outbox=_outbox,
+        channel_registry=ChannelRegistry,
+        event_bus=app.state.event_bus,
+    )
+    await app.state.delivery_worker.start()
+    app.state.health_monitor.register(
+        "delivery_worker", app.state.delivery_worker.is_alive,
+    )
+    gateway_log.info("✓ MessageBus + DeliveryWorker started")
+
     # Telegram Gateway (bridge mode) — inicia como thread daemon se token definido
     app.state.telegram_gateway = None
     _tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -353,7 +376,9 @@ async def lifespan(app: FastAPI):
     _drain_timeout = int(os.environ.get("RLM_DRAIN_TIMEOUT", "30"))
     app.state.drain_guard.wait_active(timeout=_drain_timeout)
 
-    # Fase 2: Parar Telegram Gateway, monitoramento e scheduler
+    # Fase 2: Parar DeliveryWorker, Telegram Gateway, monitoramento e scheduler
+    app.state.delivery_worker.stop()
+    gateway_log.info("DeliveryWorker stopped")
     if app.state.telegram_gateway is not None:
         app.state.telegram_gateway.stop()
         gateway_log.info("Telegram Gateway stopped")
