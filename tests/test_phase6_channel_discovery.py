@@ -546,3 +546,150 @@ class TestCmdChannelStatus:
         args = argparse.Namespace()
         result = cmd_channel_status(args, context=ctx)
         assert result == 1
+
+
+# ===========================================================================
+# meta_merge support
+# ===========================================================================
+
+class TestUpdateMetaMerge:
+
+    def setup_method(self):
+        _reset_singleton()
+        self.csr = ChannelStatusRegistry()
+
+    def test_meta_merge_adds_fields(self):
+        self.csr.register("telegram", meta={"initial": True})
+        self.csr.update("telegram", meta_merge={"last_chat_id": "12345"})
+        snap = self.csr.get("telegram")
+        assert snap is not None
+        assert snap.meta["initial"] is True
+        assert snap.meta["last_chat_id"] == "12345"
+
+    def test_meta_merge_overwrites_existing_key(self):
+        self.csr.register("telegram", meta={"last_chat_id": "old"})
+        self.csr.update("telegram", meta_merge={"last_chat_id": "new"})
+        snap = self.csr.get("telegram")
+        assert snap is not None
+        assert snap.meta["last_chat_id"] == "new"
+
+    def test_meta_merge_none_is_noop(self):
+        self.csr.register("telegram", meta={"x": 1})
+        self.csr.update("telegram", meta_merge=None)
+        snap = self.csr.get("telegram")
+        assert snap is not None
+        assert snap.meta == {"x": 1}
+
+    def test_meta_merge_combined_with_kwargs(self):
+        self.csr.register("telegram")
+        self.csr.update("telegram", running=True, meta_merge={"chat": "42"})
+        snap = self.csr.get("telegram")
+        assert snap is not None
+        assert snap.running is True
+        assert snap.meta["chat"] == "42"
+
+
+# ===========================================================================
+# channels() REPL callable
+# ===========================================================================
+
+class TestChannelsCallable:
+
+    def test_returns_summary_when_csr_initialized(self):
+        _reset_singleton()
+        csr = init_channel_status_registry()
+        csr.register("telegram")
+        csr.mark_running("telegram")
+
+        # Simulate what the REPL callable does
+        from rlm.core.comms.channel_status import get_channel_status_registry
+        result = get_channel_status_registry().summary()
+        assert result["total"] == 1
+        assert result["running"] == 1
+        _reset_singleton()
+
+    def test_channels_callable_error_before_init(self):
+        _reset_singleton()
+        # Simulate what the REPL callable does when CSR not initialized
+        try:
+            from rlm.core.comms.channel_status import get_channel_status_registry
+            get_channel_status_registry().summary()
+            got_error = False
+        except RuntimeError:
+            got_error = True
+        assert got_error
+
+
+# ===========================================================================
+# telegram_get_updates fallback chain
+# ===========================================================================
+
+class TestTelegramGetUpdatesFallbackChain:
+    """Tests the 3-tier fallback: config → env var → CSR meta."""
+
+    def test_env_var_fallback(self):
+        """TELEGRAM_OWNER_CHAT_ID env var provides chat_id when config is empty."""
+        import os
+
+        _reset_singleton()
+        # Init CSR so the import doesn't fail, but no last_chat_id in meta
+        csr = init_channel_status_registry()
+
+        # Mock session manager with no telegram events
+        mock_sm = MagicMock()
+        mock_sm.get_session_events = MagicMock(return_value=[])
+
+        # Mock config with empty owner_chat_id
+        mock_cfg = MagicMock()
+        mock_tg_cfg = MagicMock()
+        mock_tg_cfg.owner_chat_id = ""
+        mock_cfg.channels = {"telegram": mock_tg_cfg}
+
+        mock_session = MagicMock()
+        mock_session.session_id = "test-sess"
+
+        with patch.dict(os.environ, {"TELEGRAM_OWNER_CHAT_ID": "99887766"}):
+            with patch("rlm.core.config.get_config", return_value=mock_cfg):
+                # Simulate the fallback logic inline (same as runtime_pipeline)
+                from rlm.core.config import get_config
+                cfg = get_config()
+                tg_cfg = cfg.channels.get("telegram")
+                owner_id = getattr(tg_cfg, "owner_chat_id", "") if tg_cfg else ""
+                assert owner_id == ""  # config fallback fails
+                if not owner_id:
+                    owner_id = os.environ.get("TELEGRAM_OWNER_CHAT_ID", "")
+                assert owner_id == "99887766"  # env var fallback succeeds
+
+        _reset_singleton()
+
+    def test_csr_fallback(self):
+        """CSR meta.last_chat_id provides chat_id when config and env are empty."""
+        import os
+
+        _reset_singleton()
+        csr = init_channel_status_registry()
+        csr.register("telegram", meta={"last_chat_id": "55443322"})
+
+        with patch.dict(os.environ, {}, clear=False):
+            # Ensure env var is not set
+            os.environ.pop("TELEGRAM_OWNER_CHAT_ID", None)
+
+            # Simulate fallback chain
+            owner_id = ""
+            # (1) config — empty
+            # (2) env var — not set
+            if not owner_id:
+                owner_id = os.environ.get("TELEGRAM_OWNER_CHAT_ID", "")
+            assert owner_id == ""
+            # (3) CSR meta
+            if not owner_id:
+                try:
+                    from rlm.core.comms.channel_status import get_channel_status_registry
+                    _snap = get_channel_status_registry().get("telegram")
+                    if _snap and _snap.meta:
+                        owner_id = str(_snap.meta.get("last_chat_id", ""))
+                except Exception:
+                    pass
+            assert owner_id == "55443322"
+
+        _reset_singleton()

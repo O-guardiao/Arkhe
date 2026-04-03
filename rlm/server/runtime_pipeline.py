@@ -277,32 +277,64 @@ def _apply_repl_injections(
             limit=limit,
             chat_id=chat_id,
         )
-        # Fallback: quando sessão não tem eventos Telegram (ex: TUI),
-        # retorna owner_chat_id da config para o agente poder enviar.
+        # Fallback chain quando sessão não tem eventos Telegram (ex: TUI):
+        # 1. owner_chat_id do config (rlm.toml)
+        # 2. TELEGRAM_OWNER_CHAT_ID env var
+        # 3. CSR — último chat_id conhecido via service discovery
         if not results:
+            import os as _os
+            owner_id = ""
+            # (1) config
             try:
                 from rlm.core.config import get_config
                 cfg = get_config()
                 tg_cfg = cfg.channels.get("telegram")
                 owner_id = getattr(tg_cfg, "owner_chat_id", "") if tg_cfg else ""
-                if owner_id:
-                    results = [{
-                        "timestamp": "",
-                        "client_id": f"telegram:{owner_id}",
-                        "chat_id": str(owner_id),
-                        "from_user": "owner",
-                        "text": "",
-                        "payload_size": 0,
-                        "source": "config",
-                    }]
             except Exception:
                 pass
+            # (2) env var
+            if not owner_id:
+                owner_id = _os.environ.get("TELEGRAM_OWNER_CHAT_ID", "")
+            # (3) CSR meta (last_chat_id salvo pelo gateway)
+            if not owner_id:
+                try:
+                    from rlm.core.comms.channel_status import get_channel_status_registry
+                    _csr = get_channel_status_registry()
+                    _snap = _csr.get("telegram")
+                    if _snap and _snap.meta:
+                        owner_id = str(_snap.meta.get("last_chat_id", ""))
+                except Exception:
+                    pass
+            if owner_id:
+                results = [{
+                    "timestamp": "",
+                    "client_id": f"telegram:{owner_id}",
+                    "chat_id": str(owner_id),
+                    "from_user": "owner",
+                    "text": "",
+                    "payload_size": 0,
+                    "source": "discovery",
+                }]
         return results
+
+    def channels() -> dict[str, Any]:
+        """Retorna snapshot de todos canais com identidade e status runtime.
+
+        Returns:
+            dict com total, running, healthy e detalhe por canal.
+        """
+        try:
+            from rlm.core.comms.channel_status import get_channel_status_registry
+            csr = get_channel_status_registry()
+            return csr.summary()
+        except Exception:
+            return {"error": "Channel Status Registry nao inicializado"}
 
     repl_locals["reply"] = reply
     repl_locals["reply_audio"] = reply_audio
     repl_locals["send_media"] = send_media
     repl_locals["telegram_get_updates"] = telegram_get_updates
+    repl_locals["channels"] = channels
     repl_locals["execution_policy"] = execution_policy
 
     # Cross-channel send — Phase 4 multichannel skill

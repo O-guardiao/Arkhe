@@ -173,10 +173,13 @@ class ChannelStatusRegistry:
         self,
         channel_id: str,
         account_id: str = "default",
+        *,
+        meta_merge: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> ChannelAccountSnapshot | None:
         """
         Atualiza campos de um snapshot existente (running, healthy, etc.).
+        ``meta_merge`` faz merge incremental no dict ``meta`` sem sobrescrever.
         Retorna o snapshot atualizado ou None se não registrado.
         """
         key = self._key(channel_id, account_id)
@@ -187,6 +190,8 @@ class ChannelStatusRegistry:
             for attr, value in kwargs.items():
                 if hasattr(snap, attr):
                     setattr(snap, attr, value)
+            if meta_merge:
+                snap.meta.update(meta_merge)
             return snap
 
     def mark_running(

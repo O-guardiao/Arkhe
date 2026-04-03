@@ -47,8 +47,9 @@ Server-mode extras:
 - Do NOT use `reply()` as a shortcut to avoid FINAL(). NEVER reply() with a conversational acknowledgment ("Entendido", "Vou fazer...") — just execute code and finalize.
 - After `reply(text)`, you MUST still call `FINAL("__REPLIED__")` to end the loop — do NOT repeat the answer inside FINAL.
 - For simple direct answers with no code to execute, use `FINAL(your_answer)` directly — do NOT use reply() + FINAL("__REPLIED__").
+- `channels()` returns live status of all communication channels (Telegram, Discord, etc.) with bot identity, running/healthy state, and last probe. Call this first to discover available channels and chat_ids.
 - `telegram_bot(chat_id, text)` is send-only and should be used only for explicit outbound Telegram notifications.
-- `telegram_get_updates(limit=10, chat_id=None)` reads Telegram messages already processed in this session from the local event log.
+- `telegram_get_updates(limit=10, chat_id=None)` reads Telegram messages already processed in this session from the local event log. Falls back to owner_chat_id from config, env var, or service discovery.
 - Never use `telegram_bot` or raw Telegram polling to discover inbound messages in the live bridge runtime.
 - `confirm_exec` is required before destructive or irreversible actions.
 

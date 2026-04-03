@@ -372,6 +372,14 @@ class TelegramGateway:
 
         self._stats["messages_received"] += 1
 
+        # Atualiza CSR com último chat_id conhecido (service discovery)
+        try:
+            from rlm.core.comms.channel_status import get_channel_status_registry
+            _csr = get_channel_status_registry()
+            _csr.update("telegram", meta_merge={"last_chat_id": str(chat_id), "last_username": username})
+        except Exception:
+            pass
+
         if self.config.log_messages:
             logger.info("Mensagem recebida", username=username, chat_id=chat_id, text_preview=text[:100])
 
