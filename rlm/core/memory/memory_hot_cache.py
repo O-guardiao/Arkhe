@@ -141,7 +141,10 @@ class MemorySessionCache:
                 f"{len(new_chunks)} chunks"
             )
         except Exception as exc:
-            _log.warn(f"MemorySessionCache._run_update falhou (suprimido): {exc}")
+            try:
+                _log.warn(f"MemorySessionCache._run_update falhou (suprimido): {exc}")
+            except Exception:
+                pass  # stderr pode estar fechado durante shutdown do pytest/interpretador
 
     def invalidate(self) -> None:
         """

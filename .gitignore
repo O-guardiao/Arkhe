@@ -229,3 +229,5 @@ test_cli_output.txt
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+*.bak
+*.new

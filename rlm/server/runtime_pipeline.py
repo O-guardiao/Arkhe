@@ -284,6 +284,50 @@ def _apply_repl_injections(
     repl_locals["telegram_get_updates"] = telegram_get_updates
     repl_locals["execution_policy"] = execution_policy
 
+    # Cross-channel send — Phase 4 multichannel skill
+    def cross_channel_send(target_client_id: str, message: str) -> str:
+        """Envia mensagem para outro canal/destino via MessageBus.
+
+        Args:
+            target_client_id: Formato "canal:id" (ex: "telegram:12345").
+            message: Texto ou JSON a enviar.
+
+        Returns:
+            "ok" se enfileirado, "error: <motivo>" caso contrário.
+        """
+        if ":" not in target_client_id:
+            return f"error: formato inválido '{target_client_id}', esperado 'canal:id'"
+        try:
+            from rlm.core.comms.message_bus import get_message_bus
+            from rlm.core.comms.envelope import Direction, Envelope, MessageType
+
+            bus = get_message_bus()
+            ch, tid = target_client_id.split(":", 1)
+            envelope = Envelope(
+                source_channel=_originating_channel.split(":")[0] if ":" in _originating_channel else "rlm",
+                source_id="agent",
+                source_client_id=_originating_channel,
+                target_channel=ch,
+                target_id=tid,
+                target_client_id=target_client_id,
+                direction=Direction.OUTBOUND,
+                message_type=MessageType.TEXT,
+                text=sanitize_text_payload(message),
+            )
+            bus.enqueue_outbound(envelope, session_id=getattr(session, "session_id", None))
+            return "ok"
+        except RuntimeError:
+            # Bus não inicializado — fallback direto via ChannelRegistry
+            try:
+                delivered = ChannelRegistry.reply(target_client_id, sanitize_text_payload(message))
+                return "ok (direct)" if delivered else "error: adapter not found or delivery failed"
+            except Exception as exc:
+                return f"error: {exc}"
+        except Exception as exc:
+            return f"error: {exc}"
+
+    repl_locals["cross_channel_send"] = cross_channel_send
+
     # Session memory tools — expose conversational long-term memory to the REPL
     _rlm_session = getattr(session, "rlm_instance", None)
     if _rlm_session is not None and not already_injected:

@@ -285,7 +285,7 @@ class RLMLogger:
         with self._lock:
             try:
                 print(line, file=self._output, flush=True)
-            except (BrokenPipeError, OSError):
+            except (BrokenPipeError, OSError, ValueError):
                 pass
 
             if self._file_handle:

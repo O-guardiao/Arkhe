@@ -322,6 +322,42 @@ def create_webhook_router(
 
         sm.update_session(session)
 
+        # ── MessageBus routing (Phase 3 multichannel) ─────────────────
+        # Mesmo padrão de /webhook em api.py: normaliza inbound, registra
+        # no bus e roteia resposta via Outbox → DeliveryWorker.
+        use_bus = getattr(request.app.state, "use_message_bus", False)
+        if use_bus:
+            try:
+                bus = request.app.state.message_bus
+                from rlm.server.message_envelope import InboundMessage
+
+                prefix = client_id.split(":", 1)[0] if ":" in client_id else "webhook"
+                inbound_msg = InboundMessage(
+                    channel=body.channel or prefix,
+                    client_id=client_id,
+                    text=text,
+                    from_user="",
+                    content_type="text",
+                    channel_meta=body.metadata or {},
+                )
+                inbound_envelope = bus.ingest(inbound_msg)
+
+                response_text = result.response if hasattr(result, "response") else ""
+                was_replied = getattr(session, "__reply_delivered__", False)
+
+                if response_text and not was_replied:
+                    bus.route_response(
+                        inbound_envelope,
+                        response_text,
+                        session,
+                        session_id=session.session_id,
+                    )
+            except Exception as exc:
+                # Bus failure NUNCA bloqueia o fluxo principal.
+                hook_log.error(
+                    f"[webhook] MessageBus routing failed (non-fatal): {exc}",
+                )
+
         return JSONResponse({
             "status": result.status,
             "session_id": session.session_id,

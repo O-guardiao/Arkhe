@@ -140,6 +140,12 @@ async def lifespan(app: FastAPI):
     app.state.event_bus = RLMEventBus()
     app.state.ws_thread = None
 
+    # ── Phase 0: Load structured config (rlm.toml + env overlay) ─────────
+    from rlm.core.config import load_config as _load_config
+    _cfg = _load_config()
+    app.state.config = _cfg
+    gateway_log.info(f"Config loaded: {len(_cfg.profiles)} profiles, bus_enabled={_cfg.message_bus.enabled}")
+
     # Phase 9.4 (CiberSeg): Validate critical env vars before anything else
     if not os.environ.get("RLM_HOOK_TOKEN"):
         gateway_log.warn(
@@ -341,8 +347,11 @@ async def lifespan(app: FastAPI):
     gateway_log.info("✓ MessageBus + DeliveryWorker started")
 
     # Feature flag: MessageBus routing (Phase 3 multichannel)
-    # Default false — ativa roteamento de respostas via Outbox + DeliveryWorker
-    _use_bus = os.environ.get("RLM_USE_MESSAGE_BUS", "false").lower() == "true"
+    # Respeita env var OU config rlm.toml [message_bus].enabled
+    _use_bus = (
+        os.environ.get("RLM_USE_MESSAGE_BUS", "").lower() in ("true", "1", "yes")
+        or getattr(_cfg, "message_bus", None) is not None and _cfg.message_bus.enabled
+    )
     app.state.use_message_bus = _use_bus
     if _use_bus:
         gateway_log.info("✓ MessageBus routing ENABLED (RLM_USE_MESSAGE_BUS=true)")

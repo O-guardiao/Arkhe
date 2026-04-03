@@ -1,0 +1,118 @@
+# rlm.toml — Configuração estruturada do RLM-Main
+# NÃO colocar secrets aqui. Secrets ficam no .env
+# Este arquivo PODE ser commitado no repositório.
+
+# ─────────────────────────────────────────────────────────────────
+# Servidor
+# ─────────────────────────────────────────────────────────────────
+[server]
+host       = "0.0.0.0"
+port       = 8000
+db_path    = "rlm_sessions.db"
+state_root = "./rlm_states"
+skills_dir = "./rlm/skills"
+
+# ─────────────────────────────────────────────────────────────────
+# Agente — defaults globais (aplicados a todos os perfis)
+# ─────────────────────────────────────────────────────────────────
+[agent]
+model          = "gpt-4o-mini"
+max_iterations = 30
+timeout        = 120
+max_errors     = 5
+
+# ─────────────────────────────────────────────────────────────────
+# Aprovação de execução (gate de segurança)
+# ─────────────────────────────────────────────────────────────────
+[exec_approval]
+required = false
+timeout  = 60
+
+# ─────────────────────────────────────────────────────────────────
+# MessageBus multichannel
+# ─────────────────────────────────────────────────────────────────
+[message_bus]
+enabled = false                    # ativar com RLM_USE_MESSAGE_BUS=true ou aqui
+
+# ─────────────────────────────────────────────────────────────────
+# Perfis de cliente
+# Cada [[profiles]] define um tipo de cliente e suas características.
+# Dispositivos no banco `clients` referenciam um perfil por nome.
+# ─────────────────────────────────────────────────────────────────
+
+[[profiles]]
+name           = "default"
+description    = "Perfil padrão — configurações base"
+model          = "gpt-4o-mini"
+max_iterations = 30
+timeout        = 120
+permissions    = [
+    "code_exec", "file_read", "file_write",
+    "search", "memory_read", "memory_write"
+]
+response_style = "detailed"
+
+[[profiles]]
+name           = "desktop"
+description    = "PC de trabalho — acesso completo"
+model          = "gpt-4o"
+max_iterations = 50
+context_hint   = "Ambiente de trabalho profissional. Respostas detalhadas e técnicas são preferidas."
+permissions    = [
+    "code_exec", "file_read", "file_write",
+    "search", "email", "calendar",
+    "memory_read", "memory_write"
+]
+response_style = "detailed"
+
+[[profiles]]
+name           = "iot"
+description    = "Dispositivos ESP32 e embarcados"
+model          = "gpt-4o-mini"
+max_iterations = 10
+timeout        = 30
+context_hint   = "Dispositivo IoT embarcado. Responda SEMPRE em JSON válido. Sem markdown, sem texto livre."
+permissions    = ["sensor_read", "gpio_control", "mqtt_publish"]
+response_style = "structured_json"
+max_response_tokens = 200
+
+[[profiles]]
+name           = "mobile"
+description    = "Celular — uso pessoal móvel"
+model          = "gpt-4o-mini"
+max_iterations = 20
+context_hint   = "Uso móvel. Respostas concisas. Sem blocos de código longos."
+permissions    = ["search", "reminder", "memory_read", "memory_write"]
+response_style = "concise"
+
+[[profiles]]
+name           = "vehicle"
+description    = "Sistema embarcado de carro — mãos livres"
+model          = "gpt-4o-mini"
+max_iterations = 5
+timeout        = 15
+context_hint   = "Usuário dirigindo. Respostas em 1-2 frases. Nunca liste itens. Nunca peça confirmação."
+permissions    = ["navigation", "search"]
+response_style = "minimal"
+exec_approval_required = true
+
+# ─────────────────────────────────────────────────────────────────
+# Canais (habilitados quando ENV vars correspondentes existem)
+# ─────────────────────────────────────────────────────────────────
+[channels]
+
+[channels.telegram]
+disabled = false
+
+[channels.discord]
+disabled = false
+
+[channels.whatsapp]
+disabled = false
+
+[channels.slack]
+disabled = false
+
+[channels.webchat]
+disabled = false
+cors_origins = ["*"]
