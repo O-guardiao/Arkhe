@@ -20,6 +20,7 @@ import json
 import time
 from http.client import HTTPResponse
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -702,11 +703,13 @@ class TestTelegramGetUpdatesFallbackChain:
 class TestChannelsSkillDiscoverability:
     """Verifica que o SKILL.md para channels() é carregado pelo skill_loader."""
 
+    _SKILLS_DIR = Path(__file__).resolve().parent.parent / "rlm" / "skills"
+
     def test_skill_loader_finds_channels(self):
         from rlm.core.skillkit.skill_loader import SkillLoader
 
         loader = SkillLoader()
-        skills = loader.load_from_dir("rlm/skills")
+        skills = loader.load_from_dir(self._SKILLS_DIR)
         names = [s.name for s in skills]
         assert "channels" in names, f"'channels' não encontrado em skill_list: {names}"
 
@@ -714,7 +717,7 @@ class TestChannelsSkillDiscoverability:
         from rlm.core.skillkit.skill_loader import SkillLoader
 
         loader = SkillLoader()
-        skills = loader.load_from_dir("rlm/skills")
+        skills = loader.load_from_dir(self._SKILLS_DIR)
         channels_skill = next((s for s in skills if s.name == "channels"), None)
         assert channels_skill is not None
         assert "snapshot" in channels_skill.description.lower()
@@ -725,7 +728,7 @@ class TestChannelsSkillDiscoverability:
         from rlm.core.skillkit.skill_loader import SkillLoader
 
         loader = SkillLoader()
-        skills = loader.load_from_dir("rlm/skills")
+        skills = loader.load_from_dir(self._SKILLS_DIR)
         channels_skill = next((s for s in skills if s.name == "channels"), None)
         assert channels_skill is not None
         # SIF não deve compilar callable — hard-injection é a fonte
@@ -736,7 +739,7 @@ class TestChannelsSkillDiscoverability:
         from rlm.core.skillkit.skill_loader import SkillLoader
 
         loader = SkillLoader()
-        skills = loader.load_from_dir("rlm/skills")
+        skills = loader.load_from_dir(self._SKILLS_DIR)
         channels_skill = next((s for s in skills if s.name == "channels"), None)
         assert channels_skill is not None
         sif = channels_skill.sif_entry
