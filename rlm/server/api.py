@@ -54,6 +54,12 @@ from rlm.core.comms.outbox import OutboxStore
 from rlm.core.comms.routing_policy import RoutingPolicy
 from rlm.core.comms.message_bus import init_message_bus, get_message_bus
 from rlm.core.comms.delivery_worker import DeliveryWorker
+from rlm.core.comms.channel_status import (
+    ChannelStatusRegistry,
+    init_channel_status_registry,
+    get_channel_status_registry,
+)
+from rlm.core.comms.channel_probe import TelegramProber, DiscordProber, NullProber
 from rlm.server.message_envelope import InboundMessage
 from rlm.runtime import build_runtime_guard_from_env
 from rlm.server.event_router import EventRouter
@@ -327,6 +333,10 @@ async def lifespan(app: FastAPI):
     app.state.health_monitor.start()
     gateway_log.info("✓ Health Monitor started")
 
+    # ── Channel Status Registry (Service Discovery — Camada 4) ────────
+    _csr = init_channel_status_registry()
+    app.state.channel_status_registry = _csr
+
     # MessageBus + DeliveryWorker (multichannel Phase 1)
     _outbox = OutboxStore(db_path=db_path)
     _bus = init_message_bus(
@@ -388,11 +398,67 @@ async def lifespan(app: FastAPI):
             _tg_gw = TelegramGateway(config=_tg_config)
             _tg_gw.run_in_thread()
             app.state.telegram_gateway = _tg_gw
+
+            # Service Discovery: probe Telegram → captura identidade do bot
+            _tg_prober = TelegramProber(token=_tg_token)
+            _csr.register(
+                "telegram",
+                prober=_tg_prober,
+                configured=True,
+                meta={"api_base_url": _tg_api_url},
+            )
+            _csr.mark_running("telegram")
             gateway_log.info(f"✓ Telegram Gateway started (bridge → {_tg_api_url})")
         except Exception as e:
             gateway_log.error(f"Telegram Gateway failed to start: {e}")
+            _csr.register("telegram", configured=True, enabled=True)
+            _csr.mark_error("telegram", error=str(e))
     else:
         gateway_log.info("• Telegram Gateway: disabled (TELEGRAM_BOT_TOKEN not set)")
+        _csr.register("telegram", configured=False, enabled=False)
+
+    # Service Discovery: Discord
+    _discord_token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+    _discord_configured = bool(
+        os.environ.get("DISCORD_APP_PUBLIC_KEY")
+        or os.environ.get("RLM_DISCORD_SKIP_VERIFY", "").lower() == "true"
+    )
+    if _discord_configured and _HAS_DISCORD_GW:
+        _d_prober = DiscordProber(bot_token=_discord_token) if _discord_token else NullProber("discord")
+        _csr.register("discord", prober=_d_prober, configured=True)
+        _csr.mark_running("discord")
+    else:
+        _csr.register("discord", configured=_discord_configured, enabled=_discord_configured)
+
+    # Service Discovery: WhatsApp (webhook-only — sem probe ativo)
+    _wa_configured = bool(os.environ.get("WHATSAPP_VERIFY_TOKEN"))
+    if _wa_configured and _HAS_WHATSAPP_GW:
+        _csr.register("whatsapp", prober=NullProber("whatsapp"), configured=True)
+        _csr.mark_running("whatsapp")
+    else:
+        _csr.register("whatsapp", configured=_wa_configured, enabled=_wa_configured)
+
+    # Service Discovery: Slack (webhook-only — sem probe ativo)
+    _slack_configured = bool(
+        os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("SLACK_SIGNING_SECRET")
+    )
+    if _slack_configured and _HAS_SLACK_GW:
+        _csr.register("slack", prober=NullProber("slack"), configured=True)
+        _csr.mark_running("slack")
+    else:
+        _csr.register("slack", configured=_slack_configured, enabled=_slack_configured)
+
+    # Service Discovery: WebChat
+    if _HAS_WEBCHAT:
+        _csr.register("webchat", prober=NullProber("webchat"), configured=True)
+        _csr.mark_running("webchat")
+    else:
+        _csr.register("webchat", configured=False, enabled=False)
+
+    gateway_log.info(
+        f"✓ ChannelStatusRegistry: {_csr.summary()['total']} channels "
+        f"({_csr.summary()['running']} running, {_csr.summary()['healthy']} healthy)"
+    )
 
     gateway_log.info("Ready to receive events.")
 
@@ -1012,6 +1078,52 @@ async def get_exec_record(request_id: str, request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Channel Discovery (Camada 4 — Service Discovery)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/channels/status")
+async def channels_status(request: Request):
+    """
+    Retorna snapshot completo de todos os canais registrados.
+
+    Inclui: identidade do bot, status running/healthy, resultado do último probe,
+    metadata de configuração. Equivale a OpenClaw ChannelManager.getRuntimeSnapshot().
+    """
+    _require_admin_api_auth(request)
+    csr: ChannelStatusRegistry = request.app.state.channel_status_registry
+    return csr.summary()
+
+
+@app.post("/api/channels/{channel_id}/probe")
+async def channels_probe(channel_id: str, request: Request):
+    """
+    Executa probe sob demanda para um canal específico.
+
+    Útil para diagnosticar conectividade após atualização de VPS ou mudança de rede.
+    """
+    _require_admin_api_auth(request)
+    csr: ChannelStatusRegistry = request.app.state.channel_status_registry
+    snap = csr.get(channel_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail=f"Channel '{channel_id}' not registered")
+    result = csr.probe(channel_id)
+    return {
+        "channel_id": channel_id,
+        "probe": {
+            "ok": result.ok,
+            "elapsed_ms": round(result.elapsed_ms, 1),
+            "error": result.error,
+            "identity": {
+                "bot_id": result.identity.bot_id,
+                "username": result.identity.username,
+                "display_name": result.identity.display_name,
+            } if result.identity else None,
+        },
+        "snapshot": csr.get(channel_id).to_dict() if csr.get(channel_id) else None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 
@@ -1029,6 +1141,10 @@ async def health_check(request: Request):
 
     health_report = monitor.get_health_report()
 
+    # Channel discovery summary
+    csr: ChannelStatusRegistry = request.app.state.channel_status_registry
+    _ch_summary = csr.summary()
+
     return {
         "status": health_report["status"],
         "engine": "RLM Automation Gateway v2.0",
@@ -1039,6 +1155,7 @@ async def health_check(request: Request):
         "model": os.environ.get("RLM_MODEL", "gpt-4o-mini"),
         "draining": request.app.state.drain_guard.is_draining,
         "components": health_report["components"],
+        "channels": _ch_summary,
     }
 
 

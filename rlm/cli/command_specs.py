@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from rlm.cli.commands.channel import cmd_channel_list
+from rlm.cli.commands.channel import cmd_channel_list, cmd_channel_status, cmd_channel_probe
 from rlm.cli.commands.client import cmd_client_add, cmd_client_list, cmd_client_revoke, cmd_client_status
 from rlm.cli.commands.doctor import cmd_doctor
 from rlm.cli.commands.peer import cmd_peer_add
@@ -230,6 +230,15 @@ Recuperação:
             metavar="<ação>",
             subcommands=(
                 CommandSpec(name="list", help="Lista canais disponíveis e seu estado", handler=cmd_channel_list, aliases=("ls",)),
+                CommandSpec(name="status", help="Mostra status runtime dos canais via API", handler=cmd_channel_status),
+                CommandSpec(
+                    name="probe",
+                    help="Executa probe sob demanda para um canal",
+                    handler=cmd_channel_probe,
+                    arguments=(
+                        ArgumentSpec(flags=("channel_id",), kwargs={"help": "ID do canal (telegram, discord, whatsapp, slack, webchat)"}),
+                    ),
+                ),
             ),
         ),
         CommandSpec(
