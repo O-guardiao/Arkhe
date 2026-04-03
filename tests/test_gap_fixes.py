@@ -529,3 +529,159 @@ class TestCrossGapIntegration:
         _par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=FakeRLM)
         with pytest.raises(SubRLMDepthError):
             _par(["task1", "task2"], timeout_s=5.0)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Bridge bidirecional: CancellationToken ↔ threading.Event
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestCancelTokenEventBridge:
+    """Verifica que CancellationToken e threading.Event são sincronizados."""
+
+    def test_serial_token_cancel_sets_event(self):
+        """Cancelar token do pai deve setar _cancel_event no filho serial."""
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
+
+        parent_cts = CancellationTokenSource()
+        parent = _make_mock_parent(cancel_token=parent_cts.token)
+
+        created_children = []
+        _orig_fake = FakeRLM.__init__
+
+        def _tracking_init(self_inner, **kwargs):
+            _orig_fake(self_inner, **kwargs)
+            created_children.append(self_inner)
+
+        with patch.object(FakeRLM, "__init__", _tracking_init):
+            fn = make_sub_rlm_fn(parent, _rlm_cls=FakeRLM)
+            # Passa _cancel_event explícito para a chamada serial
+            cancel_evt = threading.Event()
+            fn("test", timeout_s=5.0, _cancel_event=cancel_evt)
+
+        child = created_children[0]
+        assert not cancel_evt.is_set()
+        # Bridge: token cancelado → event sinalizado
+        parent_cts.cancel("bridge test")
+        assert child._cancel_token.is_cancelled
+        assert cancel_evt.is_set(), (
+            "Bridge falhou: token cancelado mas threading.Event não foi sinalizado"
+        )
+
+    def test_async_token_cancel_sets_event(self):
+        """Cancelar token do pai deve setar cancel_event no filho async."""
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
+
+        parent_cts = CancellationTokenSource()
+        parent = _make_mock_parent(cancel_token=parent_cts.token)
+
+        fn = make_sub_rlm_async_fn(parent, _rlm_cls=FakeRLM)
+        handle = fn("async task", timeout_s=5.0)
+        handle.result(timeout_s=5.0)
+
+        # O handle tem o cancel_event interno
+        assert not handle._cancel_event.is_set()
+        # Bridge: token cancelado → event sinalizado
+        parent_cts.cancel("async bridge test")
+        assert handle._cancel_event.is_set(), (
+            "Bridge falhou: token cancelado mas AsyncHandle._cancel_event não sinalizado"
+        )
+
+    def test_async_handle_cancel_sets_token(self):
+        """AsyncHandle.cancel() deve cancelar tanto event quanto token."""
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
+
+        parent_cts = CancellationTokenSource()
+        parent = _make_mock_parent(cancel_token=parent_cts.token)
+
+        created_children = []
+        _orig_fake = FakeRLM.__init__
+
+        def _tracking_init(self_inner, **kwargs):
+            _orig_fake(self_inner, **kwargs)
+            created_children.append(self_inner)
+
+        with patch.object(FakeRLM, "__init__", _tracking_init):
+            fn = make_sub_rlm_async_fn(parent, _rlm_cls=FakeRLM)
+            handle = fn("task", timeout_s=5.0)
+            handle.result(timeout_s=5.0)
+
+        child = created_children[0]
+        assert not child._cancel_token.is_cancelled
+        assert not handle._cancel_event.is_set()
+
+        # Bridge reverso: handle.cancel() → event + token
+        handle.cancel()
+        assert handle._cancel_event.is_set()
+        assert child._cancel_token.is_cancelled, (
+            "Bridge reverso falhou: handle.cancel() não cancelou o CancellationToken"
+        )
+
+    def test_async_handle_cancel_without_token_no_crash(self):
+        """AsyncHandle.cancel() deve funcionar mesmo sem CancellationToken."""
+        from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
+        from rlm.core.lifecycle.cancellation import CancellationToken
+
+        parent = _make_mock_parent(cancel_token=CancellationToken.NONE)
+        fn = make_sub_rlm_async_fn(parent, _rlm_cls=FakeRLM)
+        handle = fn("task", timeout_s=5.0)
+        handle.result(timeout_s=5.0)
+        # Deve funcionar sem crash mesmo sem token source
+        handle.cancel()
+        assert handle._cancel_event.is_set()
+
+    def test_parallel_token_cancel_sets_branch_events(self):
+        """Cancelar token do pai deve setar cancel_events dos filhos paralelos."""
+        from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
+
+        parent_cts = CancellationTokenSource()
+        parent = _make_mock_parent(cancel_token=parent_cts.token)
+
+        created_children = []
+        _orig_fake = FakeRLM.__init__
+
+        def _tracking_init(self_inner, **kwargs):
+            _orig_fake(self_inner, **kwargs)
+            created_children.append(self_inner)
+
+        with patch.object(FakeRLM, "__init__", _tracking_init):
+            _par, _ = make_sub_rlm_parallel_fn(parent, _rlm_cls=FakeRLM)
+            results = _par(["task1", "task2"], timeout_s=10.0, max_iterations=3)
+
+        # Todos os filhos devem ter tokens derivados do pai
+        assert len(created_children) == 2
+        for child in created_children:
+            assert child._cancel_token is not None
+            assert not child._cancel_token.is_cancelled
+
+        # Cancelar pai → todos os filhos cancelados via token hierarchy
+        parent_cts.cancel("parallel bridge test")
+        for child in created_children:
+            assert child._cancel_token.is_cancelled
+
+    def test_grandchild_cascade_via_bridge(self):
+        """Cancelar avô deve propagar token→event em toda a cadeia."""
+        from rlm.core.lifecycle.cancellation import CancellationTokenSource
+
+        # Simula: avô → pai → neto, todos bridged
+        grandparent_cts = CancellationTokenSource()
+        parent_cts = CancellationTokenSource(parent=grandparent_cts.token)
+        child_cts = CancellationTokenSource(parent=parent_cts.token)
+
+        # Bridge: child token → child event
+        child_event = threading.Event()
+        child_cts.token.on_cancelled(lambda: child_event.set())
+
+        assert not child_event.is_set()
+        assert not child_cts.token.is_cancelled
+
+        # Cancelar avô → cascata até neto
+        grandparent_cts.cancel("top-level abort")
+        assert parent_cts.token.is_cancelled
+        assert child_cts.token.is_cancelled
+        assert child_event.is_set(), (
+            "Cascata falhou: cancel do avô não chegou ao threading.Event do neto"
+        )

@@ -724,6 +724,9 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
             from rlm.core.lifecycle.cancellation import CancellationTokenSource
             _child_cts = CancellationTokenSource(parent=_parent_token)
             child._cancel_token = _child_cts.token
+            # Bridge: token cancelado → threading.Event sinalizado no REPL
+            if _cancel_event is not None:
+                _child_cts.token.on_cancelled(lambda evt=_cancel_event: evt.set())
 
         # ── Execute com timeout ───────────────────────────────────────────────
         result_holder: list[Any] = []
@@ -927,6 +930,7 @@ class AsyncHandle:
         bus: "Any | None" = None,
         branch_id: "int | None" = None,
         cancel_event: "threading.Event | None" = None,
+        cancel_token_source: "Any | None" = None,
     ) -> None:
         self.task = task
         self.depth = depth
@@ -940,6 +944,8 @@ class AsyncHandle:
         self._cancel_event: threading.Event = (
             cancel_event if cancel_event is not None else threading.Event()
         )
+        #: CancellationTokenSource do filho — bridge bidirecional
+        self._cancel_token_source = cancel_token_source
         #: SiblingBus compartilhado — acesso Python-native ao barramento P2P
         self.bus = bus
         #: ID único deste filho na rede de filhos async do pai
@@ -1008,7 +1014,8 @@ class AsyncHandle:
 
     def cancel(self) -> None:
         """
-        Sinaliza cancelamento ao filho via ``threading.Event``.
+        Sinaliza cancelamento ao filho via ``threading.Event`` e
+        ``CancellationToken`` (bridge bidirecional).
 
         O filho verifica chamando ``check_cancel()`` no seu REPL — retorna
         ``True`` quando cancelado. O LLM filho deve verificar periodicamente
@@ -1023,6 +1030,10 @@ class AsyncHandle:
         """
         self._cancelled = True
         self._cancel_event.set()
+        # Bridge reverso: event → token — garante que netos via hierarquia
+        # de CancellationToken também recebam o sinal
+        if self._cancel_token_source is not None:
+            self._cancel_token_source.cancel(reason="AsyncHandle.cancel()")
 
     def __repr__(self) -> str:
         bid = f" branch={self.branch_id}" if self.branch_id is not None else ""
@@ -1195,11 +1206,14 @@ def make_sub_rlm_async_fn(
         )
 
         # Lacuna 2: Propagar CancelToken do pai para filho async
+        _child_cts: CancellationTokenSource | None = None
         _parent_token = getattr(parent, "_cancel_token", None)
         if _parent_token is not None and hasattr(_parent_token, "is_cancelled"):
             from rlm.core.lifecycle.cancellation import CancellationTokenSource
             _child_cts = CancellationTokenSource(parent=_parent_token)
             child._cancel_token = _child_cts.token
+            # Bridge: token cancelado → threading.Event sinalizado no REPL
+            _child_cts.token.on_cancelled(lambda: cancel_event.set())
 
         result_holder: list[Any] = []
         error_holder: list[BaseException] = []
@@ -1271,6 +1285,7 @@ def make_sub_rlm_async_fn(
             bus=_bus,
             branch_id=branch_id,
             cancel_event=cancel_event,
+            cancel_token_source=_child_cts,
         )
 
     sub_rlm_async.__name__ = "sub_rlm_async"
