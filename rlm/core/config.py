@@ -72,6 +72,7 @@ class ProfileConfig:
 class ChannelConfig:
     disabled: bool = False
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    owner_chat_id: str = ""
 
 
 @dataclass

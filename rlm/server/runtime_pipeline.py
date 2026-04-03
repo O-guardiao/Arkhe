@@ -271,12 +271,33 @@ def _apply_repl_injections(
         return ChannelRegistry.send_media(_originating_channel, media_url_or_path, sanitize_text_payload(caption))
 
     def telegram_get_updates(limit: int = 10, chat_id: str | int | None = None) -> list[dict[str, Any]]:
-        return _collect_processed_telegram_updates(
+        results = _collect_processed_telegram_updates(
             services.session_manager,
             getattr(session, "session_id", ""),
             limit=limit,
             chat_id=chat_id,
         )
+        # Fallback: quando sessão não tem eventos Telegram (ex: TUI),
+        # retorna owner_chat_id da config para o agente poder enviar.
+        if not results:
+            try:
+                from rlm.core.config import get_config
+                cfg = get_config()
+                tg_cfg = cfg.channels.get("telegram")
+                owner_id = getattr(tg_cfg, "owner_chat_id", "") if tg_cfg else ""
+                if owner_id:
+                    results = [{
+                        "timestamp": "",
+                        "client_id": f"telegram:{owner_id}",
+                        "chat_id": str(owner_id),
+                        "from_user": "owner",
+                        "text": "",
+                        "payload_size": 0,
+                        "source": "config",
+                    }]
+            except Exception:
+                pass
+        return results
 
     repl_locals["reply"] = reply
     repl_locals["reply_audio"] = reply_audio

@@ -103,6 +103,9 @@ exec_approval_required = true
 
 [channels.telegram]
 disabled = false
+# Seu chat_id pessoal no Telegram (descubra com @userinfobot).
+# Permite que o agente envie mensagens para você de qualquer sessão.
+owner_chat_id = ""
 
 [channels.discord]
 disabled = false
