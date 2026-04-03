@@ -850,6 +850,9 @@ def _collect_config(
     # ─────────────────────────────────── Servidor (QuickStart usa defaults)
     config.update(_step_server_config(p, existing, flow))
 
+    # ─────────────────────────────────── Canais de comunicação (bot tokens)
+    config.update(_step_channels(p, existing, flow))
+
     # ─────────────────────────────────── Tokens de segurança
     config.update(_step_security_tokens(p, existing, flow))
 
@@ -1045,6 +1048,213 @@ def _step_server_config(
         default=defaults["RLM_WS_PORT"],
         validate=_validate_port,
     )
+
+    return config
+
+
+# ═══════════════════════════════════════════════════════════════════════════ #
+# _step_channels — coleta tokens de bots/canais                             #
+# ═══════════════════════════════════════════════════════════════════════════ #
+
+# Especificação de cada canal: (env_var, label, é_obrigatório, hint_setup)
+_CHANNEL_SPECS: list[dict[str, Any]] = [
+    {
+        "name": "Telegram",
+        "id": "telegram",
+        "vars": [
+            ("TELEGRAM_BOT_TOKEN", "Bot Token (do @BotFather)", True),
+            ("TELEGRAM_OWNER_CHAT_ID", "Chat ID do dono (para notificações)", False),
+        ],
+        "hint": "Converse com @BotFather → /newbot → copie o token",
+        "test_fn": "_test_telegram_token",
+    },
+    {
+        "name": "Discord",
+        "id": "discord",
+        "vars": [
+            ("DISCORD_BOT_TOKEN", "Bot Token", False),
+            ("DISCORD_APP_PUBLIC_KEY", "Public Key (Ed25519)", True),
+            ("DISCORD_APP_ID", "Application ID", True),
+        ],
+        "hint": "Discord Developer Portal → Applications → Bot → Token",
+        "test_fn": "_test_discord_token",
+    },
+    {
+        "name": "WhatsApp",
+        "id": "whatsapp",
+        "vars": [
+            ("WHATSAPP_TOKEN", "Access Token (Meta Cloud API)", True),
+            ("WHATSAPP_PHONE_ID", "Phone Number ID", True),
+            ("WHATSAPP_VERIFY_TOKEN", "Webhook Verify Token (defina você)", True),
+        ],
+        "hint": "Meta for Developers → Your App → WhatsApp → Configuration",
+        "test_fn": None,
+    },
+    {
+        "name": "Slack",
+        "id": "slack",
+        "vars": [
+            ("SLACK_BOT_TOKEN", "Bot User OAuth Token (xoxb-…)", True),
+            ("SLACK_SIGNING_SECRET", "Signing Secret", True),
+        ],
+        "hint": "Slack API → Your App → OAuth & Permissions + Basic Information",
+        "test_fn": None,
+    },
+]
+
+
+def _test_telegram_token(token: str) -> tuple[bool, str]:
+    """Testa token do Telegram via /getMe. Retorna (ok, mensagem)."""
+    import json as _json
+    from urllib import error as _urlerr
+    from urllib import request as _urlreq
+
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    req = _urlreq.Request(url, method="GET")
+    try:
+        with _urlreq.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+            if data.get("ok"):
+                bot = data.get("result", {})
+                name = bot.get("first_name", "?")
+                uname = bot.get("username", "?")
+                return True, f"@{uname} ({name})"
+            return False, "API retornou ok=false"
+    except _urlerr.HTTPError as e:
+        return False, f"HTTP {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_discord_token(token: str) -> tuple[bool, str]:
+    """Testa token do Discord via /users/@me. Retorna (ok, mensagem)."""
+    import json as _json
+    from urllib import error as _urlerr
+    from urllib import request as _urlreq
+
+    url = "https://discord.com/api/v10/users/@me"
+    req = _urlreq.Request(url, headers={"Authorization": f"Bot {token}"})
+    try:
+        with _urlreq.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+            uname = data.get("username", "?")
+            return True, f"@{uname}"
+    except _urlerr.HTTPError as e:
+        return False, f"HTTP {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
+def _step_channels(
+    p: WizardPrompter,
+    existing: dict[str, str],
+    flow: str,
+) -> dict[str, str]:
+    """Coleta tokens de bots e canais de comunicação."""
+    config: dict[str, str] = {}
+
+    # Detecta quais canais já têm alguma variável configurada
+    pre_configured = []
+    for spec in _CHANNEL_SPECS:
+        has_any = any(existing.get(var_name) for var_name, _label, _req in spec["vars"])
+        if has_any:
+            pre_configured.append(spec["name"])
+
+    if flow == "quickstart":
+        # QuickStart: mantém tokens existentes, pergunta se quer configurar novos
+        if pre_configured:
+            p.note(
+                f"Canais já configurados: {', '.join(pre_configured)}",
+                title="Canais (QuickStart)",
+            )
+            for spec in _CHANNEL_SPECS:
+                for var_name, _label, _req in spec["vars"]:
+                    if existing.get(var_name):
+                        config[var_name] = existing[var_name]
+
+        add_channels = p.confirm(
+            "Configurar canais de comunicação (Telegram, Discord, etc.)?",
+            default=not bool(pre_configured),
+        )
+        if not add_channels:
+            return config
+    else:
+        p.note(
+            "Canais permitem que o Arkhe receba e envie mensagens\n"
+            "por Telegram, Discord, WhatsApp e Slack.\n"
+            "WebChat está sempre ativo e não requer configuração.",
+            title="Canais de comunicação",
+        )
+
+    # Para cada canal: perguntar se quer habilitar → coletar tokens
+    _test_fns = {
+        "_test_telegram_token": _test_telegram_token,
+        "_test_discord_token": _test_discord_token,
+    }
+
+    for spec in _CHANNEL_SPECS:
+        channel_name = spec["name"]
+        has_existing = any(existing.get(v) for v, _l, _r in spec["vars"])
+
+        if has_existing:
+            label = f"({channel_name} já tem tokens)"
+        else:
+            label = ""
+
+        enable = p.confirm(
+            f"Configurar {channel_name}? {label}".strip(),
+            default=has_existing,
+        )
+
+        if not enable:
+            # Mantém existentes mesmo se não reconfigura
+            for var_name, _label, _req in spec["vars"]:
+                if existing.get(var_name):
+                    config[var_name] = existing[var_name]
+            continue
+
+        p.note(spec["hint"], title=f"{channel_name} — Setup")
+
+        test_token_value = ""
+        for var_name, label, required in spec["vars"]:
+            existing_val = existing.get(var_name, "")
+            masked = f"…{existing_val[-6:]}" if len(existing_val) > 8 else ""
+
+            prompt_msg = f"{var_name}"
+            if masked:
+                prompt_msg += f"  [dim]atual: {masked}[/]"
+            if not required:
+                prompt_msg += "  [dim](opcional)[/]"
+
+            val = p.text(
+                prompt_msg,
+                default=existing_val,
+                password=not bool(masked) and "TOKEN" in var_name.upper(),
+            )
+
+            if val:
+                config[var_name] = val
+                # Salva token principal para teste
+                if var_name.endswith("_BOT_TOKEN"):
+                    test_token_value = val
+            elif existing_val:
+                config[var_name] = existing_val
+
+        # Teste de conectividade (se há fn de teste e token)
+        test_fn_name = spec.get("test_fn")
+        test_fn = _test_fns.get(test_fn_name) if test_fn_name else None
+
+        if test_fn and test_token_value:
+            if p.confirm(f"Testar token do {channel_name} agora?", default=True):
+                spinner = p.progress(f"Conectando ao {channel_name}…")
+                ok, msg = test_fn(test_token_value)
+                if ok:
+                    spinner.stop(f"[bold green]✓[/] {channel_name} OK — {msg}")
+                else:
+                    spinner.stop(f"[bold yellow]⚠[/]  {channel_name} falhou: {msg}")
+
+    # WebChat é passivo — informar
+    p.note("WebChat está sempre ativo (sem tokens necessários).", title="WebChat")
 
     return config
 

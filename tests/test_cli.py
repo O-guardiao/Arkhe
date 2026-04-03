@@ -1343,3 +1343,112 @@ class TestImports:
 
     def test_import_service(self) -> None:
         import rlm.cli.service  # noqa: F401
+
+
+# =========================================================================== #
+# 5. _step_channels — coleta de tokens de canais no wizard                     #
+# =========================================================================== #
+
+class TestStepChannels:
+    """Testes unitários para _step_channels do wizard."""
+
+    def test_quickstart_no_channels_skip(self) -> None:
+        """QuickStart sem canais existentes + usuário recusa → retorna vazio."""
+        from rlm.cli.wizard import _step_channels
+
+        p = _WizardTestPrompter(confirms=[False])  # "Configurar canais?" → No
+        result = _step_channels(p, {}, "quickstart")
+        assert result == {}
+
+    def test_quickstart_keeps_existing_tokens(self) -> None:
+        """QuickStart com token existente + recusa → mantém o que já tem."""
+        from rlm.cli.wizard import _step_channels
+
+        existing = {"TELEGRAM_BOT_TOKEN": "123:ABC"}
+        # confirms: "Configurar canais?" → No
+        p = _WizardTestPrompter(confirms=[False])
+        result = _step_channels(p, existing, "quickstart")
+        assert result == {"TELEGRAM_BOT_TOKEN": "123:ABC"}
+
+    def test_quickstart_enable_telegram_only(self) -> None:
+        """QuickStart: habilita Telegram, pula Discord/WhatsApp/Slack."""
+        from rlm.cli.wizard import _step_channels
+
+        # confirms: "Configurar canais?" → Yes,
+        #           "Telegram?" → Yes,
+        #           "Testar token?" → No,
+        #           "Discord?" → No,
+        #           "WhatsApp?" → No,
+        #           "Slack?" → No
+        p = _WizardTestPrompter(
+            confirms=[True, True, False, False, False, False],
+            texts=["BOT_TOKEN_123", ""],  # token + chat_id (empty)
+        )
+        result = _step_channels(p, {}, "quickstart")
+        assert result["TELEGRAM_BOT_TOKEN"] == "BOT_TOKEN_123"
+        assert "DISCORD_BOT_TOKEN" not in result
+
+    def test_advanced_collects_telegram_and_discord(self) -> None:
+        """Advanced: coleta Telegram + Discord, pula WhatsApp e Slack."""
+        from rlm.cli.wizard import _step_channels
+
+        # confirms: "Telegram?" → Yes,
+        #           "Testar token?" → No,
+        #           "Discord?" → Yes,
+        #           "Testar token?" → No,
+        #           "WhatsApp?" → No,
+        #           "Slack?" → No
+        p = _WizardTestPrompter(
+            confirms=[True, False, True, False, False, False],
+            texts=[
+                "TG_TOKEN_XYZ", "",           # Telegram: token + chat_id
+                "DISC_TOKEN", "PUBKEY", "APPID",  # Discord: token + pubkey + appid
+            ],
+        )
+        result = _step_channels(p, {}, "advanced")
+        assert result["TELEGRAM_BOT_TOKEN"] == "TG_TOKEN_XYZ"
+        assert result["DISCORD_BOT_TOKEN"] == "DISC_TOKEN"
+        assert result["DISCORD_APP_PUBLIC_KEY"] == "PUBKEY"
+        assert result["DISCORD_APP_ID"] == "APPID"
+
+    def test_skip_all_channels_advanced(self) -> None:
+        """Advanced: recusa todos os 4 canais → retorna vazio."""
+        from rlm.cli.wizard import _step_channels
+
+        # confirms: Telegram→No, Discord→No, WhatsApp→No, Slack→No
+        p = _WizardTestPrompter(confirms=[False, False, False, False])
+        result = _step_channels(p, {}, "advanced")
+        assert result == {}
+
+    def test_channel_specs_structure(self) -> None:
+        """Verifica que _CHANNEL_SPECS tem os 4 canais com campos obrigatórios."""
+        from rlm.cli.wizard import _CHANNEL_SPECS
+
+        assert len(_CHANNEL_SPECS) == 4
+        names = [s["name"] for s in _CHANNEL_SPECS]
+        assert "Telegram" in names
+        assert "Discord" in names
+        assert "WhatsApp" in names
+        assert "Slack" in names
+
+        for spec in _CHANNEL_SPECS:
+            assert "id" in spec
+            assert "vars" in spec
+            assert "hint" in spec
+            assert len(spec["vars"]) > 0
+
+    def test_test_telegram_token_bad_token(self) -> None:
+        """_test_telegram_token com token inválido retorna False."""
+        from rlm.cli.wizard import _test_telegram_token
+
+        ok, msg = _test_telegram_token("invalid_token_000")
+        assert ok is False
+        assert msg  # deve ter uma mensagem de erro
+
+    def test_test_discord_token_bad_token(self) -> None:
+        """_test_discord_token com token inválido retorna False."""
+        from rlm.cli.wizard import _test_discord_token
+
+        ok, msg = _test_discord_token("invalid_token_000")
+        assert ok is False
+        assert msg
