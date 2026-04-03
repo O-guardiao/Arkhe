@@ -872,3 +872,169 @@ class TestSubRLMRootPromptInjection:
         msg = build_user_prompt(root_prompt=None, iteration=0)
         assert "Current task preview" not in msg["content"]
         assert "Use the REPL" in msg["content"]
+
+
+# ---------------------------------------------------------------------------
+# Supervisor: per-session execution lock (TUI ↔ Telegram contention fix)
+# ---------------------------------------------------------------------------
+
+class TestSupervisorSessionContention:
+    """Verifica que chamadas concorrentes na mesma sessão AGUARDAM
+    em vez de rejeitar imediatamente com 'Session is already running'.
+
+    Antes desse fix, o Telegram recebia erro porque o TUI já estava usando
+    a sessão — o supervisor retornava error sem esperar.
+    """
+
+    def _make_session(self, session_id="test-session"):
+        from unittest.mock import MagicMock
+        from rlm.core.session import SessionRecord
+        session = SessionRecord(session_id=session_id, client_id="test:0", user_id="main")
+        rlm = MagicMock()
+        rlm.max_iterations = 5
+        rlm._abort_event = None
+        rlm._cancel_token = MagicMock()
+        completion_result = MagicMock()
+        completion_result.response = "ok"
+        completion_result.usage_summary = None
+        rlm.completion.return_value = completion_result
+        rlm.start_turn_telemetry = None
+        rlm.finish_turn_telemetry = None
+        session.rlm_instance = rlm
+        session.status = "idle"
+        session.total_tokens_used = 0
+        session.total_completions = 0
+        session.last_error = None
+        return session
+
+    def test_second_caller_waits_and_succeeds(self):
+        """Duas threads na mesma sessão: a segunda espera e também retorna 'completed'."""
+        import threading
+        from rlm.core.orchestration.supervisor import RLMSupervisor, SupervisorConfig
+
+        session = self._make_session()
+
+        # A primeira chamada demora 0.3s
+        call_count = {"n": 0}
+        original_completion = session.rlm_instance.completion
+
+        def slow_completion(prompt, root_prompt=None, mcts_branches=0, **kw):
+            call_count["n"] += 1
+            import time
+            time.sleep(0.3)
+            return original_completion(prompt, root_prompt=root_prompt, mcts_branches=mcts_branches, **kw)
+
+        session.rlm_instance.completion = slow_completion
+
+        supervisor = RLMSupervisor(
+            default_config=SupervisorConfig(queue_timeout=5.0)
+        )
+
+        results = [None, None]
+
+        def run(idx, delay=0.0):
+            import time
+            if delay:
+                time.sleep(delay)
+            results[idx] = supervisor.execute(session, "hello")
+
+        t1 = threading.Thread(target=run, args=(0,))
+        t2 = threading.Thread(target=run, args=(1, 0.05))  # começa 50ms depois
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert results[0] is not None
+        assert results[1] is not None
+        assert results[0].status == "completed", f"Thread 1: {results[0].status} - {results[0].error_detail}"
+        assert results[1].status == "completed", f"Thread 2: {results[1].status} - {results[1].error_detail}"
+        assert call_count["n"] == 2, "Ambas as chamadas devem ter sido executadas"
+
+    def test_queue_timeout_zero_rejects_immediately(self):
+        """Com queue_timeout=0, a segunda chamada é rejeitada (comportamento legado)."""
+        import threading
+        from rlm.core.orchestration.supervisor import RLMSupervisor, SupervisorConfig
+
+        session = self._make_session()
+
+        original_completion = session.rlm_instance.completion
+
+        def slow_completion(prompt, root_prompt=None, mcts_branches=0, **kw):
+            import time
+            time.sleep(0.5)
+            return original_completion(prompt, root_prompt=root_prompt, mcts_branches=mcts_branches, **kw)
+
+        session.rlm_instance.completion = slow_completion
+
+        supervisor = RLMSupervisor(
+            default_config=SupervisorConfig(queue_timeout=0)
+        )
+
+        results = [None, None]
+
+        def run(idx, delay=0.0):
+            import time
+            if delay:
+                time.sleep(delay)
+            results[idx] = supervisor.execute(session, "hello")
+
+        t1 = threading.Thread(target=run, args=(0,))
+        t2 = threading.Thread(target=run, args=(1, 0.05))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert results[0].status == "completed"
+        assert results[1].status == "error"
+        assert "timed out" in results[1].error_detail.lower() or "wait" in results[1].error_detail.lower()
+
+    def test_different_sessions_run_concurrently(self):
+        """Sessões diferentes NÃO se bloqueiam: ambas executam em paralelo."""
+        import threading
+        import time as _time
+        from rlm.core.orchestration.supervisor import RLMSupervisor, SupervisorConfig
+
+        s1 = self._make_session("session-A")
+        s2 = self._make_session("session-B")
+
+        original1 = s1.rlm_instance.completion
+        original2 = s2.rlm_instance.completion
+
+        def slow_completion_1(prompt, root_prompt=None, mcts_branches=0, **kw):
+            import time
+            time.sleep(0.3)
+            return original1(prompt, root_prompt=root_prompt, mcts_branches=mcts_branches, **kw)
+
+        def slow_completion_2(prompt, root_prompt=None, mcts_branches=0, **kw):
+            import time
+            time.sleep(0.3)
+            return original2(prompt, root_prompt=root_prompt, mcts_branches=mcts_branches, **kw)
+
+        s1.rlm_instance.completion = slow_completion_1
+        s2.rlm_instance.completion = slow_completion_2
+
+        supervisor = RLMSupervisor(
+            default_config=SupervisorConfig(queue_timeout=5.0)
+        )
+
+        results = [None, None]
+        start = _time.perf_counter()
+
+        def run(idx, session):
+            results[idx] = supervisor.execute(session, "hello")
+
+        t1 = threading.Thread(target=run, args=(0, s1))
+        t2 = threading.Thread(target=run, args=(1, s2))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        elapsed = _time.perf_counter() - start
+
+        assert results[0].status == "completed"
+        assert results[1].status == "completed"
+        # Se fossem sequenciais, levariam ~0.6s. Em paralelo, ~0.3s.
+        assert elapsed < 0.55, f"Sessões diferentes devem rodar em paralelo, mas levaram {elapsed:.2f}s"

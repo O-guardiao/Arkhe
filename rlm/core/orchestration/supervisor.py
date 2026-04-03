@@ -33,6 +33,7 @@ class SupervisorConfig:
     max_consecutive_errors: int = 5     # Corta se o mesmo erro repetir N vezes
     max_iterations_override: int | None = None  # Override do max_iterations do RLM
     poll_interval: float = 1.0          # Intervalo de polling para verificar saúde
+    queue_timeout: float = 120.0        # Segundos para aguardar sessão ocupada (0 = rejeitar imediatamente)
 
 
 # ---------------------------------------------------------------------------
@@ -78,9 +79,17 @@ class RLMSupervisor:
         self._abort_events: dict[str, threading.Event] = {}  # session_id -> Event (legacy)
         self._cancel_sources: dict[str, CancellationTokenSource] = {}  # Fase 10
         self._active_futures: dict[str, Future] = {}          # session_id -> Future
+        self._session_exec_locks: dict[str, threading.Lock] = {}  # per-session execution lock
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rlm-worker")
         self._lock = threading.Lock()
         self._shutdown_manager = ShutdownManager()
+
+    def _get_session_exec_lock(self, session_id: str) -> threading.Lock:
+        """Return (or create) a per-session execution lock."""
+        with self._lock:
+            if session_id not in self._session_exec_locks:
+                self._session_exec_locks[session_id] = threading.Lock()
+            return self._session_exec_locks[session_id]
 
     def set_session_manager(self, session_manager: SessionManager | None) -> None:
         self._session_manager = session_manager
@@ -116,11 +125,19 @@ class RLMSupervisor:
                 error_detail="No RLM instance in session. Session may not be activated.",
             )
 
-        if self.is_running(session.session_id):
+        # Per-session execution lock: if busy, WAIT instead of rejecting.
+        exec_lock = self._get_session_exec_lock(session.session_id)
+        queue_timeout = cfg.queue_timeout
+        if queue_timeout > 0:
+            acquired = exec_lock.acquire(timeout=queue_timeout)
+        else:
+            acquired = exec_lock.acquire(blocking=False)
+
+        if not acquired:
             return ExecutionResult(
                 session_id=session.session_id,
                 status="error",
-                error_detail="Session is already running a completion.",
+                error_detail="Session is already running a completion (wait timed out).",
             )
 
         # Setup abort event and inject into RLM instance
@@ -285,6 +302,9 @@ class RLMSupervisor:
                     )
                 except Exception:
                     pass
+
+            # Release per-session execution lock so queued callers can proceed
+            exec_lock.release()
 
         return result
 
