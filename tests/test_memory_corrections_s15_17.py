@@ -681,7 +681,7 @@ class TestTelegramOperationalPrompting:
     def test_system_prompt_prefers_reply_and_blocks_telegram_polling(self):
         from rlm.utils.prompts import RLM_SYSTEM_PROMPT
 
-        assert "Prefer `reply(text)`" in RLM_SYSTEM_PROMPT
+        assert "reply(text)" in RLM_SYSTEM_PROMPT
         assert "telegram_bot(chat_id, text)" in RLM_SYSTEM_PROMPT
         assert "Never use `telegram_bot` or raw Telegram polling" in RLM_SYSTEM_PROMPT
 

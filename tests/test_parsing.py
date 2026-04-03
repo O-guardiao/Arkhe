@@ -160,8 +160,8 @@ multiline answer)"""
         # Test FINAL with various content types
         test_cases_final = [
             ("FINAL(42)", "42"),
-            ("FINAL('hello world')", "'hello world'"),
-            ('FINAL("test")', '"test"'),
+            ("FINAL('hello world')", "hello world"),
+            ('FINAL("test")', "test"),
             ("FINAL(123.45)", "123.45"),
             ("FINAL([1, 2, 3])", "[1, 2, 3]"),
         ]

@@ -422,7 +422,7 @@ class TelegramGateway:
                 if self.config.log_messages:
                     logger.info("Resposta enviada", username=username, chat_id=chat_id, text_preview=response[:100])
 
-                if not already_replied:
+                if not already_replied and response and response.strip() != "__REPLIED__":
                     _send_message(self.token, chat_id, response)
 
             except Exception as e:

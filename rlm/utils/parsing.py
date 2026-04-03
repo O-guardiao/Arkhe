@@ -81,7 +81,11 @@ def find_final_answer(text: str, environment: "BaseEnv | None" = None) -> str | 
     final_pattern = r"^\s*FINAL\((.*)\)\s*$"
     match = re.search(final_pattern, text, re.MULTILINE | re.DOTALL)
     if match:
-        return match.group(1).strip()
+        content = match.group(1).strip()
+        # Strip outer quotes that the model wraps around FINAL("...") text
+        if len(content) >= 2 and content[0] == content[-1] and content[0] in ('"', "'"):
+            content = content[1:-1]
+        return content
 
     return None
 

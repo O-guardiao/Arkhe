@@ -77,6 +77,10 @@ def find_final_answer(text: str, environment: Any | None = None) -> str | None:
 
     match = _FINAL_PATTERN.search(text)
     if match:
-        return match.group(1).strip()
+        content = match.group(1).strip()
+        # Strip outer quotes that the model wraps around FINAL("...") text
+        if len(content) >= 2 and content[0] == content[-1] and content[0] in ('"', "'"):
+            content = content[1:-1]
+        return content
 
     return None
