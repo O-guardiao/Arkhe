@@ -7,7 +7,7 @@ from rlm.cli.tui.runtime_factory import (
     WorkbenchRuntime as WorkbenchRuntime,
     build_local_workbench_runtime as build_local_workbench_runtime,
 )
-from rlm.cli.tui.workbench import (
+from rlm.cli.commands.workbench import (
     RuntimeWorkbench as RuntimeWorkbench,
     run_workbench as run_workbench,
 )

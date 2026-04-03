@@ -95,6 +95,13 @@ except ImportError:
     _webchat_router = None
     _HAS_WEBCHAT = False
 
+try:
+    from rlm.server.operator_bridge import router as _operator_router
+    _HAS_OPERATOR_BRIDGE = True
+except ImportError:
+    _operator_router = None
+    _HAS_OPERATOR_BRIDGE = False
+
 gateway_log = get_logger("api")
 
 _INTERNAL_AUTH_ENV_NAMES = ("RLM_INTERNAL_TOKEN", "RLM_WS_TOKEN", "RLM_API_TOKEN")
@@ -379,6 +386,16 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             gateway_log.warn(f"WebChatAdapter registration failed: {exc}")
 
+    # TuiAdapter — registra para entrega cross-channel a sessoes TUI
+    try:
+        from rlm.server.operator_bridge import TuiAdapter
+        ChannelRegistry.register(
+            "tui", TuiAdapter(app.state.session_manager),
+        )
+        gateway_log.info("✓ TuiAdapter registered")
+    except Exception as exc:
+        gateway_log.warn(f"TuiAdapter registration failed: {exc}")
+
     # Telegram Gateway (bridge mode) — inicia como thread daemon se token definido
     app.state.telegram_gateway = None
     _tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -454,6 +471,10 @@ async def lifespan(app: FastAPI):
         _csr.mark_running("webchat")
     else:
         _csr.register("webchat", configured=False, enabled=False)
+
+    # Service Discovery: TUI (sempre disponivel — thin-client via operator_bridge)
+    _csr.register("tui", prober=NullProber("tui"), configured=True)
+    _csr.mark_running("tui")
 
     gateway_log.info(
         f"✓ ChannelStatusRegistry: {_csr.summary()['total']} channels "
@@ -580,6 +601,10 @@ if _HAS_SLACK_GW and (
 if _HAS_WEBCHAT:
     assert _webchat_router is not None
     app.include_router(_webchat_router)
+
+if _HAS_OPERATOR_BRIDGE:
+    assert _operator_router is not None
+    app.include_router(_operator_router)
 
 
 # ---------------------------------------------------------------------------
