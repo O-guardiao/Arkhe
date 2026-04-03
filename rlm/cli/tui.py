@@ -50,6 +50,7 @@ def build_local_workbench_runtime() -> WorkbenchRuntime:
             "backend": os.environ.get("RLM_BACKEND", "openai"),
             "backend_kwargs": {"model_name": os.environ.get("RLM_MODEL_PLANNER", os.environ.get("RLM_MODEL", "gpt-4o-mini"))},
             "environment": "local",
+            "max_depth": int(os.environ.get("RLM_MAX_DEPTH", "3")),
             "max_iterations": int(os.environ.get("RLM_MAX_ITERATIONS", "30")),
             "persistent": True,
             "verbose": True,
