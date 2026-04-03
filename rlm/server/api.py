@@ -35,6 +35,7 @@ from pydantic import BaseModel
 from rlm.core.session import SessionManager
 from rlm.core.orchestration.supervisor import RLMSupervisor, SupervisorConfig, ExecutionResult
 from rlm.core.engine.hooks import HookSystem
+from rlm.core.security.execution_policy import build_tier_backends
 from rlm.core.orchestration.handoff import make_handoff_fn, VALID_HANDOFF_ROLES
 from rlm.core.orchestration.role_orchestrator import PENDING_HANDOFFS_KEY, orchestrate_roles
 from rlm.core.orchestration.scheduler import RLMScheduler, CronJob
@@ -174,15 +175,20 @@ async def lifespan(app: FastAPI):
     db_path = os.environ.get("RLM_DB_PATH", "rlm_sessions.db")
     state_root = os.environ.get("RLM_STATE_ROOT", "./rlm_states")
     
+    _rlm_backend = os.environ.get("RLM_BACKEND", "openai")
+    _rlm_backend_kwargs = {"model_name": os.environ.get("RLM_MODEL_PLANNER", os.environ.get("RLM_MODEL", "gpt-4o-mini"))}
+    _tier_backends, _tier_kwargs = build_tier_backends(_rlm_backend, _rlm_backend_kwargs)
     default_rlm_kwargs = {
-        "backend": os.environ.get("RLM_BACKEND", "openai"),
-        "backend_kwargs": {"model_name": os.environ.get("RLM_MODEL_PLANNER", os.environ.get("RLM_MODEL", "gpt-4o-mini"))},
+        "backend": _rlm_backend,
+        "backend_kwargs": _rlm_backend_kwargs,
         "environment": "local",
         "max_iterations": int(os.environ.get("RLM_MAX_ITERATIONS", "30")),
         "max_depth": int(os.environ.get("RLM_MAX_DEPTH", "3")),
         "persistent": True,
         "verbose": True,
         "event_bus": app.state.event_bus,
+        "other_backends": _tier_backends or None,
+        "other_backend_kwargs": _tier_kwargs or None,
     }
 
     # Hooks

@@ -57,6 +57,7 @@ from rlm.environments._repl_tools import (
 )
 from rlm.environments._runtime_state import RuntimeStateMixin
 from rlm.environments._checkpoint import CheckpointMixin
+from rlm.core.security.execution_policy import get_model_route_config
 
 
 class LocalREPL(RuntimeStateMixin, CheckpointMixin, NonIsolatedEnv):
@@ -109,6 +110,9 @@ class LocalREPL(RuntimeStateMixin, CheckpointMixin, NonIsolatedEnv):
         validate_custom_tools(self.custom_tools)
 
         self.compaction = compaction
+
+        # Multi-model routing: resolve worker model for llm_query/llm_query_batched
+        self._worker_model: str | None = get_model_route_config().worker_model
 
         # Phase 9.3: Depth-aware security auditor (sub-RLMs get stricter rules)
         from rlm.core.security import REPLAuditor, env_var_shield as _env_shield
@@ -286,23 +290,25 @@ class LocalREPL(RuntimeStateMixin, CheckpointMixin, NonIsolatedEnv):
         Args:
             prompt: The prompt to send to the LM.
             model: Optional model name to use (if handler has multiple clients).
+                   Defaults to worker_model from route config.
         """
+        effective_model = model or self._worker_model
         if not self.lm_handler_address:
             self.record_runtime_event(
                 "llm_query.called",
-                {"model": model, "prompt_chars": len(prompt), "ok": False},
+                {"model": effective_model, "prompt_chars": len(prompt), "ok": False},
             )
             return "Error: No LM handler configured"
 
         try:
-            request = LMRequest(prompt=prompt, model=model, depth=self.depth)
+            request = LMRequest(prompt=prompt, model=effective_model, depth=self.depth)
             response = send_lm_request(self.lm_handler_address, request)
 
             if not response.success:
                 self.record_runtime_event(
                     "llm_query.called",
                     {
-                        "model": model,
+                        "model": effective_model,
                         "prompt_chars": len(prompt),
                         "ok": False,
                         "error": response.error,
@@ -316,7 +322,7 @@ class LocalREPL(RuntimeStateMixin, CheckpointMixin, NonIsolatedEnv):
                 self.record_runtime_event(
                     "llm_query.called",
                     {
-                        "model": model,
+                        "model": effective_model,
                         "prompt_chars": len(prompt),
                         "ok": False,
                         "error": "missing chat_completion payload",
@@ -329,7 +335,7 @@ class LocalREPL(RuntimeStateMixin, CheckpointMixin, NonIsolatedEnv):
             self.record_runtime_event(
                 "llm_query.called",
                 {
-                    "model": model or chat_completion.root_model,
+                    "model": effective_model or chat_completion.root_model,
                     "prompt_chars": len(prompt),
                     "ok": True,
                 },
@@ -340,7 +346,7 @@ class LocalREPL(RuntimeStateMixin, CheckpointMixin, NonIsolatedEnv):
             self.record_runtime_event(
                 "llm_query.called",
                 {
-                    "model": model,
+                    "model": effective_model,
                     "prompt_chars": len(prompt),
                     "ok": False,
                     "error": str(e),
@@ -354,21 +360,24 @@ class LocalREPL(RuntimeStateMixin, CheckpointMixin, NonIsolatedEnv):
         Args:
             prompts: List of prompts to send to the LM.
             model: Optional model name to use (if handler has multiple clients).
+                   Falls back to ``self._worker_model`` when *None*.
 
         Returns:
             List of responses in the same order as input prompts.
         """
+        effective_model = model or self._worker_model
+
         if not self.lm_handler_address:
             self.record_runtime_event(
                 "llm_query_batched.called",
-                {"model": model, "prompt_count": len(prompts), "ok": False},
+                {"model": effective_model, "prompt_count": len(prompts), "ok": False},
             )
             return ["Error: No LM handler configured"] * len(prompts)
 
         try:
             batched_prompts = cast(list[str | dict[str, Any]], list(prompts))
             responses = send_lm_request_batched(
-                self.lm_handler_address, batched_prompts, model=model, depth=self.depth
+                self.lm_handler_address, batched_prompts, model=effective_model, depth=self.depth
             )
 
             results = []
@@ -387,7 +396,7 @@ class LocalREPL(RuntimeStateMixin, CheckpointMixin, NonIsolatedEnv):
             self.record_runtime_event(
                 "llm_query_batched.called",
                 {
-                    "model": model,
+                    "model": effective_model,
                     "prompt_count": len(prompts),
                     "ok": all(not r.startswith("Error:") for r in results),
                 },
@@ -398,7 +407,7 @@ class LocalREPL(RuntimeStateMixin, CheckpointMixin, NonIsolatedEnv):
             self.record_runtime_event(
                 "llm_query_batched.called",
                 {
-                    "model": model,
+                    "model": effective_model,
                     "prompt_count": len(prompts),
                     "ok": False,
                     "error": str(e),

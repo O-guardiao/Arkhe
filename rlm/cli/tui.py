@@ -19,6 +19,7 @@ from rlm.cli.context import CliContext
 from rlm.core.observability.operator_surface import apply_operator_command, build_activity_payload, dispatch_operator_prompt
 from rlm.core.engine.hooks import HookSystem
 from rlm.core.session import SessionManager
+from rlm.core.security.execution_policy import build_tier_backends
 from rlm.core.skillkit.skill_loader import SkillLoader
 from rlm.core.orchestration.supervisor import RLMSupervisor, SupervisorConfig
 from rlm.plugins import PluginLoader
@@ -43,18 +44,23 @@ class WorkbenchRuntime:
 
 def build_local_workbench_runtime() -> WorkbenchRuntime:
     event_bus = RLMEventBus()
+    _rlm_backend = os.environ.get("RLM_BACKEND", "openai")
+    _rlm_backend_kwargs = {"model_name": os.environ.get("RLM_MODEL_PLANNER", os.environ.get("RLM_MODEL", "gpt-4o-mini"))}
+    _tier_backends, _tier_kwargs = build_tier_backends(_rlm_backend, _rlm_backend_kwargs)
     session_manager = SessionManager(
         db_path=os.environ.get("RLM_DB_PATH", "rlm_sessions.db"),
         state_root=os.environ.get("RLM_STATE_ROOT", "./rlm_states"),
         default_rlm_kwargs={
-            "backend": os.environ.get("RLM_BACKEND", "openai"),
-            "backend_kwargs": {"model_name": os.environ.get("RLM_MODEL_PLANNER", os.environ.get("RLM_MODEL", "gpt-4o-mini"))},
+            "backend": _rlm_backend,
+            "backend_kwargs": _rlm_backend_kwargs,
             "environment": "local",
             "max_depth": int(os.environ.get("RLM_MAX_DEPTH", "3")),
             "max_iterations": int(os.environ.get("RLM_MAX_ITERATIONS", "30")),
             "persistent": True,
             "verbose": True,
             "event_bus": event_bus,
+            "other_backends": _tier_backends or None,
+            "other_backend_kwargs": _tier_kwargs or None,
         },
     )
     supervisor = RLMSupervisor(

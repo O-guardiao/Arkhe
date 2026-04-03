@@ -256,6 +256,38 @@ def build_backend_kwargs(base_kwargs: dict[str, Any] | None, model_name: str | N
     return updated or None
 
 
+def build_tier_backends(
+    backend: str = "openai",
+    base_backend_kwargs: dict[str, Any] | None = None,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Build other_backends and other_backend_kwargs from ModelRouteConfig.
+
+    Reads env vars via get_model_route_config and returns lists of distinct
+    tier backends (worker, evaluator, fast, minirepl) that differ from the
+    planner model.  Duplicates are suppressed — only unique models get a
+    client entry.
+
+    Returns:
+        (other_backends, other_backend_kwargs) — ready to pass to RLM().
+    """
+    planner = (base_backend_kwargs or {}).get("model_name")
+    routes = get_model_route_config(str(planner) if planner else None)
+
+    seen: set[str] = {routes.planner_model}
+    other_backends: list[str] = []
+    other_backend_kwargs: list[dict[str, Any]] = []
+
+    for model in (routes.worker_model, routes.evaluator_model, routes.fast_model, routes.minirepl_model):
+        if model not in seen:
+            seen.add(model)
+            kwargs = dict(base_backend_kwargs or {})
+            kwargs["model_name"] = model
+            other_backends.append(backend)
+            other_backend_kwargs.append(kwargs)
+
+    return other_backends, other_backend_kwargs
+
+
 def parse_price_table(markdown_text: str) -> dict[str, ModelPrice]:
     prices: dict[str, ModelPrice] = {}
     for raw_line in markdown_text.splitlines():

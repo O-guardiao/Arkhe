@@ -142,6 +142,8 @@ def _spawn_child_rlm(
     child = _cls(
         backend=cast(ClientBackend, parent.backend),
         backend_kwargs=build_backend_kwargs(parent.backend_kwargs, child_model),
+        other_backends=getattr(parent, "other_backends", None),
+        other_backend_kwargs=getattr(parent, "other_backend_kwargs", None),
         environment=cast(EnvironmentType, parent.environment_type),
         environment_kwargs=env_kwargs if env_kwargs else None,
         depth=child_depth,
