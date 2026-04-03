@@ -693,3 +693,54 @@ class TestTelegramGetUpdatesFallbackChain:
             assert owner_id == "55443322"
 
         _reset_singleton()
+
+
+# ===========================================================================
+# Phase E — SKILL.md discoverability
+# ===========================================================================
+
+class TestChannelsSkillDiscoverability:
+    """Verifica que o SKILL.md para channels() é carregado pelo skill_loader."""
+
+    def test_skill_loader_finds_channels(self):
+        from rlm.core.skillkit.skill_loader import SkillLoader
+
+        loader = SkillLoader()
+        skills = loader.load_from_dir("rlm/skills")
+        names = [s.name for s in skills]
+        assert "channels" in names, f"'channels' não encontrado em skill_list: {names}"
+
+    def test_channels_skill_metadata(self):
+        from rlm.core.skillkit.skill_loader import SkillLoader
+
+        loader = SkillLoader()
+        skills = loader.load_from_dir("rlm/skills")
+        channels_skill = next((s for s in skills if s.name == "channels"), None)
+        assert channels_skill is not None
+        assert "snapshot" in channels_skill.description.lower()
+        assert channels_skill.priority == "contextual"
+
+    def test_channels_skill_sif_no_impl(self):
+        """channels() vem de hard-injection; SKILL.md NÃO deve ter impl/codex."""
+        from rlm.core.skillkit.skill_loader import SkillLoader
+
+        loader = SkillLoader()
+        skills = loader.load_from_dir("rlm/skills")
+        channels_skill = next((s for s in skills if s.name == "channels"), None)
+        assert channels_skill is not None
+        # SIF não deve compilar callable — hard-injection é a fonte
+        assert not getattr(channels_skill, "has_impl", False) or not channels_skill.impl
+        assert not getattr(channels_skill, "has_codex", False) or not channels_skill.codex
+
+    def test_channels_skill_compose_references(self):
+        from rlm.core.skillkit.skill_loader import SkillLoader
+
+        loader = SkillLoader()
+        skills = loader.load_from_dir("rlm/skills")
+        channels_skill = next((s for s in skills if s.name == "channels"), None)
+        assert channels_skill is not None
+        sif = channels_skill.sif_entry
+        assert sif is not None, "channels skill deve ter sif_entry"
+        compose = getattr(sif, "compose", []) or []
+        assert "cross_channel_send" in compose
+        assert "telegram_bot" in compose
