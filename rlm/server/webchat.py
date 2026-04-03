@@ -30,6 +30,7 @@ from starlette.background import BackgroundTask
 
 from rlm.core.observability.operator_surface import apply_operator_command, build_activity_payload, build_runtime_snapshot
 from rlm.logging import get_runtime_logger
+from rlm.plugins.channel_registry import ChannelAdapter
 from rlm.server.auth_helpers import build_internal_auth_headers
 
 log = get_runtime_logger("webchat")
@@ -38,6 +39,54 @@ router = APIRouter(prefix="/webchat", tags=["webchat"])
 
 # Diretório de arquivos estáticos (rlm/static/)
 _STATIC_DIR = Path(__file__).parent.parent / "static"
+
+
+# ---------------------------------------------------------------------------
+# WebChatAdapter — permite que DeliveryWorker entregue via SessionManager
+# ---------------------------------------------------------------------------
+
+class WebChatAdapter(ChannelAdapter):
+    """
+    Adapter que entrega respostas para sessões webchat via SessionManager.
+
+    O frontend webchat usa polling em /webchat/session/{id}/activity.
+    A entrega consiste em registrar o evento na sessão para que
+    o próximo poll do frontend veja a resposta.
+    """
+
+    def __init__(self, session_manager: Any) -> None:
+        self._sm = session_manager
+
+    def send_message(self, target_id: str, text: str) -> bool:
+        """
+        Entrega texto para sessão webchat via log de evento.
+
+        Args:
+            target_id: ID da sessão webchat (parte após "webchat:")
+            text: Texto da resposta
+        """
+        client_id = f"webchat:{target_id}"
+        try:
+            session = self._sm.get_or_create(client_id)
+            self._sm.log_event(
+                session.session_id,
+                "webchat_response_delivered",
+                {
+                    "response_preview": text[:500],
+                    "delivery_source": "message_bus",
+                },
+            )
+            return True
+        except Exception as exc:
+            log.error("WebChatAdapter: falha na entrega", client_id=client_id, error=str(exc))
+            return False
+
+    def send_media(self, target_id: str, media_url_or_path: str, caption: str = "") -> bool:
+        """WebChat não suporta envio direto de mídia — loga descrição textual."""
+        description = f"[Mídia: {media_url_or_path}]"
+        if caption:
+            description += f" {caption}"
+        return self.send_message(target_id, description)
 
 
 def _build_runtime_snapshot(session: object) -> dict | None:

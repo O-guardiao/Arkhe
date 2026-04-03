@@ -52,8 +52,9 @@ from rlm.plugins.channel_registry import ChannelRegistry, sanitize_text_payload
 from rlm.plugins import PluginLoader
 from rlm.core.comms.outbox import OutboxStore
 from rlm.core.comms.routing_policy import RoutingPolicy
-from rlm.core.comms.message_bus import init_message_bus
+from rlm.core.comms.message_bus import init_message_bus, get_message_bus
 from rlm.core.comms.delivery_worker import DeliveryWorker
+from rlm.server.message_envelope import InboundMessage
 from rlm.runtime import build_runtime_guard_from_env
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
@@ -339,6 +340,26 @@ async def lifespan(app: FastAPI):
     )
     gateway_log.info("✓ MessageBus + DeliveryWorker started")
 
+    # Feature flag: MessageBus routing (Phase 3 multichannel)
+    # Default false — ativa roteamento de respostas via Outbox + DeliveryWorker
+    _use_bus = os.environ.get("RLM_USE_MESSAGE_BUS", "false").lower() == "true"
+    app.state.use_message_bus = _use_bus
+    if _use_bus:
+        gateway_log.info("✓ MessageBus routing ENABLED (RLM_USE_MESSAGE_BUS=true)")
+    else:
+        gateway_log.info("• MessageBus routing disabled (set RLM_USE_MESSAGE_BUS=true to enable)")
+
+    # WebChatAdapter — registra se webchat disponível
+    if _HAS_WEBCHAT:
+        try:
+            from rlm.server.webchat import WebChatAdapter
+            ChannelRegistry.register(
+                "webchat", WebChatAdapter(app.state.session_manager),
+            )
+            gateway_log.info("✓ WebChatAdapter registered")
+        except Exception as exc:
+            gateway_log.warn(f"WebChatAdapter registration failed: {exc}")
+
     # Telegram Gateway (bridge mode) — inicia como thread daemon se token definido
     app.state.telegram_gateway = None
     _tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -487,6 +508,57 @@ if _HAS_WEBCHAT:
 
 
 # ---------------------------------------------------------------------------
+# MessageBus helpers (Phase 3 multichannel)
+# ---------------------------------------------------------------------------
+
+def _normalize_webhook_payload(client_id: str, payload: dict) -> InboundMessage:
+    """
+    Converte payload bruto do /webhook em InboundMessage canônico.
+
+    Extrai canal a partir do prefixo de client_id (ex: "telegram:123" → "telegram").
+    Todos os gateways já enviam text + from_user no payload; metadata extra
+    é preservada em channel_meta.
+    """
+    prefix = client_id.split(":", 1)[0] if ":" in client_id else "webhook"
+    text = str(payload.get("text", ""))
+    from_user = str(payload.get("from_user", ""))
+    content_type = str(payload.get("type", "text"))
+
+    meta: dict = {}
+    if prefix == "whatsapp":
+        meta = {
+            "wa_id": payload.get("wa_id", ""),
+            "message_id": payload.get("message_id", ""),
+        }
+    elif prefix == "slack":
+        meta = {
+            "thread_ts": payload.get("thread_ts", ""),
+            "team_id": payload.get("team_id", ""),
+            "channel": payload.get("channel", ""),
+        }
+    elif prefix == "telegram":
+        meta = {"chat_id": payload.get("chat_id", "")}
+    elif prefix == "discord":
+        # client_id = "discord:{guild_id}:{user_id}"
+        parts = client_id.split(":")
+        meta = {
+            "guild_id": parts[1] if len(parts) > 1 else "",
+            "user_id": parts[2] if len(parts) > 2 else "",
+        }
+    elif prefix == "webchat":
+        meta = {"session_id": payload.get("session_id", "")}
+
+    return InboundMessage(
+        channel=prefix,
+        client_id=client_id,
+        text=text,
+        from_user=from_user,
+        content_type=content_type,
+        channel_meta=meta,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Webhook Endpoint (Core)
 # ---------------------------------------------------------------------------
 
@@ -564,6 +636,39 @@ async def receive_webhook(client_id: str, request: Request):
         return JSONResponse(status_code=exc.status_code, content=exc.payload)
     except Exception as e:
         raise HTTPException(500, f"Execution failed: {e}")
+
+    # ── MessageBus routing (Phase 3 multichannel) ─────────────────────────
+    # Quando ativo, normaliza mensagem inbound, registra no bus e roteia
+    # a resposta via Outbox → DeliveryWorker → ChannelRegistry adapter.
+    # O gateway recebe already_replied=True e NÃO reenvia.
+    if getattr(request.app.state, "use_message_bus", False):
+        try:
+            bus = request.app.state.message_bus
+            inbound_msg = _normalize_webhook_payload(client_id, payload)
+            inbound_envelope = bus.ingest(inbound_msg)
+
+            response_text = result.get("response", "") if isinstance(result, dict) else ""
+            was_replied = result.get("already_replied", False) if isinstance(result, dict) else False
+
+            if response_text and not was_replied:
+                bus.route_response(
+                    inbound_envelope,
+                    response_text,
+                    session,
+                    session_id=session.session_id,
+                )
+                # Sinaliza ao gateway que a entrega será feita pelo DeliveryWorker
+                if isinstance(result, dict):
+                    result["already_replied"] = True
+        except Exception as exc:
+            # Bus failure NUNCA deve bloquear o fluxo principal.
+            # Log e segue — gateway entrega normalmente como fallback.
+            gateway_log.error(
+                "MessageBus routing failed (non-fatal, gateway fallback active)",
+                error=str(exc),
+                client_id=client_id,
+            )
+
     return result
 
 

@@ -266,6 +266,7 @@ async def _run_rlm_and_followup(
     rlm_url = f"{rlm_host}/webhook/{client_id}"
 
     rlm_response_text = "(sem resposta)"
+    already_replied = False
     try:
         data = json.dumps(rlm_payload, ensure_ascii=False).encode("utf-8")
         req = urequest.Request(
@@ -276,10 +277,16 @@ async def _run_rlm_and_followup(
         )
         with urequest.urlopen(req, timeout=110) as resp:
             result = json.loads(resp.read().decode("utf-8"))
-            rlm_response_text = result.get("result") or result.get("output") or str(result)
+            rlm_response_text = result.get("response") or result.get("result") or result.get("output") or str(result)
+            already_replied = result.get("already_replied", False)
     except Exception as exc:
         log.error("Erro ao chamar RLM para Discord interaction", error=str(exc), client_id=client_id)
         rlm_response_text = f"Erro interno ao processar sua solicitação: {exc}"
+
+    # Se já entregue (via ChannelRegistry/MessageBus), não envia followup duplicado
+    if already_replied:
+        log.info("Discord: resposta já entregue via bus/adapter — followup suprimido", client_id=client_id)
+        return
 
     # Envia followup ao Discord
     if not app_id or not interaction_token:
