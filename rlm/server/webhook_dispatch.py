@@ -220,6 +220,16 @@ def create_webhook_router(
             hook_log.warn(f"[webhook] Invalid token from ip={client_ip}")
             raise HTTPException(401, "Invalid or missing hook token")
 
+        # ── Camada 3: try per-device identity ──
+        _client_identity = None
+        try:
+            from rlm.core.auth import authenticate_client
+            sm_ref = getattr(request.app.state, "session_manager", None)
+            _db = sm_ref.db_path if sm_ref else "rlm_sessions.db"
+            _client_identity = authenticate_client(_db, token)
+        except Exception:
+            pass  # graceful fallback — global token still validates
+
         # --- Body ---
         content_length = int(request.headers.get("content-length", "0"))
         if content_length > max_body_bytes:
@@ -243,6 +253,7 @@ def create_webhook_router(
         client_id = (
             path_client_id
             or body.client_id
+            or (_client_identity.client_id if _client_identity and _client_identity.client_id != "legacy" else "")
             or default_client_id
         )
 
@@ -280,6 +291,19 @@ def create_webhook_router(
         hooks = getattr(request.app.state, "hooks", None)
 
         session = sm.get_or_create(client_id)
+
+        # ── Camada 3: populate session metadata from identity ──
+        if _client_identity and _client_identity.client_id != "legacy":
+            _pref = _client_identity.metadata.get("preferred_channel")
+            if _pref:
+                session.metadata["preferred_channel"] = _pref
+            _bc = _client_identity.metadata.get("broadcast_channels", [])
+            if _bc:
+                session.metadata["broadcast_channels"] = _bc
+            if _client_identity.context_hint:
+                session.metadata["context_hint"] = _client_identity.context_hint
+            session.metadata["client_profile"] = _client_identity.profile
+
         sm.log_event(session.session_id, "webhook_dispatch", {
             "client_id": client_id,
             "channel": body.channel,

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from rlm.cli.commands.channel import cmd_channel_list
+from rlm.cli.commands.client import cmd_client_add, cmd_client_list, cmd_client_revoke, cmd_client_status
 from rlm.cli.commands.doctor import cmd_doctor
 from rlm.cli.commands.peer import cmd_peer_add
 from rlm.cli.commands.service import cmd_start, cmd_status, cmd_stop, cmd_update
@@ -229,6 +230,50 @@ Recuperação:
             metavar="<ação>",
             subcommands=(
                 CommandSpec(name="list", help="Lista canais disponíveis e seu estado", handler=cmd_channel_list, aliases=("ls",)),
+            ),
+        ),
+        CommandSpec(
+            name="client",
+            help="Gerencia dispositivos/clientes registrados",
+            metavar="<ação>",
+            subcommands=(
+                CommandSpec(
+                    name="add",
+                    help="Registra novo dispositivo e emite token",
+                    handler=cmd_client_add,
+                    arguments=(
+                        ArgumentSpec(flags=("client_id",), kwargs={"help": "ID do cliente (ex: esp32-sala, iphone-demet)"}),
+                        ArgumentSpec(flags=("--profile", "-p"), kwargs={"default": "default", "help": "Perfil de comportamento (referência [[profiles]] no rlm.toml)"}),
+                        ArgumentSpec(flags=("--description", "-d"), kwargs={"default": "", "help": "Descrição do dispositivo"}),
+                        ArgumentSpec(flags=("--context", "-c"), kwargs={"default": "", "help": "Context hint para o agente"}),
+                        ArgumentSpec(flags=("--metadata", "-m"), kwargs={"default": None, "help": "JSON livre (ex: '{\"preferred_channel\": \"telegram:123\"}')"}),
+                    ),
+                ),
+                CommandSpec(
+                    name="list",
+                    help="Lista clientes registrados",
+                    handler=cmd_client_list,
+                    aliases=("ls",),
+                    arguments=(
+                        ArgumentSpec(flags=("--all", "-a"), kwargs={"action": "store_true", "help": "Mostra também clientes revogados"}),
+                    ),
+                ),
+                CommandSpec(
+                    name="revoke",
+                    help="Revoga acesso de um cliente (sem deletar)",
+                    handler=cmd_client_revoke,
+                    arguments=(
+                        ArgumentSpec(flags=("client_id",), kwargs={"help": "ID do cliente a revogar"}),
+                    ),
+                ),
+                CommandSpec(
+                    name="status",
+                    help="Mostra status detalhado de um cliente",
+                    handler=cmd_client_status,
+                    arguments=(
+                        ArgumentSpec(flags=("client_id",), kwargs={"help": "ID do cliente"}),
+                    ),
+                ),
             ),
         ),
     )

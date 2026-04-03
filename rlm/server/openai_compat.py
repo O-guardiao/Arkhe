@@ -59,7 +59,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from rlm.core.structured_log import get_logger
-from rlm.server.auth_helpers import token_matches
+from rlm.server.auth_helpers import token_matches, authenticate_request
 
 compat_log = get_logger("openai_compat")
 
@@ -186,19 +186,31 @@ def create_openai_compat_router(expected_token: str) -> APIRouter:
     """
     router = APIRouter(tags=["OpenAI-Compatible API"])
 
-    def _auth(request: Request) -> None:
-        if not expected_token:
-            raise HTTPException(503, "API token is not configured")
-        auth = request.headers.get("Authorization", "")
-        token = ""
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-        if not token_matches(token, (expected_token,)):
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid or missing API token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+    def _auth(request: Request):
+        """Authenticate via clients table → legacy token fallback.
+        Returns ClientIdentity or None.
+
+        Quando nenhum token está configurado (nem expected_token, nem env),
+        retorna 503 — endpoint desabilitado por design (sem auth = inseguro).
+        """
+        from rlm.server.auth_helpers import configured_tokens as _ct
+
+        sm = getattr(request.app.state, "session_manager", None)
+        _raw = getattr(sm, "db_path", None) if sm else None
+        db_path = _raw if isinstance(_raw, str) else "rlm_sessions.db"
+
+        has_any_token = bool(expected_token) or bool(_ct("RLM_API_TOKEN"))
+        if not has_any_token:
+            raise HTTPException(503, "api authentication is not configured")
+
+        return authenticate_request(
+            request,
+            db_path=db_path,
+            env_names=("RLM_API_TOKEN",),
+            scope="api",
+            require=True,
+            extra_legacy_tokens=(expected_token,) if expected_token else (),
+        )
 
     def _extract_prompt(body: ChatCompletionRequest) -> str:
         """
@@ -231,15 +243,16 @@ def create_openai_compat_router(expected_token: str) -> APIRouter:
         Mapeia a última mensagem `user` como prompt para o agente RLM.
         Suporta stream=True (SSE) e stream=False (JSON).
         """
-        _auth(request)
+        identity = _auth(request)
 
         prompt = _extract_prompt(body)
         if not prompt:
             raise HTTPException(422, "No user message found in 'messages'")
 
-        # client_id: campo `user` ou header X-Session-ID ou UUID
+        # client_id: identity > body.user > header > UUID
         client_id = (
-            body.user
+            (identity.client_id if identity and identity.client_id != "legacy" else "")
+            or body.user
             or request.headers.get("X-Session-ID", "")
             or f"openai_compat_{uuid.uuid4().hex[:8]}"
         ).strip()
@@ -260,6 +273,16 @@ def create_openai_compat_router(expected_token: str) -> APIRouter:
         hooks = getattr(request.app.state, "hooks", None)
 
         session = sm.get_or_create(client_id)
+
+        # ── Camada 3: populate session metadata from client identity ──
+        if identity and identity.client_id != "legacy":
+            if identity.preferred_channel:
+                session.metadata["preferred_channel"] = identity.preferred_channel
+            if identity.broadcast_channels:
+                session.metadata["broadcast_channels"] = identity.broadcast_channels
+            if identity.context_hint:
+                session.metadata["context_hint"] = identity.context_hint
+            session.metadata["client_profile"] = identity.profile
 
         if hooks:
             hooks.trigger(
@@ -307,7 +330,7 @@ def create_openai_compat_router(expected_token: str) -> APIRouter:
         Lista de modelos disponíveis (compatível com openai.models.list()).
         Retorna apenas o modelo RLM para identificação.
         """
-        _auth(request)
+        _auth(request)  # validate auth (identity not needed here)
         return {
             "object": "list",
             "data": [

@@ -217,6 +217,31 @@ class SessionManager:
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 )
             """)
+
+            # ── Camada 3: tabela clients (identidade por dispositivo) ─────
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS clients (
+                    id              TEXT PRIMARY KEY,
+                    token_hash      TEXT NOT NULL,
+                    profile         TEXT NOT NULL,
+                    description     TEXT DEFAULT '',
+                    context_hint    TEXT DEFAULT '',
+                    permissions     TEXT DEFAULT '[]',
+                    active          INTEGER DEFAULT 1,
+                    created_at      TEXT NOT NULL,
+                    last_seen       TEXT,
+                    metadata        TEXT DEFAULT '{}'
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_clients_active
+                ON clients(active)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_clients_token_hash
+                ON clients(token_hash)
+            """)
+
             conn.commit()
 
     def _get_conn(self) -> sqlite3.Connection:
