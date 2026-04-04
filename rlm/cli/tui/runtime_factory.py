@@ -1,4 +1,9 @@
-"""Fábrica do runtime local para o workbench TUI."""
+"""Fábrica do runtime local para o workbench TUI.
+
+Usa ``bootstrap_channel_infrastructure()`` para inicializar a mesma
+infraestrutura multichannel que o servidor (CSR, MessageBus, adapters).
+Assim, qualquer canal futuro funciona automaticamente no modo embedded.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rlm.cli.context import CliContext
+from rlm.core.comms.channel_bootstrap import (
+    ChannelInfrastructure,
+    bootstrap_channel_infrastructure,
+)
 from rlm.core.engine.hooks import HookSystem
 from rlm.core.orchestration.supervisor import RLMSupervisor, SupervisorConfig
 from rlm.core.security.execution_policy import build_tier_backends
@@ -24,21 +33,25 @@ class WorkbenchRuntime:
     session_manager: SessionManager
     supervisor: RLMSupervisor
     dispatch_services: RuntimeDispatchServices | None = None
+    channel_infra: ChannelInfrastructure | None = None
 
     def close(self) -> None:
         self.session_manager.close_all()
         if self.dispatch_services is not None:
             self.dispatch_services.skill_loader.deactivate_all()
+        if self.channel_infra is not None:
+            self.channel_infra.close()
         self.supervisor.shutdown()
 
 
 def build_local_workbench_runtime() -> WorkbenchRuntime:
     event_bus = RLMEventBus()
+    db_path = os.environ.get("RLM_DB_PATH", "rlm_sessions.db")
     _rlm_backend = os.environ.get("RLM_BACKEND", "openai")
     _rlm_backend_kwargs = {"model_name": os.environ.get("RLM_MODEL_PLANNER", os.environ.get("RLM_MODEL", "gpt-4o-mini"))}
     _tier_backends, _tier_kwargs = build_tier_backends(_rlm_backend, _rlm_backend_kwargs)
     session_manager = SessionManager(
-        db_path=os.environ.get("RLM_DB_PATH", "rlm_sessions.db"),
+        db_path=db_path,
         state_root=os.environ.get("RLM_STATE_ROOT", "./rlm_states"),
         default_rlm_kwargs={
             "backend": _rlm_backend,
@@ -89,4 +102,22 @@ def build_local_workbench_runtime() -> WorkbenchRuntime:
         exec_approval=runtime_guard.approvals,
         exec_approval_required=runtime_guard.exec_approval_required,
     )
-    return WorkbenchRuntime(session_manager=session_manager, supervisor=supervisor, dispatch_services=dispatch_services)
+
+    # ── Multichannel bootstrapping ────────────────────────────────────
+    # Mesmo bootstrap do api.py lifespan → TUI local ganha CSR,
+    # MessageBus, ChannelRegistry e adapter registration.
+    # start_gateways=False: sem server HTTP, gateways ativos (Telegram
+    # polling) não funcionariam — mas os canais ficam registrados no CSR.
+    channel_infra = bootstrap_channel_infrastructure(
+        session_manager=session_manager,
+        event_bus=event_bus,
+        db_path=db_path,
+        start_gateways=False,
+    )
+
+    return WorkbenchRuntime(
+        session_manager=session_manager,
+        supervisor=supervisor,
+        dispatch_services=dispatch_services,
+        channel_infra=channel_infra,
+    )

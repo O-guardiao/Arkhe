@@ -50,16 +50,8 @@ from rlm.server.drain import DrainGuard
 from rlm.server.health_monitor import HealthMonitor
 from rlm.plugins.channel_registry import ChannelRegistry, sanitize_text_payload
 from rlm.plugins import PluginLoader
-from rlm.core.comms.outbox import OutboxStore
-from rlm.core.comms.routing_policy import RoutingPolicy
-from rlm.core.comms.message_bus import init_message_bus, get_message_bus
-from rlm.core.comms.delivery_worker import DeliveryWorker
-from rlm.core.comms.channel_status import (
-    ChannelStatusRegistry,
-    init_channel_status_registry,
-    get_channel_status_registry,
-)
-from rlm.core.comms.channel_probe import TelegramProber, DiscordProber, NullProber
+from rlm.core.comms.message_bus import get_message_bus
+from rlm.core.comms.channel_status import ChannelStatusRegistry
 from rlm.server.message_envelope import InboundMessage
 from rlm.runtime import build_runtime_guard_from_env
 from rlm.server.event_router import EventRouter
@@ -340,63 +332,34 @@ async def lifespan(app: FastAPI):
     app.state.health_monitor.start()
     gateway_log.info("✓ Health Monitor started")
 
-    # ── Channel Status Registry (Service Discovery — Camada 4) ────────
-    _csr = init_channel_status_registry()
-    app.state.channel_status_registry = _csr
+    # ── Channel Infrastructure (bootstrap unificado — Camada 4) ─────
+    # ANTES: ~140 linhas de init inline (CSR, MessageBus, adapters,
+    #   probers, Telegram gateway, Discord/WhatsApp/Slack/WebChat/TUI).
+    # AGORA: bootstrap_channel_infrastructure() centraliza tudo.
+    # Qualquer canal futuro: 1) crie ChannelAdapter, 2) adicione
+    # ChannelDescriptor em channel_bootstrap._CHANNEL_DESCRIPTORS. Fim.
+    from rlm.core.comms.channel_bootstrap import bootstrap_channel_infrastructure
 
-    # MessageBus + DeliveryWorker (multichannel Phase 1)
-    _outbox = OutboxStore(db_path=db_path)
-    _bus = init_message_bus(
-        outbox=_outbox,
-        routing_policy=RoutingPolicy(),
+    _channel_infra = bootstrap_channel_infrastructure(
+        session_manager=app.state.session_manager,
         event_bus=app.state.event_bus,
+        db_path=db_path,
+        start_gateways=False,       # gateways ativos iniciam abaixo
+        config=_cfg,
     )
-    app.state.message_bus = _bus
-    app.state.delivery_worker = DeliveryWorker(
-        outbox=_outbox,
-        channel_registry=ChannelRegistry,
-        event_bus=app.state.event_bus,
-    )
-    await app.state.delivery_worker.start()
+    app.state.channel_status_registry = _channel_infra.csr
+    app.state.message_bus = _channel_infra.message_bus
+    app.state.delivery_worker = _channel_infra.delivery_worker
+    app.state.use_message_bus = _channel_infra.use_message_bus
+    app.state.channel_infra = _channel_infra
+
+    await _channel_infra.delivery_worker.start()
     app.state.health_monitor.register(
-        "delivery_worker", app.state.delivery_worker.is_alive,
+        "delivery_worker", _channel_infra.delivery_worker.is_alive,
     )
-    gateway_log.info("✓ MessageBus + DeliveryWorker started")
+    gateway_log.info("✓ Channel bootstrap complete — DeliveryWorker started")
 
-    # Feature flag: MessageBus routing (Phase 3 multichannel)
-    # Respeita env var OU config rlm.toml [message_bus].enabled
-    _use_bus = (
-        os.environ.get("RLM_USE_MESSAGE_BUS", "").lower() in ("true", "1", "yes")
-        or getattr(_cfg, "message_bus", None) is not None and _cfg.message_bus.enabled
-    )
-    app.state.use_message_bus = _use_bus
-    if _use_bus:
-        gateway_log.info("✓ MessageBus routing ENABLED (RLM_USE_MESSAGE_BUS=true)")
-    else:
-        gateway_log.info("• MessageBus routing disabled (set RLM_USE_MESSAGE_BUS=true to enable)")
-
-    # WebChatAdapter — registra se webchat disponível
-    if _HAS_WEBCHAT:
-        try:
-            from rlm.server.webchat import WebChatAdapter
-            ChannelRegistry.register(
-                "webchat", WebChatAdapter(app.state.session_manager),
-            )
-            gateway_log.info("✓ WebChatAdapter registered")
-        except Exception as exc:
-            gateway_log.warn(f"WebChatAdapter registration failed: {exc}")
-
-    # TuiAdapter — registra para entrega cross-channel a sessoes TUI
-    try:
-        from rlm.server.operator_bridge import TuiAdapter
-        ChannelRegistry.register(
-            "tui", TuiAdapter(app.state.session_manager),
-        )
-        gateway_log.info("✓ TuiAdapter registered")
-    except Exception as exc:
-        gateway_log.warn(f"TuiAdapter registration failed: {exc}")
-
-    # Telegram Gateway (bridge mode) — inicia como thread daemon se token definido
+    # Telegram Gateway (server-specific — requer endpoints HTTP)
     app.state.telegram_gateway = None
     _tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if _tg_token:
@@ -415,71 +378,10 @@ async def lifespan(app: FastAPI):
             _tg_gw = TelegramGateway(config=_tg_config)
             _tg_gw.run_in_thread()
             app.state.telegram_gateway = _tg_gw
-
-            # Service Discovery: probe Telegram → captura identidade do bot
-            _tg_prober = TelegramProber(token=_tg_token)
-            _csr.register(
-                "telegram",
-                prober=_tg_prober,
-                configured=True,
-                meta={"api_base_url": _tg_api_url},
-            )
-            _csr.mark_running("telegram")
             gateway_log.info(f"✓ Telegram Gateway started (bridge → {_tg_api_url})")
         except Exception as e:
             gateway_log.error(f"Telegram Gateway failed to start: {e}")
-            _csr.register("telegram", configured=True, enabled=True)
-            _csr.mark_error("telegram", error=str(e))
-    else:
-        gateway_log.info("• Telegram Gateway: disabled (TELEGRAM_BOT_TOKEN not set)")
-        _csr.register("telegram", configured=False, enabled=False)
-
-    # Service Discovery: Discord
-    _discord_token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
-    _discord_configured = bool(
-        os.environ.get("DISCORD_APP_PUBLIC_KEY")
-        or os.environ.get("RLM_DISCORD_SKIP_VERIFY", "").lower() == "true"
-    )
-    if _discord_configured and _HAS_DISCORD_GW:
-        _d_prober = DiscordProber(bot_token=_discord_token) if _discord_token else NullProber("discord")
-        _csr.register("discord", prober=_d_prober, configured=True)
-        _csr.mark_running("discord")
-    else:
-        _csr.register("discord", configured=_discord_configured, enabled=_discord_configured)
-
-    # Service Discovery: WhatsApp (webhook-only — sem probe ativo)
-    _wa_configured = bool(os.environ.get("WHATSAPP_VERIFY_TOKEN"))
-    if _wa_configured and _HAS_WHATSAPP_GW:
-        _csr.register("whatsapp", prober=NullProber("whatsapp"), configured=True)
-        _csr.mark_running("whatsapp")
-    else:
-        _csr.register("whatsapp", configured=_wa_configured, enabled=_wa_configured)
-
-    # Service Discovery: Slack (webhook-only — sem probe ativo)
-    _slack_configured = bool(
-        os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("SLACK_SIGNING_SECRET")
-    )
-    if _slack_configured and _HAS_SLACK_GW:
-        _csr.register("slack", prober=NullProber("slack"), configured=True)
-        _csr.mark_running("slack")
-    else:
-        _csr.register("slack", configured=_slack_configured, enabled=_slack_configured)
-
-    # Service Discovery: WebChat
-    if _HAS_WEBCHAT:
-        _csr.register("webchat", prober=NullProber("webchat"), configured=True)
-        _csr.mark_running("webchat")
-    else:
-        _csr.register("webchat", configured=False, enabled=False)
-
-    # Service Discovery: TUI (sempre disponivel — thin-client via operator_bridge)
-    _csr.register("tui", prober=NullProber("tui"), configured=True)
-    _csr.mark_running("tui")
-
-    gateway_log.info(
-        f"✓ ChannelStatusRegistry: {_csr.summary()['total']} channels "
-        f"({_csr.summary()['running']} running, {_csr.summary()['healthy']} healthy)"
-    )
+            _channel_infra.csr.mark_error("telegram", error=str(e))
 
     gateway_log.info("Ready to receive events.")
 
