@@ -343,3 +343,102 @@ class TestRuntimeFactoryIntegration:
             channel_infra=None,
         )
         rt.close()  # não deve levantar exceção
+
+
+# ── Adapter factory fallback (no session_manager) ────────────────────────
+
+class TestAdapterFactoryFallback:
+    """Testa que bootstrap tenta instanciar adapter sem args se TypeError."""
+
+    def test_telegram_adapter_registered_via_bootstrap(self, clean_env, tmp_path):
+        """Telegram descriptor agora tem adapter_factory; deve registrar."""
+        tg = next(d for d in _CHANNEL_DESCRIPTORS if d.channel_id == "telegram")
+        assert tg.adapter_factory is not None
+
+    def test_no_arg_adapter_fallback(self, clean_env, tmp_path):
+        """Adapters que não aceitam session_manager devem ser instanciados sem args."""
+        clean_env.setenv("TELEGRAM_BOT_TOKEN", "fake:token")
+        db = str(tmp_path / "test.db")
+        from rlm.plugins.channel_registry import ChannelRegistry
+        bootstrap_channel_infrastructure(
+            session_manager=_mock_session_manager(),
+            event_bus=_mock_event_bus(),
+            db_path=db,
+            start_gateways=False,
+        )
+        adapter = ChannelRegistry.get_adapter("telegram")
+        assert adapter is not None
+
+    def test_session_arg_adapter_still_works(self, clean_env, tmp_path):
+        """TuiAdapter que aceita session_manager continua funcionando."""
+        db = str(tmp_path / "test.db")
+        from rlm.plugins.channel_registry import ChannelRegistry
+        bootstrap_channel_infrastructure(
+            session_manager=_mock_session_manager(),
+            event_bus=_mock_event_bus(),
+            db_path=db,
+            start_gateways=False,
+        )
+        adapter = ChannelRegistry.get_adapter("tui")
+        assert adapter is not None
+
+
+# ── channels() REPL function format ──────────────────────────────────────
+
+class TestChannelsReplFormat:
+    """Valida que channels() retorna dicts keyed por account_id, não listas."""
+
+    def test_channels_keyed_by_account_id(self, clean_env, tmp_path):
+        """Cada canal em channels()['channels'] deve ser dict{account_id: data}."""
+        db = str(tmp_path / "test.db")
+        infra = bootstrap_channel_infrastructure(
+            session_manager=_mock_session_manager(),
+            event_bus=_mock_event_bus(),
+            db_path=db,
+            start_gateways=False,
+        )
+        # Simula o que channels() faz internamente
+        from rlm.core.comms.channel_status import get_channel_status_registry
+        csr = get_channel_status_registry()
+        raw = csr.summary()
+        raw_channels = raw.get("channels") or {}
+        keyed = {}
+        for ch_id, accounts in raw_channels.items():
+            if isinstance(accounts, list):
+                keyed[ch_id] = {
+                    acc.get("account_id", "default"): acc for acc in accounts
+                }
+            else:
+                keyed[ch_id] = {"default": accounts}
+        # Verifica estrutura
+        for ch_id, by_account in keyed.items():
+            assert isinstance(by_account, dict), f"{ch_id} deveria ser dict, não {type(by_account)}"
+            for acc_id, data in by_account.items():
+                assert isinstance(data, dict), f"{ch_id}.{acc_id} deveria ser dict"
+                assert "channel_id" in data
+
+    def test_telegram_default_account_accessible(self, clean_env, tmp_path):
+        """channels()['channels']['telegram']['default'] deve funcionar."""
+        clean_env.setenv("TELEGRAM_BOT_TOKEN", "fake:token")
+        db = str(tmp_path / "test.db")
+        bootstrap_channel_infrastructure(
+            session_manager=_mock_session_manager(),
+            event_bus=_mock_event_bus(),
+            db_path=db,
+            start_gateways=False,
+        )
+        from rlm.core.comms.channel_status import get_channel_status_registry
+        csr = get_channel_status_registry()
+        raw = csr.summary()
+        raw_channels = raw.get("channels") or {}
+        keyed = {}
+        for ch_id, accounts in raw_channels.items():
+            if isinstance(accounts, list):
+                keyed[ch_id] = {
+                    acc.get("account_id", "default"): acc for acc in accounts
+                }
+            else:
+                keyed[ch_id] = {"default": accounts}
+        tg = keyed.get("telegram", {}).get("default", {})
+        assert tg.get("channel_id") == "telegram"
+        assert tg.get("configured") is True

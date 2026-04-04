@@ -57,6 +57,7 @@ _CHANNEL_DESCRIPTORS: tuple[ChannelDescriptor, ...] = (
     ChannelDescriptor(
         channel_id="telegram",
         env_keys=("TELEGRAM_BOT_TOKEN",),
+        adapter_factory="rlm.plugins.telegram:TelegramAdapter",
         prober_factory="rlm.core.comms.channel_probe:TelegramProber",
         gateway_module="rlm.server.telegram_gateway",
     ),
@@ -219,7 +220,11 @@ def bootstrap_channel_infrastructure(
         if desc.adapter_factory and configured and gw_available:
             try:
                 adapter_cls = _import_attr(desc.adapter_factory)
-                adapter = adapter_cls(session_manager)
+                # Tenta com session_manager; se o adapter não aceitar, tenta sem args.
+                try:
+                    adapter = adapter_cls(session_manager)
+                except TypeError:
+                    adapter = adapter_cls()
                 ChannelRegistry.register(desc.channel_id, adapter)
                 _log.info(f"Adapter registered: {desc.channel_id}")
             except Exception as exc:

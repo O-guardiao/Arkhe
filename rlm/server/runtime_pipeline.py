@@ -321,20 +321,104 @@ def _apply_repl_injections(
         """Retorna snapshot de todos canais com identidade e status runtime.
 
         Returns:
-            dict com total, running, healthy e detalhe por canal.
+            dict com keys:
+              total, running, healthy,
+              channels: {"telegram": {"default": {...}}, "discord": {"default": {...}}, ...}
+            Cada canal é um dict keyed por account_id (normalmente "default").
         """
         try:
             from rlm.core.comms.channel_status import get_channel_status_registry
             csr = get_channel_status_registry()
-            return csr.summary()
+            raw = csr.summary()
+            # Reestrutura: lista → dict keyed por account_id (mais intuitivo para REPL/LLM)
+            raw_channels = raw.get("channels") or {}
+            keyed: dict[str, dict[str, Any]] = {}
+            for ch_id, accounts in raw_channels.items():
+                if isinstance(accounts, list):
+                    keyed[ch_id] = {
+                        acc.get("account_id", "default"): acc for acc in accounts
+                    }
+                else:
+                    keyed[ch_id] = {"default": accounts}
+            raw["channels"] = keyed
+            return raw
         except Exception:
             return {"error": "Channel Status Registry nao inicializado"}
+
+    def send_telegram(text: str, chat_id: str | int | None = None) -> str:
+        """Envia mensagem para Telegram com auto-discovery de chat_id.
+
+        Se chat_id não fornecido, busca automaticamente via:
+          1. env TELEGRAM_OWNER_CHAT_ID
+          2. config rlm.toml channels.telegram.owner_chat_id
+          3. CSR meta (last_chat_id salvo pelo gateway)
+
+        Args:
+            text: Texto da mensagem.
+            chat_id: ID do chat (opcional — auto-descoberto se omitido).
+
+        Returns:
+            "ok" se enviado, "error: <motivo>" caso contrário.
+        """
+        import os as _os
+
+        if not chat_id:
+            # (1) env var
+            chat_id = _os.environ.get("TELEGRAM_OWNER_CHAT_ID", "").strip()
+            # (2) config
+            if not chat_id:
+                try:
+                    from rlm.core.config import get_config
+                    cfg = get_config()
+                    tg_cfg = cfg.channels.get("telegram")
+                    chat_id = str(getattr(tg_cfg, "owner_chat_id", "") or "") if tg_cfg else ""
+                except Exception:
+                    pass
+            # (3) CSR meta
+            if not chat_id:
+                try:
+                    from rlm.core.comms.channel_status import get_channel_status_registry
+                    _csr = get_channel_status_registry()
+                    _snap = _csr.get("telegram")
+                    if _snap and _snap.meta:
+                        chat_id = str(_snap.meta.get("last_chat_id", ""))
+                except Exception:
+                    pass
+            # (4) telegram_get_updates fallback
+            if not chat_id:
+                _updates = telegram_get_updates(limit=1)
+                if _updates:
+                    chat_id = _updates[0].get("chat_id", "")
+
+        if not chat_id:
+            return "error: chat_id nao encontrado (defina TELEGRAM_OWNER_CHAT_ID)"
+
+        token = _os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        if not token:
+            return "error: TELEGRAM_BOT_TOKEN nao definido"
+
+        try:
+            import urllib.request, urllib.parse, json as _json
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            data = urllib.parse.urlencode({
+                "chat_id": str(chat_id),
+                "text": sanitize_text_payload(text),
+                "parse_mode": "Markdown",
+            }).encode()
+            with urllib.request.urlopen(url, data=data, timeout=15) as r:
+                resp = _json.loads(r.read())
+                if resp.get("ok"):
+                    return "ok"
+                return f"error: {resp.get('description', 'unknown')}"
+        except Exception as exc:
+            return f"error: {exc}"
 
     repl_locals["reply"] = reply
     repl_locals["reply_audio"] = reply_audio
     repl_locals["send_media"] = send_media
     repl_locals["telegram_get_updates"] = telegram_get_updates
     repl_locals["channels"] = channels
+    repl_locals["send_telegram"] = send_telegram
     repl_locals["execution_policy"] = execution_policy
 
     # Cross-channel send — Phase 4 multichannel skill
