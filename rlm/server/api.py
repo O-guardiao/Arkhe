@@ -1148,6 +1148,45 @@ async def channels_probe(channel_id: str, request: Request):
     }
 
 
+@app.post("/api/channels/send")
+async def channels_send(request: Request):
+    """
+    Envia mensagem cross-channel via MessageBus ou ChannelRegistry.
+
+    Body JSON: {"target_client_id": "telegram:12345", "message": "texto"}
+    """
+    _require_admin_api_auth(request)
+    body = await request.json()
+    target = body.get("target_client_id", "").strip()
+    message = body.get("message", "").strip()
+    if not target or not message:
+        raise HTTPException(400, "target_client_id e message são obrigatórios")
+
+    # Tenta via MessageBus primeiro; fallback para ChannelRegistry
+    try:
+        from rlm.core.comms.message_bus import get_message_bus
+        from rlm.core.comms.envelope import Envelope, Direction
+        bus = get_message_bus()
+        env = Envelope(
+            source_channel="tui",
+            source_client_id="operator",
+            target_client_id=target,
+            direction=Direction.OUTBOUND,
+            text=message,
+        )
+        eid = bus.enqueue_outbound(env)
+        return {"status": "queued", "envelope_id": eid, "via": "message_bus"}
+    except RuntimeError:
+        pass
+
+    try:
+        from rlm.plugins.channel_registry import ChannelRegistry
+        ChannelRegistry.reply(target, message)
+        return {"status": "sent", "via": "channel_registry"}
+    except Exception as exc:
+        raise HTTPException(502, f"Falha ao enviar: {exc}") from exc
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------

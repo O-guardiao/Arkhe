@@ -130,3 +130,21 @@ class LiveWorkbenchAPI:
         if not isinstance(payload, dict):
             raise LiveWorkbenchError(f"Resposta invalida do backend vivo em {path}")
         return payload
+
+    # ── Channel status endpoints ──────────────────────────────────────
+
+    def fetch_channels_status(self) -> dict[str, Any]:
+        """GET /api/channels/status — retorna snapshot de todos os canais."""
+        return self._request_json("GET", "/api/channels/status")
+
+    def probe_channel(self, channel_id: str) -> dict[str, Any]:
+        """POST /api/channels/{channel_id}/probe — probe sob demanda."""
+        return self._request_json("POST", f"/api/channels/{channel_id}/probe")
+
+    def cross_channel_send(self, target_client_id: str, message: str) -> dict[str, Any]:
+        """POST /api/channels/send — envia mensagem cross-channel."""
+        return self._request_json(
+            "POST",
+            "/api/channels/send",
+            {"target_client_id": target_client_id, "message": message},
+        )

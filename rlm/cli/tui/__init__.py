@@ -15,6 +15,9 @@ from rlm.cli.tui.runtime_factory import (
 _LAZY = {
     "RuntimeWorkbench": "rlm.cli.commands.workbench",
     "run_workbench": "rlm.cli.commands.workbench",
+    "ChannelConsoleState": "rlm.cli.tui.channel_console",
+    "build_channel_panel": "rlm.cli.tui.channel_console",
+    "refresh_channel_state": "rlm.cli.tui.channel_console",
 }
 
 

@@ -18,6 +18,11 @@ from rich.tree import Tree
 
 from rlm.cli.context import CliContext
 from rlm.cli.tui.runtime_factory import WorkbenchRuntime, build_local_workbench_runtime
+from rlm.cli.tui.channel_console import (
+    ChannelConsoleState,
+    build_channel_panel,
+    refresh_channel_state,
+)
 from rlm.core.observability.operator_surface import apply_operator_command, build_activity_payload, dispatch_operator_prompt
 
 
@@ -50,6 +55,7 @@ class RuntimeWorkbench:
         self.last_notice = "Use /help para ver os comandos do operador."
         self._input_buffer = ""
         self._use_polled_input = sys.platform == "win32"
+        self._channel_state = ChannelConsoleState()
 
         if self._live_api is not None:
             info = self._live_api.ensure_session(client_id)
@@ -191,13 +197,67 @@ class RuntimeWorkbench:
         command = parts[0].lower()
 
         if command == "/help":
-            self.last_notice = "Comandos: /pause, /resume, /checkpoint, /focus, /winner, /priority, /note, /watch, /quit"
+            self.last_notice = (
+                "Comandos: /pause, /resume, /checkpoint, /focus, /winner, "
+                "/priority, /note, /watch, /channels, /send, /probe, /quit"
+            )
             return False
         if command in {"/quit", "/exit"}:
             return True
         if command == "/watch":
             duration = float(parts[1]) if len(parts) > 1 else None
             self.watch_until_idle(duration_s=duration)
+            return False
+
+        # ── Channel commands ──────────────────────────────────────
+        if command == "/channels":
+            refresh_channel_state(self._channel_state, live_api=self._live_api)
+            total = len(self._channel_state.snapshots)
+            running = sum(1 for s in self._channel_state.snapshots if s.running)
+            self.last_notice = f"Canais atualizados: {running}/{total} ativos."
+            return False
+
+        if command == "/probe":
+            if len(parts) < 2:
+                self.last_notice = "Uso: /probe <channel_id>"
+                return False
+            channel_id = parts[1]
+            try:
+                if self._is_live:
+                    result = self._live_api.probe_channel(channel_id)
+                    self.last_notice = f"Probe {channel_id}: {result.get('status', 'ok')}"
+                else:
+                    try:
+                        from rlm.core.comms.channel_status import get_channel_status_registry
+                        csr = get_channel_status_registry()
+                        csr.probe(channel_id)
+                        self.last_notice = f"Probe {channel_id}: executado (local)"
+                    except (ImportError, RuntimeError):
+                        self.last_notice = "CSR indisponivel no modo local."
+            except Exception as exc:
+                self.last_notice = f"Probe falhou: {exc}"
+            return False
+
+        if command == "/send":
+            if len(parts) < 3:
+                self.last_notice = "Uso: /send <target_client_id> <mensagem>"
+                return False
+            target = parts[1]
+            message = " ".join(parts[2:])
+            try:
+                if self._is_live:
+                    result = self._live_api.cross_channel_send(target, message)
+                    self.last_notice = f"Enviado para {target}: {result.get('status', 'ok')}"
+                else:
+                    try:
+                        from rlm.plugins.channel_registry import ChannelRegistry
+                        ChannelRegistry.reply(target, message)
+                        self.last_notice = f"Enviado para {target} (local)."
+                    except (ImportError, RuntimeError):
+                        self.last_notice = "ChannelRegistry indisponivel no modo local."
+            except Exception as exc:
+                self.last_notice = f"Envio falhou: {exc}"
+            self._channel_state.last_send_result = self.last_notice
             return False
 
         command_type, payload, branch_id = self._translate_operator_command(parts)
@@ -289,16 +349,28 @@ class RuntimeWorkbench:
         except Exception:
             activity = {"session": {}, "event_log": [], "runtime": None}
         runtime = activity.get("runtime") or {}
+
+        # Atualiza canais a cada render (dados vem do cache do state)
+        refresh_channel_state(self._channel_state, live_api=self._live_api)
+
         layout = Layout(name="root")
         layout.split_column(
             Layout(self._build_header(activity), name="header", size=5),
             Layout(name="body", ratio=1),
             Layout(self._build_footer(runtime), name="footer", size=6),
         )
+
+        # Coluna direita: eventos (topo) + canais (base)
+        right_column = Layout(name="right_col", size=48)
+        right_column.split_column(
+            Layout(self._build_events_panel(activity, runtime), name="events", ratio=2),
+            Layout(build_channel_panel(self._channel_state), name="channels", ratio=1),
+        )
+
         layout["body"].split_row(
             Layout(self._build_branches_panel(runtime), name="branches", size=38),
             Layout(self._build_messages_panel(runtime), name="messages", ratio=2),
-            Layout(self._build_events_panel(activity, runtime), name="events", size=48),
+            right_column,
         )
         return layout
 
@@ -411,6 +483,7 @@ class RuntimeWorkbench:
         help_text.append("/focus <branch> [nota]  /winner <branch>\n")
         help_text.append("/priority <branch> <prio> [nota]\n")
         help_text.append("/checkpoint [nome]  /note <texto>\n")
+        help_text.append("/channels  /probe <canal>  /send <id> <msg>\n")
         help_text.append("/watch [segundos]  /quit\n")
         help_text.append("Texto livre envia prompt ao runtime", style="dim")
 
