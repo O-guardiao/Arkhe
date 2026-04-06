@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { CliContext } from "./context.js";
 
 // ---------------------------------------------------------------------------
@@ -32,8 +33,9 @@ function walkToCheckoutRoot(start: string): string | null {
 }
 
 function packageCheckoutRoot(): string {
-  // __dirname aponta para packages/cli/src — subir 3 níveis => raiz do repo
-  return resolve(__dirname, "..", "..", "..");
+  // ESM: import.meta.url → file path → packages/cli/src → subir 3 níveis => raiz do repo
+  const thisFile = fileURLToPath(import.meta.url);
+  return resolve(dirname(thisFile), "..", "..", "..");
 }
 
 function resolveProjectRoot(context: CliContext, targetPath?: string): string | null {
@@ -225,9 +227,9 @@ export async function updateInstallation(
   }
   ok(`Código atualizado: ${behindCount} commit(s) aplicados.`);
 
-  // TypeScript: usa pnpm (em vez de uv)
+  // TypeScript: usa pnpm (em vez de uv) para dependências Node
   const pkgManager = context.hasTool("pnpm") ? "pnpm" : "npm";
-  info(`Reinstalando dependências com ${pkgManager} install...`);
+  info(`Reinstalando dependências Node com ${pkgManager} install...`);
   const install = spawnSync(pkgManager, ["install"], {
     cwd: projectRoot, encoding: "utf8", timeout: 120_000,
     stdio: "inherit",
@@ -236,7 +238,22 @@ export async function updateInstallation(
     err(`Falha no ${pkgManager} install.`);
     return 1;
   }
-  ok("Dependências sincronizadas.");
+  ok("Dependências Node sincronizadas.");
+
+  // Python: se uv está disponível e há pyproject.toml, sincroniza deps Python
+  if (context.hasTool("uv") && existsSync(join(projectRoot, "pyproject.toml"))) {
+    info("Reinstalando dependências Python com uv sync...");
+    const uvSync = spawnSync("uv", ["sync"], {
+      cwd: projectRoot, encoding: "utf8", timeout: 120_000,
+      stdio: "inherit",
+    });
+    if (uvSync.status !== 0) {
+      err("Falha no uv sync. Dependências Python podem estar desatualizadas.");
+      // Não aborta — deps Node já estão ok
+    } else {
+      ok("Dependências Python sincronizadas.");
+    }
+  }
 
   restoreStash();
 

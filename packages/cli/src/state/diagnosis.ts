@@ -67,24 +67,35 @@ function diagnosisSeverity(classification: DiagnosisClassification): DiagnosisSe
 
 function defaultState(context: CliContext): LauncherState {
   return {
-    schemaVersion: 1,
-    lastKnownStatus: "unknown",
-    lastLaunchMode: null,
-    lastOperation: null,
-    lastValidBootstrap: {
-      succeededAt: null,
-      source: null,
-      mode: null,
-      apiEnabled: false,
-      wsEnabled: false,
+    schema_version: 1,
+    updated_at: "",
+    last_known_status: "unknown",
+    last_launch_mode: "",
+    last_operation: "",
+    last_valid_bootstrap: {
+      source: "",
+      mode: "",
+      succeeded_at: "",
+      api_enabled: false,
+      ws_enabled: false,
     },
-    runtimeArtifacts: {
-      daemonManager: null,
-      daemonDefinitionPath: null,
-      projectRoot: null,
-      envPath: null,
+    runtime_artifacts: {
+      runtime_dir: "",
+      log_dir: "",
+      api_pid_file: "",
+      ws_pid_file: "",
+      api_log_file: "",
+      ws_log_file: "",
+      daemon_manager: "",
+      daemon_definition: "",
     },
-    updatedAt: null,
+    metadata: {
+      project_root: "",
+      cwd: "",
+      env_path: "",
+      node_executable: "",
+      platform: "",
+    },
   };
 }
 
@@ -100,7 +111,7 @@ export async function buildLauncherStateDiagnosis(
 
   const statePath = context.paths.launcherStatePath;
   const stateExists = existsSync(statePath);
-  const state = stateExists ? loadLauncherState(context) ?? defaultState(context) : defaultState(context);
+  const state = stateExists ? loadLauncherState(context.paths.stateRoot) ?? defaultState(context) : defaultState(context);
 
   const pidDir = context.paths.runtimeDir;
   const apiPidPath = join(pidDir, "api.pid");
@@ -111,7 +122,7 @@ export async function buildLauncherStateDiagnosis(
   const wsPidAlive = wsPid !== null && pidAlive(wsPid);
   const apiPortOpen = await portAcceptingConnections(context.apiHost(), context.apiPort());
   const wsPortOpen = await portAcceptingConnections(context.wsHost(), context.wsPort());
-  const persistedRunning = state.lastKnownStatus === "running";
+  const persistedRunning = state.last_known_status === "running";
   const localRuntimeActive = healthOnline || apiPidAlive || wsPidAlive || apiPortOpen || wsPortOpen;
   const summary = summarizeLauncherState(state);
 
@@ -155,11 +166,11 @@ export async function buildLauncherStateDiagnosis(
       persistedRunning,
     },
     persisted: {
-      lastKnownStatus: state.lastKnownStatus,
-      lastLaunchMode: state.lastLaunchMode,
-      lastOperation: state.lastOperation,
-      lastValidBootstrapAt: state.lastValidBootstrap.succeededAt,
-      daemonManager: state.runtimeArtifacts.daemonManager,
+      lastKnownStatus: state.last_known_status,
+      lastLaunchMode: state.last_launch_mode,
+      lastOperation: state.last_operation,
+      lastValidBootstrapAt: state.last_valid_bootstrap.succeeded_at,
+      daemonManager: state.runtime_artifacts.daemon_manager,
     },
   };
 }

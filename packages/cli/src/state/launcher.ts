@@ -7,6 +7,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
 import { homedir, platform } from "node:os";
+import type { CliContext } from "../context.js";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -178,54 +179,74 @@ export function updateLauncherState(
   return state;
 }
 
-/** Marca bootstrap bem-sucedido. */
+/** Marca bootstrap bem-sucedido. Fiel a mark_bootstrap_success(context, *, source, mode, ...) */
 export function markBootstrapSuccess(
-  stateRoot: string,
-  opts: { source: string; mode: string; api_enabled: boolean; ws_enabled: boolean }
+  context: CliContext,
+  opts: { source: string; mode: string; apiEnabled: boolean; wsEnabled: boolean }
 ): LauncherState {
   return updateLauncherState((s) => {
     s.last_known_status = "running";
     s.last_launch_mode = opts.mode;
-    s.last_operation = "start";
+    s.last_operation = opts.source;
     s.last_valid_bootstrap = {
       source: opts.source,
       mode: opts.mode,
       succeeded_at: utcNow(),
-      api_enabled: opts.api_enabled,
-      ws_enabled: opts.ws_enabled,
+      api_enabled: opts.apiEnabled,
+      ws_enabled: opts.wsEnabled,
     };
-  }, stateRoot);
+  }, context.paths.stateRoot);
 }
 
-/** Marca runtime como parado. */
-export function markStopped(stateRoot = defaultStateRoot()): LauncherState {
+/** Marca runtime como parado. Fiel a mark_stopped(context) */
+export function markStopped(context: CliContext): LauncherState {
   return updateLauncherState((s) => {
     s.last_known_status = "stopped";
     s.last_operation = "stop";
-  }, stateRoot);
+  }, context.paths.stateRoot);
 }
 
-/** Marca status de runtime (string livre: running, stopped, error). */
-export function markRuntimeStatus(status: string, stateRoot = defaultStateRoot()): LauncherState {
-  return updateLauncherState((s) => { s.last_known_status = status; }, stateRoot);
-}
-
-/** Marca instalação de daemon. */
-export function markDaemonInstalled(
-  daemonManager: string,
-  daemonDefinition: string,
-  stateRoot = defaultStateRoot()
+/** Marca status de runtime com detecção de modo. Fiel a mark_runtime_status(context, *, api_running, ws_running) */
+export function markRuntimeStatus(
+  context: CliContext,
+  opts: { apiRunning: boolean; wsRunning: boolean }
 ): LauncherState {
   return updateLauncherState((s) => {
-    s.runtime_artifacts.daemon_manager = daemonManager;
-    s.runtime_artifacts.daemon_definition = daemonDefinition;
-    s.last_operation = "install-daemon";
-  }, stateRoot);
+    if (opts.apiRunning && opts.wsRunning) {
+      s.last_known_status = "running";
+      s.last_launch_mode = s.last_launch_mode || "background-combined";
+    } else if (opts.apiRunning) {
+      s.last_known_status = "running";
+      s.last_launch_mode = "api-only";
+    } else if (opts.wsRunning) {
+      s.last_known_status = "running";
+      s.last_launch_mode = "ws-only";
+    } else {
+      s.last_known_status = "stopped";
+    }
+  }, context.paths.stateRoot);
 }
 
-/** Marca operação de update. */
-export function markUpdate(stateRoot = defaultStateRoot()): LauncherState {
-  return updateLauncherState((s) => { s.last_operation = "update"; }, stateRoot);
+/** Marca instalação de daemon. Fiel a mark_daemon_installed(context, *, manager, definition_path, ...) */
+export function markDaemonInstalled(
+  context: CliContext,
+  opts: { manager: string; definitionPath: string; projectRoot?: string; envPath?: string }
+): LauncherState {
+  return updateLauncherState((s) => {
+    s.last_operation = `install:${opts.manager}`;
+    s.runtime_artifacts.daemon_manager = opts.manager;
+    s.runtime_artifacts.daemon_definition = resolve(opts.definitionPath);
+  }, context.paths.stateRoot);
+}
+
+/** Marca operação de update. Fiel a mark_update(context, *, restarted) */
+export function markUpdate(
+  context: CliContext,
+  opts: { restarted: boolean }
+): LauncherState {
+  return updateLauncherState((s) => {
+    s.last_operation = opts.restarted ? "update:restart" : "update";
+  }, context.paths.stateRoot);
 }
 
 /** Resumo legível do estado atual. */
