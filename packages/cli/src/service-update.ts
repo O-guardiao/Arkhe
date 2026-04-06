@@ -229,16 +229,46 @@ export async function updateInstallation(
 
   // TypeScript: usa pnpm (em vez de uv) para dependências Node
   const pkgManager = context.hasTool("pnpm") ? "pnpm" : "npm";
-  info(`Reinstalando dependências Node com ${pkgManager} install...`);
-  const install = spawnSync(pkgManager, ["install"], {
-    cwd: projectRoot, encoding: "utf8", timeout: 120_000,
-    stdio: "inherit",
-  });
-  if (install.status !== 0) {
-    err(`Falha no ${pkgManager} install.`);
-    return 1;
+  const cliDir = join(projectRoot, "packages", "cli");
+  const hasCliPkg = existsSync(join(cliDir, "package.json"));
+
+  // Deps da raiz (se houver package.json na raiz)
+  if (existsSync(join(projectRoot, "package.json"))) {
+    info(`Reinstalando dependências Node (raiz) com ${pkgManager} install...`);
+    const installRoot = spawnSync(pkgManager, ["install"], {
+      cwd: projectRoot, encoding: "utf8", timeout: 120_000,
+      stdio: "inherit",
+    });
+    if (installRoot.status !== 0) {
+      warn(`${pkgManager} install na raiz falhou; continuando...`);
+    }
   }
-  ok("Dependências Node sincronizadas.");
+
+  // Deps do packages/cli
+  if (hasCliPkg) {
+    info(`Reinstalando dependências Node (packages/cli) com ${pkgManager} install...`);
+    const installCli = spawnSync(pkgManager, ["install"], {
+      cwd: cliDir, encoding: "utf8", timeout: 120_000,
+      stdio: "inherit",
+    });
+    if (installCli.status !== 0) {
+      err(`Falha no ${pkgManager} install em packages/cli.`);
+      return 1;
+    }
+    ok("Dependências Node (CLI) sincronizadas.");
+
+    // Rebuild do CLI (gera dist/index.js atualizado)
+    info("Reconstruindo CLI TypeScript...");
+    const build = spawnSync(pkgManager, ["run", "build"], {
+      cwd: cliDir, encoding: "utf8", timeout: 120_000,
+      stdio: "inherit",
+    });
+    if (build.status !== 0) {
+      err("Falha ao reconstruir CLI. Tente manualmente: npm run build em packages/cli.");
+      return 1;
+    }
+    ok("CLI reconstruído com sucesso.");
+  }
 
   // Python: se uv está disponível e há pyproject.toml, sincroniza deps Python
   if (context.hasTool("uv") && existsSync(join(projectRoot, "pyproject.toml"))) {
