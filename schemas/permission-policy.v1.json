@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkhe.dev/schemas/permission-policy.v1.json",
+  "title": "Permission Policy",
+  "description": "Política de permissões do sistema RLM. Define regras de autorização para execução de ferramentas. Inspirado no sistema de PolicyRule/PolicyCondition/PolicyAction do claw-code (Rust).",
+  "type": "object",
+  "required": ["version", "default_mode", "rules"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Versão do formato de política (semver)",
+      "const": "1",
+      "default": "1"
+    },
+    "default_mode": {
+      "type": "string",
+      "description": "Modo padrão quando nenhuma regra se aplica",
+      "enum": ["ReadOnly", "WorkspaceWrite", "DangerFullAccess", "Prompt"],
+      "default": "Prompt"
+    },
+    "rules": {
+      "type": "array",
+      "description": "Lista de regras em ordem de prioridade (maior priority = avaliada primeiro)",
+      "items": { "$ref": "#/$defs/PolicyRule" },
+      "minItems": 0
+    },
+    "allowed_tools": {
+      "type": "array",
+      "description": "Lista de allowlist explícita de ferramentas (bypassa Prompt para Allow)",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "default": []
+    },
+    "blocked_tools": {
+      "type": "array",
+      "description": "Lista de blocklist explícita de ferramentas (nega independente de regras)",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "default": []
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "PolicyRule": {
+      "type": "object",
+      "title": "Policy Rule",
+      "description": "Regra de política: se condition é verdadeira, aplica action",
+      "required": ["name", "condition", "action", "priority"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nome identificador da regra",
+          "examples": ["allow_read_only_tools", "block_dangerous_rm"]
+        },
+        "condition": { "$ref": "#/$defs/PolicyCondition" },
+        "action": { "$ref": "#/$defs/PolicyAction" },
+        "priority": {
+          "type": "integer",
+          "description": "Prioridade de avaliação (maior = avaliada primeiro). Regras com mesma prioridade são avaliadas em ordem de definição.",
+          "minimum": 0,
+          "maximum": 1000,
+          "default": 100
+        },
+        "reason": {
+          "type": "string",
+          "description": "Razão/documentação desta regra (para auditoria)",
+          "default": ""
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyCondition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "title": "ToolName Condition",
+          "description": "Corresponde a uma ferramenta específica pelo nome exato",
+          "required": ["type", "tool_name"],
+          "properties": {
+            "type": { "type": "string", "const": "tool_name" },
+            "tool_name": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "title": "ToolPattern Condition",
+          "description": "Corresponde a ferramentas pelo regex pattern no nome",
+          "required": ["type", "pattern"],
+          "properties": {
+            "type": { "type": "string", "const": "tool_pattern" },
+            "pattern": {
+              "type": "string",
+              "description": "Regex pattern para o nome da ferramenta",
+              "examples": ["^write_", "^bash$", ".*_dangerous$"]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "title": "Permission Condition",
+          "description": "Corresponde se a ferramenta requer o nível de permissão especificado",
+          "required": ["type", "permission"],
+          "properties": {
+            "type": { "type": "string", "const": "permission" },
+            "permission": {
+              "type": "string",
+              "enum": ["ReadOnly", "WorkspaceWrite", "DangerFullAccess"]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "title": "Always Condition",
+          "description": "Sempre verdadeira (regra catch-all)",
+          "required": ["type"],
+          "properties": {
+            "type": { "type": "string", "const": "always" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PolicyAction": {
+      "type": "string",
+      "description": "Ação a tomar quando a condição é verdadeira",
+      "enum": ["Allow", "Deny", "RequireApproval", "Audit"],
+      "description_map": {
+        "Allow": "Permite execução sem interrupção",
+        "Deny": "Bloqueia execução e retorna erro",
+        "RequireApproval": "Pausa e solicita aprovação humana antes de continuar",
+        "Audit": "Permite execução mas registra no log de auditoria"
+      }
+    }
+  },
+  "examples": [
+    {
+      "version": "1",
+      "default_mode": "Prompt",
+      "rules": [
+        {
+          "name": "allow_all_readonly",
+          "condition": { "type": "permission", "permission": "ReadOnly" },
+          "action": "Allow",
+          "priority": 200,
+          "reason": "Ferramentas de leitura são seguras e não modificam o sistema"
+        },
+        {
+          "name": "audit_workspace_writes",
+          "condition": { "type": "permission", "permission": "WorkspaceWrite" },
+          "action": "Audit",
+          "priority": 150,
+          "reason": "Registra todas as modificações de arquivo para auditoria"
+        },
+        {
+          "name": "require_approval_dangerous",
+          "condition": { "type": "permission", "permission": "DangerFullAccess" },
+          "action": "RequireApproval",
+          "priority": 300,
+          "reason": "Qualquer operação perigosa exige aprovação explícita do usuário"
+        },
+        {
+          "name": "block_rm_rf",
+          "condition": { "type": "tool_name", "tool_name": "bash" },
+          "action": "RequireApproval",
+          "priority": 500,
+          "reason": "bash pode executar comandos arbitrários"
+        }
+      ],
+      "allowed_tools": ["read_file", "glob_search", "grep_search"],
+      "blocked_tools": []
+    }
+  ]
+}

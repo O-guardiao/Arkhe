@@ -1,0 +1,32 @@
+{
+  "name": "@arkhe/daemon",
+  "version": "0.1.0",
+  "description": "System service lifecycle manager for RLM — Linux (systemd), macOS (launchd), Windows (schtasks)",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pino": "^9.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "@types/node": "^22.10.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

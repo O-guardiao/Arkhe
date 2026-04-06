@@ -56,6 +56,9 @@ class SessionRecord:
     total_tokens_used: int = 0        # Estimativa de tokens consumidos
     last_error: str = ""              # Último erro ocorrido
     metadata: dict = field(default_factory=dict)  # Dados extras (plugins carregados, etc.)
+    # Campos portados do TypeScript @arkhe/sessions SessionMetadata
+    label: str | None = None              # Label legível (gerado por session_label.generate_label)
+    tags: list[str] = field(default_factory=list)  # Tags livres para filtragem
 
     # Runtime (não persistido no SQLite)
     rlm_instance: Any = field(default=None, repr=False)
@@ -319,6 +322,16 @@ class SessionManager:
     def update_session(self, session: SessionRecord):
         """Persist in-memory session state to database."""
         session.last_active = _now_iso()
+        # Persiste label e tags dentro do JSON de metadata (zero schema change)
+        persisted_meta = dict(session.metadata or {})
+        if session.label is not None:
+            persisted_meta["_label"] = session.label
+        else:
+            persisted_meta.pop("_label", None)
+        if session.tags:
+            persisted_meta["_tags"] = session.tags
+        else:
+            persisted_meta.pop("_tags", None)
         with self._get_conn() as conn:
             conn.execute(
                 """UPDATE sessions SET
@@ -332,7 +345,7 @@ class SessionManager:
                     session.total_completions,
                     session.total_tokens_used,
                     session.last_error,
-                    json.dumps(session.metadata or {}),
+                    json.dumps(persisted_meta),
                     json.dumps(session.delivery_context or {}),
                     session.session_id,
                 ),
@@ -754,6 +767,7 @@ class SessionManager:
         self._active_sessions[session.session_id] = session
 
     def _row_to_session(self, row: tuple) -> SessionRecord:
+        meta = _loads_json_object(row[10])
         return SessionRecord(
             session_id=row[0],
             client_id=row[1],
@@ -765,15 +779,18 @@ class SessionManager:
             total_completions=row[7],
             total_tokens_used=row[8],
             last_error=row[9],
-            metadata=_loads_json_object(row[10]),
+            metadata=meta,
             delivery_context=_loads_json_object(row[11]),
+            # Carrega label e tags do JSON de metadata (zero schema change)
+            label=meta.get("_label"),
+            tags=meta.get("_tags") or [],
         )
 
     # --- Serialization ---
 
     def session_to_dict(self, session: SessionRecord) -> dict:
         """Convert a session to a JSON-safe dictionary (for API responses)."""
-        return {
+        d: dict = {
             "session_id": session.session_id,
             "client_id": session.client_id,
             "originating_channel": session.originating_channel,
@@ -788,7 +805,38 @@ class SessionManager:
             "delivery_context": session.delivery_context,
             "metadata": session.metadata,
             "has_rlm_instance": session.rlm_instance is not None,
+            # Campos portados do TypeScript SessionMetadata
+            "tags": session.tags,
         }
+        if session.label is not None:
+            d["label"] = session.label
+        return d
+
+    # --- Transcript (porta de packages/sessions/src/transcript.ts) ---
+
+    def log_transcript_event(
+        self,
+        session_id: str,
+        event_type: str,
+        data: dict | None = None,
+        token_delta: int | None = None,
+    ) -> None:
+        """
+        Grava um evento de transcript tipado na tabela event_log.
+
+        ``event_type`` deve ser um dos valores de ``TranscriptEventType``:
+        message_in, message_out, tool_call, tool_result, model_switch,
+        session_start, session_end, error.
+
+        ``token_delta`` é adicionado ao payload quando fornecido.
+
+        Porta de ``TranscriptStore.append()`` + ``createTranscriptEvent()``
+        em packages/sessions/src/transcript.ts.
+        """
+        payload: dict = dict(data or {})
+        if token_delta is not None:
+            payload["token_delta"] = token_delta
+        self.log_event(session_id, event_type, payload)
 
     @staticmethod
     def build_delivery_context(

@@ -1,0 +1,22 @@
+[package]
+name = "arkhe-bash"
+version = "0.1.0"
+edition = "2021"
+description = "Executor de bash com sandbox e validação de segurança para o ecossistema RLM"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tokio = { version = "1", features = ["process", "time", "sync", "rt-multi-thread", "macros"] }
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+glob = "0.3"
+tracing = "0.1"
+once_cell = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }

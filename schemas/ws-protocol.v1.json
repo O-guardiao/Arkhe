@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkhe.dev/schemas/ws-protocol.v1.json",
+  "title": "WebSocket Protocol Messages",
+  "description": "Mensagens trocadas via WebSocket entre o Gateway TypeScript e o Brain Python.",
+  "oneOf": [
+    { "$ref": "#/$defs/EnvelopeMessage" },
+    { "$ref": "#/$defs/AckMessage" },
+    { "$ref": "#/$defs/BrainEvent" },
+    { "$ref": "#/$defs/PingMessage" },
+    { "$ref": "#/$defs/PongMessage" },
+    { "$ref": "#/$defs/ErrorMessage" },
+    { "$ref": "#/$defs/HealthRequestMessage" },
+    { "$ref": "#/$defs/HealthReportMessage" }
+  ],
+  "$defs": {
+    "EnvelopeMessage": {
+      "type": "object",
+      "title": "Envelope Message",
+      "description": "Transporta um Envelope entre gateway e brain (bidirecional)",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "type": "string", "const": "envelope" },
+        "data": { "$ref": "envelope.v1.json" }
+      },
+      "additionalProperties": false
+    },
+    "AckMessage": {
+      "type": "object",
+      "title": "Acknowledgement",
+      "description": "Confirmação de entrega de um envelope (gateway → brain)",
+      "required": ["type", "id", "delivered"],
+      "properties": {
+        "type": { "type": "string", "const": "ack" },
+        "id": {
+          "type": "string",
+          "description": "ID do envelope sendo confirmado"
+        },
+        "delivered": {
+          "type": "boolean",
+          "description": "true se entregue com sucesso, false se falhou"
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "Mensagem de erro se delivered=false",
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "BrainEvent": {
+      "type": "object",
+      "title": "Brain Event",
+      "description": "Evento de observabilidade emitido pelo Brain (brain → gateway)",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "type": "string", "const": "event" },
+        "data": {
+          "type": "object",
+          "required": ["event_type", "timestamp"],
+          "properties": {
+            "event_type": {
+              "type": "string",
+              "description": "Tipo de evento",
+              "examples": ["session.start", "tool.execute", "model.response", "memory.lookup"]
+            },
+            "session_id": { "type": ["string", "null"] },
+            "envelope_id": { "type": ["string", "null"] },
+            "timestamp": { "type": "string", "format": "date-time" },
+            "duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+            "payload": {
+              "type": "object",
+              "description": "Dados específicos do event_type",
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "PingMessage": {
+      "type": "object",
+      "title": "Ping",
+      "description": "Keepalive ping (qualquer lado pode enviar)",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "const": "ping" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "PongMessage": {
+      "type": "object",
+      "title": "Pong",
+      "description": "Resposta ao ping",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "const": "pong" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "ErrorMessage": {
+      "type": "object",
+      "title": "Protocol Error",
+      "description": "Erro de protocolo ou schema inválido",
+      "required": ["type", "code", "message"],
+      "properties": {
+        "type": { "type": "string", "const": "error" },
+        "code": {
+          "type": "string",
+          "description": "Código de erro em SCREAMING_SNAKE_CASE",
+          "examples": [
+            "SCHEMA_VALIDATION_ERROR",
+            "ENVELOPE_TOO_LARGE",
+            "RATE_LIMIT_EXCEEDED",
+            "AUTH_FAILED",
+            "INTERNAL_ERROR"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Descrição humana do erro"
+        },
+        "details": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "HealthRequestMessage": {
+      "type": "object",
+      "title": "Health Request",
+      "description": "Solicita relatório de saúde ao gateway (brain → gateway)",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "const": "health.request" }
+      },
+      "additionalProperties": false
+    },
+    "HealthReportMessage": {
+      "type": "object",
+      "title": "Health Report Message",
+      "description": "Relatório de saúde do gateway enviado ao brain",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "type": "string", "const": "health.report" },
+        "data": { "$ref": "health-report.v1.json" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

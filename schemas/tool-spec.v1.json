@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkhe.dev/schemas/tool-spec.v1.json",
+  "title": "Tool Specification",
+  "description": "Especificação de uma ferramenta do sistema RLM. Derivado do ToolSpec do claw-code (Rust). Usado pelo ToolRegistry (Python/TS) para registrar ferramentas com schema, permissões e metadados.",
+  "type": "object",
+  "required": ["name", "description", "input_schema", "required_permission"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Identificador único da ferramenta (snake_case)",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "examples": ["bash", "read_file", "write_file", "search_web"]
+    },
+    "description": {
+      "type": "string",
+      "description": "Descrição da ferramenta para o LLM (como ela funciona e quando usar)",
+      "minLength": 10,
+      "maxLength": 2048
+    },
+    "input_schema": {
+      "type": "object",
+      "description": "JSON Schema dos parâmetros de entrada (formato JSON Schema Draft 7 compatível com Anthropic/OpenAI)",
+      "required": ["type", "properties"],
+      "properties": {
+        "type": { "type": "string", "const": "object" },
+        "properties": { "type": "object" },
+        "required": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "required_permission": {
+      "type": "string",
+      "description": "Nível mínimo de permissão necessário para executar esta ferramenta",
+      "enum": ["ReadOnly", "WorkspaceWrite", "DangerFullAccess", "Prompt", "Allow"],
+      "examples": ["ReadOnly"]
+    },
+    "layer": {
+      "type": "string",
+      "description": "Camada de registro: builtin (nativo), plugin (externo), runtime (MCP dinâmico)",
+      "enum": ["builtin", "plugin", "runtime"],
+      "default": "builtin"
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Se a ferramenta está habilitada no registry",
+      "default": true
+    },
+    "timeout_ms": {
+      "type": ["integer", "null"],
+      "description": "Timeout máximo de execução em ms (null = sem limite)",
+      "minimum": 100,
+      "maximum": 300000,
+      "default": null
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Metadados adicionais (source plugin, version, etc.)",
+      "additionalProperties": true,
+      "default": {}
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "name": "bash",
+      "description": "Executa um comando bash no sistema. Requer permissão DangerFullAccess. Use para tarefas que requerem execução de código, processos externos ou operações de sistema.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Comando bash a executar"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "description": "Timeout opcional em ms",
+            "default": 120000
+          }
+        },
+        "required": ["command"]
+      },
+      "required_permission": "DangerFullAccess",
+      "layer": "builtin",
+      "enabled": true,
+      "timeout_ms": 120000,
+      "metadata": {}
+    },
+    {
+      "name": "read_file",
+      "description": "Lê o conteúdo de um arquivo. Suporta leitura de intervalo de linhas.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Caminho absoluto do arquivo"
+          },
+          "start_line": {
+            "type": "integer",
+            "description": "Linha inicial (1-indexed, opcional)"
+          },
+          "end_line": {
+            "type": "integer",
+            "description": "Linha final (1-indexed, opcional)"
+          }
+        },
+        "required": ["path"]
+      },
+      "required_permission": "ReadOnly",
+      "layer": "builtin",
+      "enabled": true,
+      "timeout_ms": 5000,
+      "metadata": {}
+    },
+    {
+      "name": "write_file",
+      "description": "Cria ou sobrescreve um arquivo com o conteúdo especificado.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Caminho absoluto do arquivo"
+          },
+          "content": {
+            "type": "string",
+            "description": "Conteúdo a escrever no arquivo"
+          }
+        },
+        "required": ["path", "content"]
+      },
+      "required_permission": "WorkspaceWrite",
+      "layer": "builtin",
+      "enabled": true,
+      "timeout_ms": 10000,
+      "metadata": {}
+    }
+  ]
+}

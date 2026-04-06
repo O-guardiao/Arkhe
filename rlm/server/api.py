@@ -508,6 +508,14 @@ if _HAS_OPERATOR_BRIDGE:
     assert _operator_router is not None
     app.include_router(_operator_router)
 
+# Brain router — endpoints /brain/* (ToolDispatcher, PermissionPolicy, SessionJournal)
+from rlm.server.brain_router import router as _brain_router
+app.include_router(_brain_router)
+
+# WS Gateway — endpoint /ws/gateway (protocolo ws-protocol.v1.json, para Gateway TS)
+from rlm.server.ws_gateway_endpoint import router as _ws_gateway_router
+app.include_router(_ws_gateway_router)
+
 
 # ---------------------------------------------------------------------------
 # MessageBus helpers (Phase 3 multichannel)

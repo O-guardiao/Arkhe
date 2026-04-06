@@ -1,0 +1,32 @@
+{
+  "name": "@arkhe/terminal",
+  "version": "0.1.0",
+  "description": "Terminal UI utilities for the RLM CLI and TUI — pure Node.js, no runtime deps",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "@types/node": "^22.10.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

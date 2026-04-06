@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkhe.dev/schemas/health-report.v1.json",
+  "title": "Health Report",
+  "description": "Relatório de saúde do gateway, emitido periodicamente via WebSocket para o Brain monitorar canais.",
+  "type": "object",
+  "required": ["gateway_id", "gateway_version", "status", "channels", "timestamp"],
+  "properties": {
+    "gateway_id": {
+      "type": "string",
+      "description": "Identificador único desta instância do gateway",
+      "examples": ["gateway-prod-1"]
+    },
+    "gateway_version": {
+      "type": "string",
+      "description": "Versão semântica do pacote @arkhe/gateway",
+      "examples": ["0.1.0"]
+    },
+    "status": {
+      "type": "string",
+      "description": "Status agregado do gateway",
+      "enum": ["healthy", "degraded", "down"]
+    },
+    "uptime_seconds": {
+      "type": "integer",
+      "description": "Segundos desde que o gateway iniciou",
+      "minimum": 0
+    },
+    "channels": {
+      "type": "object",
+      "description": "Status de cada canal registrado",
+      "additionalProperties": {
+        "$ref": "#/$defs/ChannelHealth"
+      },
+      "examples": [
+        {
+          "telegram": {
+            "name": "telegram",
+            "status": "healthy",
+            "last_seen_ms": 1705312200000,
+            "messages_in": 1024,
+            "messages_out": 1022,
+            "errors": 2,
+            "latency_p50_ms": 45,
+            "latency_p99_ms": 220
+          }
+        }
+      ]
+    },
+    "brain_ws": {
+      "type": "object",
+      "description": "Status da conexão WebSocket com o Brain",
+      "properties": {
+        "connected": { "type": "boolean" },
+        "reconnect_count": { "type": "integer", "minimum": 0 },
+        "last_connected_ms": { "type": ["integer", "null"] },
+        "pending_messages": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601 do momento do relatório",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ChannelHealth": {
+      "type": "object",
+      "required": ["name", "status"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nome do canal"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["healthy", "degraded", "down", "disabled"]
+        },
+        "last_seen_ms": {
+          "type": ["integer", "null"],
+          "description": "Unix timestamp ms da última mensagem recebida",
+          "minimum": 0
+        },
+        "messages_in": {
+          "type": "integer",
+          "description": "Total de mensagens recebidas (desde start)",
+          "minimum": 0,
+          "default": 0
+        },
+        "messages_out": {
+          "type": "integer",
+          "description": "Total de mensagens enviadas (desde start)",
+          "minimum": 0,
+          "default": 0
+        },
+        "errors": {
+          "type": "integer",
+          "description": "Total de erros (desde start)",
+          "minimum": 0,
+          "default": 0
+        },
+        "latency_p50_ms": {
+          "type": ["integer", "null"],
+          "description": "Latência p50 em ms (últimos 1000 requests)",
+          "minimum": 0
+        },
+        "latency_p99_ms": {
+          "type": ["integer", "null"],
+          "description": "Latência p99 em ms (últimos 1000 requests)",
+          "minimum": 0
+        },
+        "error_message": {
+          "type": ["string", "null"],
+          "description": "Último erro registrado (se status degraded/down)",
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

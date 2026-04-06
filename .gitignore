@@ -231,3 +231,18 @@ marimo/_lsp/
 __marimo__/
 *.bak
 *.new
+
+# Node
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.turbo/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
