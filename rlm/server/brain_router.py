@@ -287,3 +287,92 @@ async def brain_health() -> JSONResponse:
             "timestamp": time.time(),
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin: gestão de clientes/dispositivos  (/brain/admin/clients/*)
+# ---------------------------------------------------------------------------
+
+class ClientRegisterRequest(BaseModel):
+    client_id: str = Field(..., description="ID único do cliente/dispositivo")
+    profile: str = Field(default="default", description="Perfil do cliente")
+    description: str = Field(default="", description="Descrição livre")
+    context_hint: str = Field(default="", description="Contexto preferencial")
+    permissions: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+def _get_auth_db() -> str:
+    """Resolve caminho do SQLite de autenticação via env ou padrão."""
+    from pathlib import Path as _Path
+    env_val = os.environ.get("RLM_AUTH_DB", "")
+    if env_val:
+        return env_val
+    return str(_Path(os.environ.get("RLM_DATA_DIR", "~/.rlm")).expanduser() / "rlm_sessions.db")
+
+
+@router.post("/admin/clients", status_code=201)
+async def admin_client_register(
+    body: ClientRegisterRequest,
+    _token: str = Depends(require_token),
+) -> JSONResponse:
+    """Registra novo cliente/dispositivo. Retorna token em claro — exibido uma única vez."""
+    from rlm.core.auth import register_client
+
+    try:
+        raw_token = register_client(
+            db_path=_get_auth_db(),
+            client_id=body.client_id,
+            profile=body.profile,
+            description=body.description,
+            context_hint=body.context_hint,
+            permissions=body.permissions,
+            metadata=body.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return JSONResponse(
+        {"client_id": body.client_id, "token": raw_token, "profile": body.profile},
+        status_code=201,
+    )
+
+
+@router.get("/admin/clients")
+async def admin_client_list(
+    include_inactive: bool = False,
+    _token: str = Depends(require_token),
+) -> JSONResponse:
+    """Lista clientes registrados."""
+    from rlm.core.auth import list_clients
+
+    clients = list_clients(_get_auth_db(), active_only=not include_inactive)
+    return JSONResponse({"clients": clients, "count": len(clients)})
+
+
+@router.get("/admin/clients/{client_id}")
+async def admin_client_status(
+    client_id: str,
+    _token: str = Depends(require_token),
+) -> JSONResponse:
+    """Retorna status detalhado de um cliente."""
+    from rlm.core.auth import get_client_status
+
+    info = get_client_status(_get_auth_db(), client_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Cliente '{client_id}' não encontrado.")
+    return JSONResponse(info)
+
+
+@router.delete("/admin/clients/{client_id}")
+async def admin_client_revoke(
+    client_id: str,
+    _token: str = Depends(require_token),
+) -> JSONResponse:
+    """Revoga um cliente (marca active=0, sem DELETE para manter auditoria)."""
+    from rlm.core.auth import revoke_client
+
+    ok = revoke_client(_get_auth_db(), client_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Cliente '{client_id}' não encontrado ou já revogado.")
+    return JSONResponse({"client_id": client_id, "revoked": True})

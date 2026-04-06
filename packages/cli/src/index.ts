@@ -18,6 +18,7 @@
  *   rlm setup                    — Assistente de configuração inicial
  *   rlm peer <sub>               — Gestão de gateways peers
  *   rlm tui                      — Painel TUI ao vivo
+ *   rlm client <sub>             — Gestão de dispositivos/clientes
  */
 
 import { config as dotenvConfig } from "dotenv";
@@ -38,6 +39,7 @@ import { makeOpsCommand } from "./commands/ops.js";
 import { makeTokenCommand } from "./commands/token.js";
 import { makeSetupCommand } from "./commands/setup.js";
 import { makePeerCommand } from "./commands/peer.js";
+import { makeClientCommand } from "./commands/client.js";
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -66,6 +68,7 @@ program.addCommand(makeOpsCommand());
 program.addCommand(makeTokenCommand());
 program.addCommand(makeSetupCommand());
 program.addCommand(makePeerCommand());
+program.addCommand(makeClientCommand());
 
 // Comando TUI — abre o painel interactivo ao vivo
 program
