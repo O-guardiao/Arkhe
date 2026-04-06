@@ -9,7 +9,8 @@ import {
   existsSync,
   mkdirSync,
   appendFileSync,
-  createWriteStream,
+  openSync,
+  closeSync,
   readFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -275,13 +276,14 @@ export async function startRuntime(
   }
 
   info("Iniciando frontdoor TypeScript...");
-  const runtimeLog = createWriteStream(layout.apiLog, { flags: "a" });
+  const logFd = openSync(layout.apiLog, "a");
   const runtimeProc = spawn(node, [serverEntry, modeArg], {
     env: spawnEnv,
     detached: true,
-    stdio: ["ignore", runtimeLog as unknown as "pipe", runtimeLog as unknown as "pipe"],
+    stdio: ["ignore", logFd, logFd],
   });
   runtimeProc.unref();
+  closeSync(logFd);
   await sleep(1500);
 
   if (runtimeProc.exitCode !== null) {

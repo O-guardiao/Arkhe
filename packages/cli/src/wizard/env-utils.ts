@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as net from "node:net";
 import { execFileSync } from "node:child_process";
 import type { WizardPrompter, SelectOption } from "./prompter.js";
 
@@ -368,7 +369,6 @@ export function summarizeExistingConfig(existing: Record<string, string>): strin
 
 export async function probeServer(host: string, port: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const net = require("node:net") as typeof import("node:net");
     const sock = net.createConnection({ host, port: parseInt(port, 10) });
     sock.setTimeout(2000);
     sock.once("connect", () => { sock.destroy(); resolve(true); });

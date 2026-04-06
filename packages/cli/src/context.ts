@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
+import { execSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // CliPaths
@@ -140,7 +141,6 @@ export class CliContext {
 
   hasTool(name: string): boolean {
     // Detecta se o binário está no PATH
-    const { execSync } = require("node:child_process") as typeof import("node:child_process");
     const cmd = process.platform === "win32" ? `where ${name}` : `which ${name}`;
     try {
       execSync(cmd, { stdio: "pipe" });
