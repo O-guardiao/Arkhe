@@ -11,16 +11,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-
-class PermissionMode(str, Enum):
-    """Nível de permissão exigido pela ferramenta.
-    Mapeado 1:1 com claw-code PermissionMode.
-    """
-    READ_ONLY = "ReadOnly"
-    WORKSPACE_WRITE = "WorkspaceWrite"
-    DANGER_FULL_ACCESS = "DangerFullAccess"
-    PROMPT = "Prompt"
-    ALLOW = "Allow"
+# PermissionMode vive em engine.enums para evitar importação circular
+# (permission_policy → tools → dispatcher → permission_policy).
+# Re-exportado aqui para backward-compat de todo código que importa de specs.
+from rlm.core.engine.enums import PermissionMode  # noqa: F401
 
 
 class ToolLayer(str, Enum):

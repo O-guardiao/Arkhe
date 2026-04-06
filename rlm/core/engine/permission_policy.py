@@ -15,7 +15,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from rlm.core.tools.specs import PermissionMode
+from rlm.core.engine.enums import PermissionMode
 
 logger = logging.getLogger(__name__)
 
