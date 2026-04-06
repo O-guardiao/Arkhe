@@ -7,7 +7,14 @@
  *   3. Registra adaptadores de canal
  *   4. Cria app Hono e inicia servidor HTTP
  *   5. Conecta ao Brain (WsBridge.start())
- *   6. Registra handlers de shutdown gracioso (SIGTERM/SIGINT)
+ *   6. Inicia long-polling do Telegram se TELEGRAM_POLLING_MODE ativo
+ *   7. Registra handlers de shutdown gracioso (SIGTERM/SIGINT)
+ *
+ * Modos do Telegram:
+ *   - Long-polling (padrão): não requer URL pública — ativado automaticamente
+ *     quando TELEGRAM_BOT_TOKEN está presente e TELEGRAM_POLLING_MODE != "webhook".
+ *   - Webhook: requer URL pública registrada no Telegram.
+ *     Ative com TELEGRAM_POLLING_MODE=webhook + configure TELEGRAM_SECRET_TOKEN.
  */
 
 import { serve } from "@hono/node-server";
@@ -17,10 +24,12 @@ import { ChannelRegistry } from "./registry.js";
 import { HealthAggregator } from "./health.js";
 import { GatewayStateMachine } from "./state-machine.js";
 import { TelegramAdapter } from "./adapters/telegram.js";
+import { TelegramLongPoller } from "./channels/telegram.js";
 import { DiscordAdapter } from "./adapters/discord.js";
 import { SlackAdapter } from "./adapters/slack.js";
 import { WhatsAppAdapter } from "./adapters/whatsapp.js";
 import { createGatewayApp } from "./server.js";
+import { EnvelopeSchema } from "./envelope.js";
 
 // ---------------------------------------------------------------------------
 // Env vars
@@ -43,6 +52,9 @@ const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const GATEWAY_ID = process.env["GATEWAY_ID"] ?? `gateway-${process.pid}`;
 const TELEGRAM_BOT_TOKEN = process.env["TELEGRAM_BOT_TOKEN"];
 const TELEGRAM_SECRET_TOKEN = process.env["TELEGRAM_SECRET_TOKEN"];
+// Modo de recebimento do Telegram: "polling" (padrão) ou "webhook".
+// Use "webhook" apenas quando houver URL pública HTTPS registrada no Telegram.
+const TELEGRAM_POLLING_MODE = (process.env["TELEGRAM_POLLING_MODE"] ?? "polling").toLowerCase();
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -54,11 +66,27 @@ const registry = new ChannelRegistry(bridge);
 const health = new HealthAggregator(GATEWAY_ID, registry, bridge);
 
 // Registra adaptadores conforme presença dos tokens
+let telegramPoller: TelegramLongPoller | undefined;
 if (TELEGRAM_BOT_TOKEN) {
-  registry.register(new TelegramAdapter({ botToken: TELEGRAM_BOT_TOKEN }));
+  const tgAdapter = new TelegramAdapter({ botToken: TELEGRAM_BOT_TOKEN });
+  registry.register(tgAdapter);
   logger.info("Telegram adapter enabled");
+
+  if (TELEGRAM_POLLING_MODE !== "webhook") {
+    telegramPoller = new TelegramLongPoller(
+      TELEGRAM_BOT_TOKEN,
+      tgAdapter,
+      async (_chatId, envelopeJson) => {
+        const envelope = EnvelopeSchema.parse(JSON.parse(envelopeJson) as unknown);
+        registry.forwardToBrain(envelope);
+      },
+    );
+    logger.info("Telegram long-polling configurado (inicia após bridge conectar)");
+  } else {
+    logger.info("Telegram webhook mode configurado (TELEGRAM_POLLING_MODE=webhook)");
+  }
 } else {
-  logger.warn("TELEGRAM_BOT_TOKEN not set; Telegram adapter disabled");
+  logger.warn("TELEGRAM_BOT_TOKEN não definido; Telegram adapter desabilitado");
 }
 
 const discordAdapter = DiscordAdapter.fromEnv();
@@ -108,6 +136,7 @@ const server = serve(
   (info) => {
     logger.info({ port: info.port, gatewayId: GATEWAY_ID }, "Gateway HTTP server started");
     bridge.start();
+    telegramPoller?.start();
     health.startReporting(30_000);
   },
 );
@@ -141,6 +170,7 @@ async function shutdown(signal: string): Promise<void> {
   health.stopReporting();
   registry.detachBridge();
 
+  await telegramPoller?.stop();
   await bridge.stop();
 
   server.close(() => {

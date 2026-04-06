@@ -58,41 +58,8 @@ from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
 from rlm.core.skillkit.skill_telemetry import get_skill_telemetry
 
-# Channel gateways — importados aqui; registrados condicionalmente abaixo
-try:
-    from rlm.server.discord_gateway import router as _discord_router
-    _HAS_DISCORD_GW = True
-except ImportError:
-    _discord_router = None
-    _HAS_DISCORD_GW = False
-
-try:
-    from rlm.server.whatsapp_gateway import router as _whatsapp_router
-    _HAS_WHATSAPP_GW = True
-except ImportError:
-    _whatsapp_router = None
-    _HAS_WHATSAPP_GW = False
-
-try:
-    from rlm.server.slack_gateway import router as _slack_router
-    _HAS_SLACK_GW = True
-except ImportError:
-    _slack_router = None
-    _HAS_SLACK_GW = False
-
-try:
-    from rlm.server.webchat import router as _webchat_router
-    _HAS_WEBCHAT = True
-except ImportError:
-    _webchat_router = None
-    _HAS_WEBCHAT = False
-
-try:
-    from rlm.server.operator_bridge import router as _operator_router
-    _HAS_OPERATOR_BRIDGE = True
-except ImportError:
-    _operator_router = None
-    _HAS_OPERATOR_BRIDGE = False
+# Channel gateways — agora gerenciados por transport_router.py (montagem condicional).
+# Os try/except abaixo foram removidos; use `from rlm.server.transport_router import ...`
 
 gateway_log = get_logger("api")
 
@@ -308,20 +275,24 @@ async def lifespan(app: FastAPI):
         gateway_log.info("✓ External webhook receiver: POST /api/hooks/{token}")
     if os.environ.get("RLM_API_TOKEN"):
         gateway_log.info("✓ OpenAI-compat API: POST /v1/chat/completions")
-    # Channel gateways
-    if os.environ.get("DISCORD_APP_PUBLIC_KEY") or os.environ.get("RLM_DISCORD_SKIP_VERIFY", "") == "true":
-        gateway_log.info("✓ Discord gateway: POST /discord/interactions")
-    if os.environ.get("WHATSAPP_VERIFY_TOKEN"):
-        gateway_log.info("✓ WhatsApp gateway: GET+POST /whatsapp/webhook")
-    if os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("SLACK_SIGNING_SECRET"):
-        gateway_log.info("✓ Slack gateway: POST /slack/events")
+    # Channel gateways — só logados se modo Python ativo
+    _gw_mode = os.environ.get("RLM_GATEWAY_MODE", "python").lower()
+    if _gw_mode == "typescript":
+        gateway_log.info("• Canal gateways Python ignorados (RLM_GATEWAY_MODE=typescript — Gateway TS porta 3000)")
+    else:
+        if os.environ.get("DISCORD_APP_PUBLIC_KEY") or os.environ.get("RLM_DISCORD_SKIP_VERIFY", "") == "true":
+            gateway_log.info("✓ Discord gateway: POST /discord/interactions")
+        if os.environ.get("WHATSAPP_VERIFY_TOKEN"):
+            gateway_log.info("✓ WhatsApp gateway: GET+POST /whatsapp/webhook")
+        if os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("SLACK_SIGNING_SECRET"):
+            gateway_log.info("✓ Slack gateway: POST /slack/events")
+        gateway_log.info("✓ WebChat: GET /webchat")
     if ws_disabled:
         gateway_log.info("• WebSocket: desabilitado via RLM_WS_DISABLED=true")
     elif app.state.ws_thread is not None:
         gateway_log.info("✓ WebSocket observability thread started")
     else:
-        gateway_log.warn("WebSocket observability unavailable (missing dependency or startup failure)")
-    gateway_log.info("✓ WebChat: GET /webchat")
+        gateway_log.warn("WebSocket observability unavailable (missing dependency ou startup failure)")
 
     # DrainGuard + Health Monitor
     app.state.drain_guard = DrainGuard(event_bus=app.state.event_bus)
@@ -481,32 +452,11 @@ if _hook_token:
 _api_token = os.environ.get("RLM_API_TOKEN", "").strip()
 app.include_router(create_openai_compat_router(_api_token))
 
-# Channel gateways — ativos se as env vars obrigatórias estiverem presentes
-if _HAS_DISCORD_GW and (
-    os.environ.get("DISCORD_APP_PUBLIC_KEY") or
-    os.environ.get("RLM_DISCORD_SKIP_VERIFY", "").lower() == "true"
-):
-    assert _discord_router is not None
-    app.include_router(_discord_router)
-
-if _HAS_WHATSAPP_GW and os.environ.get("WHATSAPP_VERIFY_TOKEN"):
-    assert _whatsapp_router is not None
-    app.include_router(_whatsapp_router)
-
-if _HAS_SLACK_GW and (
-    os.environ.get("SLACK_BOT_TOKEN") or
-    os.environ.get("SLACK_SIGNING_SECRET")
-):
-    assert _slack_router is not None
-    app.include_router(_slack_router)
-
-if _HAS_WEBCHAT:
-    assert _webchat_router is not None
-    app.include_router(_webchat_router)
-
-if _HAS_OPERATOR_BRIDGE:
-    assert _operator_router is not None
-    app.include_router(_operator_router)
+# Channel gateways — ativos se as env vars obrigatórias estiverem presentes.
+# Controlado por RLM_GATEWAY_MODE (padrão: "python").
+# Defina RLM_GATEWAY_MODE=typescript para delegar todos os canais ao Gateway TS.
+from rlm.server.transport_router import mount_channel_routers
+mount_channel_routers(app)
 
 # Brain router — endpoints /brain/* (ToolDispatcher, PermissionPolicy, SessionJournal)
 from rlm.server.brain_router import router as _brain_router

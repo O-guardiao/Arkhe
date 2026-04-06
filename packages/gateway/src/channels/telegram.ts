@@ -1,10 +1,18 @@
 /**
- * Canal Telegram — converte Updates do webhook em Envelopes e os encaminha ao Brain.
+ * Canal Telegram — converte Updates do webhook/long-polling em Envelopes e os encaminha ao Brain.
+ *
+ * Dois modos de operação:
+ *  - Webhook: `createTelegramWebhookHandler` — recebe POST do Telegram (requer URL pública)
+ *  - Long-polling: `TelegramLongPoller` — faz getUpdates em loop (padrão; não requer URL pública)
+ *
+ * A variável `TELEGRAM_POLLING_MODE` determina o modo.
+ * Se omitida, `index.ts` ativa long-polling automaticamente quando não há `TELEGRAM_WEBHOOK_SECRET`.
  */
 
 import type { Context } from "hono";
 import { childLogger } from "../logger.js";
 import { newEnvelope } from "../envelope.js";
+import { ExponentialBackoff } from "../backoff.js";
 import { TelegramAdapter } from "../adapters/telegram.js";
 
 const log = childLogger({ channel: "telegram" });
@@ -159,4 +167,156 @@ export function createTelegramWebhookHandler(adapter: TelegramAdapter, sendToBra
       return c.json({ ok: true, error: "internal error" });
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// Long-Polling (modo padrão — não requer URL pública)
+// ---------------------------------------------------------------------------
+
+const TELEGRAM_API_BASE = "https://api.telegram.org";
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface TelegramPollerOptions {
+  /** Timeout do long-poll em segundos (default: 30). */
+  pollTimeoutSec?: number;
+  /** Máximo de erros consecutivos antes de parar (default: 10). */
+  maxConsecutiveErrors?: number;
+}
+
+/**
+ * TelegramLongPoller — substitui o `telegram_gateway.py` para ambientes sem URL pública.
+ *
+ * Faz `getUpdates` com long-polling perpetuo e encaminha cada update ao Brain
+ * via `sendToBrain`.  Responde automaticamente ao usuário usando `adapter.sendMessage`.
+ *
+ * Uso:
+ *   const poller = new TelegramLongPoller(botToken, adapter, sendToBrain);
+ *   poller.start();
+ *   // ... quando desligar:
+ *   await poller.stop();
+ */
+export class TelegramLongPoller {
+  private running = false;
+  private offset = 0;
+  private readonly log = childLogger({ component: "telegram-poller" });
+  private readonly backoff: ExponentialBackoff;
+
+  constructor(
+    private readonly botToken: string,
+    private readonly adapter: TelegramAdapter,
+    private readonly sendToBrain: BrainSender,
+    private readonly opts: TelegramPollerOptions = {},
+  ) {
+    this.backoff = new ExponentialBackoff({ initialMs: 1_000, maxMs: 30_000, multiplier: 2, jitter: true });
+  }
+
+  /** Inicia o loop de polling em background. Idempotente. */
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+    this.log.info("Telegram long-polling started");
+    void this.pollLoop();
+  }
+
+  /** Para o poller graciosamente. */
+  async stop(): Promise<void> {
+    this.running = false;
+    this.log.info("Telegram long-polling stopped");
+  }
+
+  // -------------------------------------------------------------------------
+  // Loop interno
+  // -------------------------------------------------------------------------
+
+  private async pollLoop(): Promise<void> {
+    const maxErrors = this.opts.maxConsecutiveErrors ?? 10;
+    const pollTimeout = this.opts.pollTimeoutSec ?? 30;
+    let consecutiveErrors = 0;
+
+    while (this.running) {
+      try {
+        const updates = await this.getUpdates(pollTimeout);
+        consecutiveErrors = 0;
+        this.backoff.reset();
+
+        for (const update of updates) {
+          // Atualiza offset ANTES de processar — garante progresso mesmo com erro individual
+          this.offset = update.update_id + 1;
+
+          try {
+            const result = updateToEnvelope(update);
+            if (!result) continue;
+
+            const { envelope, chatId } = result;
+            this.adapter.trackInbound();
+
+            this.log.info(
+              { update_id: update.update_id, message_type: envelope.message_type, chatId },
+              "Telegram update via long-polling",
+            );
+
+            void this.sendToBrain(chatId, JSON.stringify(envelope)).catch((err) => {
+              this.log.error({ err, update_id: update.update_id }, "Failed to forward envelope to brain");
+            });
+          } catch (err) {
+            this.log.error({ err, update_id: update.update_id }, "Error processing individual update");
+          }
+        }
+      } catch (err: unknown) {
+        consecutiveErrors++;
+        this.log.error({ err, consecutiveErrors, maxErrors }, "Long-polling error");
+
+        if (consecutiveErrors >= maxErrors) {
+          this.log.fatal({ maxErrors }, "Max consecutive errors reached; stopping poller");
+          this.running = false;
+          break;
+        }
+
+        const delay = this.backoff.next();
+        this.log.warn({ delayMs: delay }, "Retrying after backoff");
+        await sleepMs(delay);
+      }
+    }
+  }
+
+  private async getUpdates(timeoutSec: number): Promise<TelegramUpdate[]> {
+    const url = `${TELEGRAM_API_BASE}/bot${this.botToken}/getUpdates`;
+    const body: Record<string, unknown> = {
+      offset: this.offset,
+      timeout: timeoutSec,
+      allowed_updates: ["message", "edited_message", "callback_query"],
+    };
+
+    // Timeout total = poll timeout + 10s de folga para latência de rede
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), (timeoutSec + 10) * 1_000);
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`Telegram API HTTP ${response.status}: ${text.slice(0, 200)}`);
+      }
+
+      const data = (await response.json()) as { ok: boolean; result?: TelegramUpdate[]; description?: string };
+
+      if (!data.ok) {
+        throw new Error(`Telegram API error: ${data.description ?? "unknown"}`);
+      }
+
+      return data.result ?? [];
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 }
