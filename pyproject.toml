@@ -31,8 +31,8 @@ prime = ["prime-sandboxes>=0.2.0", "dill>=0.3.7"]
 mcp = []
 
 [project.scripts]
-arkhe = "rlm.cli.main:main"
-rlm = "rlm.cli.main:main"
+arkhe = "rlm.runtime.ts_cli_shim:main"
+rlm = "rlm.runtime.ts_cli_shim:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]

@@ -20,6 +20,26 @@ function requireEnv(name: string): string {
   return value;
 }
 
+function defaultBrainWsUrl(): string {
+  const base = process.env["PYTHON_BRAIN_BASE_URL"] ?? "http://127.0.0.1:8000";
+  const url = new URL(base.endsWith("/") ? base : `${base}/`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = url.pathname === "/" ? "/ws/gateway" : `${url.pathname.replace(/\/$/, "")}/ws/gateway`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function resolveBrainWsToken(): string | undefined {
+  for (const envName of ["BRAIN_WS_TOKEN", "RLM_GATEWAY_TOKEN", "RLM_WS_TOKEN", "RLM_INTERNAL_TOKEN"]) {
+    const value = process.env[envName]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 export interface GatewayRuntime {
   gatewayApp: GatewayAppLike;
   registry: ChannelRegistry;
@@ -31,8 +51,8 @@ export interface GatewayRuntime {
 }
 
 export function createGatewayRuntimeFromEnv(): GatewayRuntime {
-  const brainWsUrl = requireEnv("BRAIN_WS_URL");
-  const brainWsToken = process.env["BRAIN_WS_TOKEN"];
+  const brainWsUrl = process.env["BRAIN_WS_URL"] ?? defaultBrainWsUrl();
+  const brainWsToken = resolveBrainWsToken();
   const gatewayId = process.env["GATEWAY_ID"] ?? `server-${process.pid}`;
   const telegramBotToken = process.env["TELEGRAM_BOT_TOKEN"];
   const telegramSecretToken = process.env["TELEGRAM_SECRET_TOKEN"];

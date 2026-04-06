@@ -19,4 +19,4 @@ def resolve_arkhe_cli() -> list[str]:
     path = shutil.which("arkhe")
     if path:
         return [path]
-    return [sys.executable, "-m", "rlm.cli.main"]
+    return [sys.executable, "-m", "rlm"]

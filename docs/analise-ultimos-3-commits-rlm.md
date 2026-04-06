@@ -67,7 +67,7 @@ Esse commit adiciona observabilidade leve sobre skills no TUI, melhora a inspeç
 
 ### tests/conftest.py
 
-- Cria resolve_arkhe_cli para encontrar o executável instalado ou cair no modo python -m rlm.cli.main.
+- Cria resolve_arkhe_cli para encontrar o executável instalado ou cair no modo python -m rlm.
 - Natureza: infraestrutura de teste.
 - Risco para o núcleo recursivo: nulo.
 

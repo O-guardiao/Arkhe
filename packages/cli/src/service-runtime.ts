@@ -22,6 +22,45 @@ import net from "node:net";
 import { CliContext } from "./context.js";
 import { readPidFile, writePid, removePid, pidAlive } from "./state/pid.js";
 
+function resolveServerEntry(context: CliContext): string {
+  const explicitEntry = process.env["RLM_SERVER_ENTRY"]?.trim();
+  if (explicitEntry) {
+    return explicitEntry;
+  }
+
+  const serverPackageDir = join(context.paths.projectRoot, "packages", "server");
+  const distEntry = join(serverPackageDir, "dist", "index.js");
+  const npmBinary = process.platform === "win32" ? "npm.cmd" : "npm";
+
+  if (!existsSync(join(serverPackageDir, "package.json"))) {
+    throw new Error(`Pacote packages/server não encontrado em ${serverPackageDir}`);
+  }
+
+  if (existsSync(distEntry)) {
+    return distEntry;
+  }
+
+  if (!existsSync(join(serverPackageDir, "node_modules"))) {
+    const install = spawnSync(npmBinary, ["install"], {
+      cwd: serverPackageDir,
+      stdio: "inherit",
+    });
+    if (install.status !== 0) {
+      throw new Error("Falha ao instalar dependências de packages/server");
+    }
+  }
+
+  const build = spawnSync(npmBinary, ["run", "build"], {
+    cwd: serverPackageDir,
+    stdio: "inherit",
+  });
+  if (build.status !== 0 || !existsSync(distEntry)) {
+    throw new Error("Falha ao compilar packages/server");
+  }
+
+  return distEntry;
+}
+
 // ---------------------------------------------------------------------------
 // ServiceRuntimeLayout
 // ---------------------------------------------------------------------------
@@ -195,78 +234,79 @@ export async function startRuntime(
   const { foreground = false, apiOnly = false, wsOnly = false } = opts;
   const env: NodeJS.ProcessEnv = { ...process.env, ...context.env };
   const { ok, warn, err, info } = callbacks;
+  const modeArg = wsOnly ? "ws" : apiOnly ? "api" : "server";
 
   mkdirSync(layout.logDir, { recursive: true });
   mkdirSync(layout.pidDir, { recursive: true });
 
   const node = process.execPath;
-  // O entry point do servidor está no pacote daemon
-  // Resolutura padrão: busca o binário `rlm-daemon` ou usa o pacote companion
-  const serverEntry = process.env["RLM_SERVER_ENTRY"] ?? "rlm-server";
+  const serverEntry = resolveServerEntry(context);
+  const apiPort = parseInt(env["RLM_API_PORT"] ?? "5000", 10);
+  const apiHost = env["RLM_API_HOST"] ?? "127.0.0.1";
 
-  if (!wsOnly) {
-    const apiPort = parseInt(env["RLM_API_PORT"] ?? "5000", 10);
-    const apiHost = env["RLM_API_HOST"] ?? "127.0.0.1";
-    if (await portAcceptingConnections(apiHost, apiPort)) {
-      const freed = await killOrphanOnPort(apiPort, apiHost, { warn, info });
-      if (!freed) {
-        err(
-          `Porta ${apiPort} já está em uso e não foi possível liberar. ` +
-          `Execute: fuser -k ${apiPort}/tcp`,
-        );
-        return 1;
-      }
-    }
-
-    info("Iniciando API...");
-    const spawnEnv = { ...env } as NodeJS.ProcessEnv;
-    if (apiOnly) spawnEnv["RLM_WS_DISABLED"] = "true";
-    else delete spawnEnv["RLM_WS_DISABLED"];
-
-    const apiLogStream = createWriteStream(layout.apiLog, { flags: "a" });
-    const apiProc = spawn(node, [serverEntry, "api"], {
-      env: spawnEnv,
-      detached: true,
-      stdio: ["ignore", apiLogStream as unknown as "pipe", apiLogStream as unknown as "pipe"],
-    });
-    apiProc.unref();
-    await sleep(1500);
-
-    if (apiProc.exitCode !== null) {
-      removePid(layout.pidApi);
-      removePid(layout.pidWs);
-      err(`API falhou ao iniciar (exit=${apiProc.exitCode}). Ver log: ${layout.apiLog}`);
-      try {
-        const lines = readFileSync(layout.apiLog, "utf8").split("\n").slice(-15);
-        for (const ln of lines) process.stderr.write(`  ${ln}\n`);
-      } catch { /* ok */ }
+  if (await portAcceptingConnections(apiHost, apiPort)) {
+    const freed = await killOrphanOnPort(apiPort, apiHost, { warn, info });
+    if (!freed) {
+      err(
+        `Porta ${apiPort} já está em uso e não foi possível liberar. ` +
+        `Execute: fuser -k ${apiPort}/tcp`,
+      );
       return 1;
     }
+  }
 
-    writePid(layout.pidApi, apiProc.pid!);
-    if (apiOnly) removePid(layout.pidWs);
-    else writePid(layout.pidWs, apiProc.pid!);
-    ok(`API iniciada  pid=${apiProc.pid}  log=${layout.apiLog}`);
+  const spawnEnv = { ...env } as NodeJS.ProcessEnv;
+  spawnEnv["PORT"] = String(apiPort);
+  spawnEnv["PYTHON_BRAIN_AUTOSTART"] = spawnEnv["PYTHON_BRAIN_AUTOSTART"] ?? "true";
+  spawnEnv["PYTHON_BRAIN_BASE_URL"] = spawnEnv["PYTHON_BRAIN_BASE_URL"] ?? "http://127.0.0.1:8000";
+  if (apiOnly) spawnEnv["RLM_WS_DISABLED"] = "true";
+
+  if (foreground) {
+    info("Iniciando frontdoor TypeScript em foreground...");
+    const foregroundProc = spawn(node, [serverEntry, modeArg], {
+      env: spawnEnv,
+      stdio: "inherit",
+    });
+
+    const exitCode = await new Promise<number>((resolve) => {
+      foregroundProc.on("exit", (code) => resolve(code ?? 0));
+    });
+    return exitCode;
+  }
+
+  info("Iniciando frontdoor TypeScript...");
+  const runtimeLog = createWriteStream(layout.apiLog, { flags: "a" });
+  const runtimeProc = spawn(node, [serverEntry, modeArg], {
+    env: spawnEnv,
+    detached: true,
+    stdio: ["ignore", runtimeLog as unknown as "pipe", runtimeLog as unknown as "pipe"],
+  });
+  runtimeProc.unref();
+  await sleep(1500);
+
+  if (runtimeProc.exitCode !== null) {
+    removePid(layout.pidApi);
+    removePid(layout.pidWs);
+    err(`Frontdoor TS falhou ao iniciar (exit=${runtimeProc.exitCode}). Ver log: ${layout.apiLog}`);
+    try {
+      const lines = readFileSync(layout.apiLog, "utf8").split("\n").slice(-15);
+      for (const ln of lines) process.stderr.write(`  ${ln}\n`);
+    } catch { /* ok */ }
+    return 1;
   }
 
   if (wsOnly) {
-    info("Iniciando servidor WebSocket...");
-    const wsLogStream = createWriteStream(layout.wsLog, { flags: "a" });
-    const wsProc = spawn(node, [serverEntry, "ws"], {
-      env,
-      detached: true,
-      stdio: ["ignore", wsLogStream as unknown as "pipe", wsLogStream as unknown as "pipe"],
-    });
-    wsProc.unref();
-    await sleep(1000);
-
-    if (wsProc.exitCode !== null) {
-      removePid(layout.pidWs);
-      err(`WebSocket falhou ao iniciar (exit=${wsProc.exitCode}). Ver log: ${layout.wsLog}`);
-      return 1;
-    }
-    writePid(layout.pidWs, wsProc.pid!);
-    ok(`WS iniciado  pid=${wsProc.pid}  log=${layout.wsLog}`);
+    removePid(layout.pidApi);
+    writePid(layout.pidWs, runtimeProc.pid!);
+    ok(`Bridge iniciada  pid=${runtimeProc.pid}  log=${layout.apiLog}`);
+  } else if (apiOnly) {
+    writePid(layout.pidApi, runtimeProc.pid!);
+    removePid(layout.pidWs);
+    ok(`Frontdoor TS iniciado  pid=${runtimeProc.pid}  log=${layout.apiLog}`);
+  } else {
+    writePid(layout.pidApi, runtimeProc.pid!);
+    writePid(layout.pidWs, runtimeProc.pid!);
+    ok(`Frontdoor TS iniciado  pid=${runtimeProc.pid}  log=${layout.apiLog}`);
   }
 
   if (!apiOnly && !wsOnly) {
@@ -369,8 +409,8 @@ export async function showRuntimeStatus(
       ? "✗ morto (pid inválido)"
       : "● parado";
 
-  console.log(`  API FastAPI        pid=${apiPid ?? "—"}  ${apiStatus}  log=${layout.apiLog}`);
-  console.log(`  WebSocket Server   pid=${wsPid ?? "—"}  ${wsStatus}  log=${layout.wsLog}`);
+  console.log(`  Frontdoor TS       pid=${apiPid ?? "—"}  ${apiStatus}  log=${layout.apiLog}`);
+  console.log(`  Bridge Embutida    pid=${wsPid ?? "—"}  ${wsStatus}  log=${layout.wsLog}`);
 
   info(`API:  ${context.apiBaseUrl()}/`);
   info(`WS:   ${context.wsBaseUrl()}/`);
