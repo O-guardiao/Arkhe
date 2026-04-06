@@ -51,9 +51,10 @@ export class LiveWorkbenchAPI {
   private readonly _baseUrl: string;
   private readonly _headers: Record<string, string>;
 
-  constructor(context: CliContext) {
+  constructor(context: CliContext, baseUrl?: string) {
     this._context = context;
     this._baseUrl = (
+      baseUrl ||
       (context.env as Record<string, string>)["RLM_INTERNAL_HOST"] ||
       context.apiBaseUrl()
     ).replace(/\/$/, "");

@@ -7,59 +7,58 @@ import {
   type Envelope,
 } from "../src/envelope.js";
 
+/** Helper: campos mínimos obrigatórios para newEnvelope */
+const minimal = (overrides: Record<string, unknown> = {}) => ({
+  source_channel: "telegram" as const,
+  source_id: "123456789",
+  direction: "inbound" as const,
+  text: "hello",
+  ...overrides,
+});
+
 describe("newEnvelope", () => {
   it("gera id único em formato hex de 32 chars", () => {
-    const e1 = newEnvelope({ channel: "telegram", direction: "inbound" });
-    const e2 = newEnvelope({ channel: "telegram", direction: "inbound" });
+    const e1 = newEnvelope(minimal());
+    const e2 = newEnvelope(minimal());
     expect(e1.id).toMatch(/^[0-9a-f]{32}$/);
     expect(e2.id).toMatch(/^[0-9a-f]{32}$/);
     expect(e1.id).not.toBe(e2.id);
   });
 
   it("define direction inbound por padrão", () => {
-    const e = newEnvelope({ channel: "telegram" });
+    const e = newEnvelope(minimal());
     expect(e.direction).toBe("inbound");
   });
 
   it("herda campos passados no partial", () => {
-    const e = newEnvelope({
-      channel: "telegram",
-      routing_key: "123456",
-      payload: { text: "oi" },
-    });
-    expect(e.routing_key).toBe("123456");
-    expect(e.payload).toEqual({ text: "oi" });
+    const e = newEnvelope(minimal({ metadata: { origin: "test" } }));
+    expect(e.metadata).toEqual({ origin: "test" });
   });
 
-  it("timestamp é um número positivo", () => {
+  it("timestamp é uma string ISO 8601", () => {
     const before = Date.now();
-    const e = newEnvelope({ channel: "telegram" });
+    const e = newEnvelope(minimal());
     const after = Date.now();
-    expect(e.timestamp).toBeGreaterThanOrEqual(before);
-    expect(e.timestamp).toBeLessThanOrEqual(after);
+    const ts = new Date(e.timestamp).getTime();
+    expect(ts).toBeGreaterThanOrEqual(before);
+    expect(ts).toBeLessThanOrEqual(after);
   });
 });
 
 describe("replyEnvelope", () => {
   it("cria envelope outbound com correlation_id do original", () => {
-    const inbound = newEnvelope({
-      channel: "telegram",
-      direction: "inbound",
-      source_client_id: "telegram:123",
-      routing_key: "456",
-    });
+    const inbound = newEnvelope(minimal());
     const reply = replyEnvelope(inbound, "resposta aqui");
     expect(reply.direction).toBe("outbound");
     expect(reply.correlation_id).toBe(inbound.id);
-    expect(reply.channel).toBe(inbound.channel);
-    expect(reply.routing_key).toBe(inbound.routing_key);
-    expect(reply.payload?.text).toBe("resposta aqui");
+    expect(reply.source_channel).toBe("internal");
+    expect(reply.text).toBe("resposta aqui");
   });
 });
 
 describe("parseEnvelope", () => {
   it("analisa JSON válido", () => {
-    const input: Envelope = newEnvelope({ channel: "telegram", direction: "inbound" });
+    const input: Envelope = newEnvelope(minimal());
     const parsed = parseEnvelope(input);
     expect(parsed.id).toBe(input.id);
   });
@@ -71,7 +70,7 @@ describe("parseEnvelope", () => {
 
 describe("safeParseEnvelope", () => {
   it("retorna success=true para envelope válido", () => {
-    const input = newEnvelope({ channel: "telegram" });
+    const input = newEnvelope(minimal());
     const result = safeParseEnvelope(input);
     expect(result.success).toBe(true);
   });

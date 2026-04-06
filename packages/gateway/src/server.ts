@@ -31,6 +31,7 @@ import type { TelegramAdapter } from "./adapters/telegram.js";
 import type { GatewayStateMachine } from "./state-machine.js";
 import type { WsBridge } from "./ws-bridge.js";
 import type { Envelope } from "./envelope.js";
+import { newEnvelope } from "./envelope.js";
 
 const log = childLogger({ component: "server" });
 
@@ -48,7 +49,7 @@ export function createGatewayApp(
   stateMachine: GatewayStateMachine,
   bridge: WsBridge,
   config: GatewayServerConfig = {},
-): Hono {
+): { app: Hono; operatorStore: import("./operator.js").OperatorSessionStore } {
   const app = new Hono();
 
   // -------------------------------------------------------------------------
@@ -151,14 +152,89 @@ export function createGatewayApp(
   // -------------------------------------------------------------------------
   // Operator
   // -------------------------------------------------------------------------
-  const { router: operatorRouter } = createOperatorRouter(registry, bridge);
+  const { router: operatorRouter, store: operatorStore } = createOperatorRouter(registry, bridge);
   app.route("/", operatorRouter);
   log.info("Operator router registered at /operator/*");
+
+  // -------------------------------------------------------------------------
+  // Channel status API (/api/channels/*)
+  // -------------------------------------------------------------------------
+  app.get("/api/channels/status", (c) => {
+    const adapters = registry.all();
+    const channels: Record<string, unknown> = {};
+    for (const adapter of adapters) {
+      const info = adapter.getChannelInfo();
+      channels[info.id] = {
+        channel_id: info.id,
+        account_id: "default",
+        configured: true,
+        running: info.status === "healthy" || info.status === "degraded",
+        healthy: info.status === "healthy",
+        identity: { display_name: info.name },
+        last_error: info.status === "down" ? "channel down" : null,
+        reconnect_attempts: info.errors,
+        last_probe_ms: info.lastSeenMs ?? 0,
+        meta: {},
+      };
+    }
+    return c.json({ channels });
+  });
+
+  app.post("/api/channels/:id/probe", async (c) => {
+    const channelId = c.req.param("id");
+    const adapter = registry.get(channelId);
+    if (!adapter) return c.json({ error: `Channel ${channelId} not found` }, 404);
+    if (!adapter.probe) return c.json({ status: "ok", message: "Probe not supported" });
+    const result = await adapter.probe(5000);
+    return c.json({ status: result.ok ? "ok" : "error", elapsed_ms: result.elapsedMs, error: result.error ?? null });
+  });
+
+  app.post("/api/channels/send", async (c) => {
+    let body: { target_client_id: string; message: string };
+    try {
+      body = (await c.req.json()) as { target_client_id: string; message: string };
+    } catch {
+      return c.json({ error: "Invalid body" }, 400);
+    }
+    const envelope = newEnvelope({
+      source_channel: "internal",
+      source_id: "tui-operator",
+      source_client_id: "internal:tui-operator",
+      direction: "outbound",
+      message_type: "text",
+      text: body.message,
+      target_client_id: body.target_client_id,
+      metadata: {},
+    });
+    const forwarded = registry.forwardToBrain(envelope);
+    if (!forwarded) return c.json({ error: "Brain unavailable" }, 503);
+    return c.json({ status: "ok", envelope_id: envelope.id });
+  });
+
+  // -------------------------------------------------------------------------
+  // Wire Brain replies to OperatorSessionStore
+  // -------------------------------------------------------------------------
+  bridge.onReply((envelope) => {
+    if (envelope.direction === "outbound" || envelope.source_channel === "internal") {
+      const sessions = operatorStore.all();
+      for (const session of sessions) {
+        const eventType = envelope.direction === "outbound" ? "brain.reply" : "inbound_event";
+        operatorStore.logEvent(session.sessionId, eventType, {
+          channel: envelope.target_channel ?? envelope.source_channel,
+          text: envelope.text ?? "",
+          envelope_id: envelope.id,
+          source_client_id: envelope.source_client_id,
+          target_client_id: envelope.target_client_id ?? null,
+          message_type: envelope.message_type,
+        });
+      }
+    }
+  });
 
   // -------------------------------------------------------------------------
   // 404 default
   // -------------------------------------------------------------------------
   app.notFound((c) => c.json({ ok: false, error: "not found" }, 404));
 
-  return app;
+  return { app, operatorStore };
 }

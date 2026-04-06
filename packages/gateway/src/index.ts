@@ -29,6 +29,7 @@ import { DiscordAdapter } from "./adapters/discord.js";
 import { SlackAdapter } from "./adapters/slack.js";
 import { WhatsAppAdapter } from "./adapters/whatsapp.js";
 import { createGatewayApp } from "./server.js";
+import { attachEventsWebSocket } from "./events-ws.js";
 import { EnvelopeSchema } from "./envelope.js";
 
 // ---------------------------------------------------------------------------
@@ -116,7 +117,7 @@ if (whatsappAdapter) {
 // Conecta registry ao bridge para receber respostas do Brain
 registry.attachBridge();
 
-const app = createGatewayApp(registry, health, stateMachine, bridge, {
+const { app, operatorStore } = createGatewayApp(registry, health, stateMachine, bridge, {
   ...(TELEGRAM_SECRET_TOKEN !== undefined ? { telegramSecretToken: TELEGRAM_SECRET_TOKEN } : {}),
   ...(process.env["WEBHOOK_SECRET"] !== undefined ? { webhookSecret: process.env["WEBHOOK_SECRET"] } : {}),
   ...(process.env["OPENAI_COMPAT_API_KEY"] !== undefined ? { openaiApiKey: process.env["OPENAI_COMPAT_API_KEY"] } : {}),
@@ -140,6 +141,9 @@ const server = serve(
     health.startReporting(30_000);
   },
 );
+
+// Attach /events WebSocket endpoint for TUI clients
+attachEventsWebSocket(server, bridge, operatorStore);
 
 // Aguarda conexão Bridge para transitar para "running"
 const unsubscribe = bridge.onReply(() => {

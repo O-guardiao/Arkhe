@@ -53,6 +53,7 @@ export interface TuiLiveApi {
   ensureSession(clientId: string): Promise<LiveSessionInfo>;
   dispatchPrompt(sessionId: string, clientId: string, text: string): Promise<Record<string, unknown>>;
   fetchChannelsStatus(): Promise<Record<string, unknown>>;
+  fetchActivity(sessionId: string): Promise<Record<string, unknown>>;
   applyCommand(sessionId: string, opts: TuiApplyCommandOptions): Promise<Record<string, unknown>>;
   probeChannel(channelId: string): Promise<Record<string, unknown>>;
   crossChannelSend(targetClientId: string, message: string): Promise<Record<string, unknown>>;
@@ -123,8 +124,10 @@ export class TuiApp {
   private dirty = true;
   private frameTimer: ReturnType<typeof setInterval> | undefined;
   private channelRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  private activityRefreshTimer: ReturnType<typeof setInterval> | undefined;
   private running = false;
   private lastChannelRefreshError = "";
+  private lastActivityTs = 0;
 
   constructor(private opts: TuiAppOptions) {
     this.client = new WsEventClient(opts.gatewayUrl, opts.token);
@@ -207,6 +210,9 @@ export class TuiApp {
     if (this.channelRefreshTimer !== undefined) {
       clearInterval(this.channelRefreshTimer);
     }
+    if (this.activityRefreshTimer !== undefined) {
+      clearInterval(this.activityRefreshTimer);
+    }
     this.client.disconnect();
     if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
       process.stdin.setRawMode(false);
@@ -227,6 +233,10 @@ export class TuiApp {
     if (!this.liveApi) return;
     this.channelRefreshTimer = setInterval(() => {
       void this._refreshChannels(false);
+    }, this.refreshIntervalMs);
+    // Activity polling — matches Python TUI's _fetch_activity() loop
+    this.activityRefreshTimer = setInterval(() => {
+      void this._refreshActivity();
     }, this.refreshIntervalMs);
   }
 
@@ -267,6 +277,102 @@ export class TuiApp {
         this._pushSystemMessage(message);
       }
       this.lastChannelRefreshError = message;
+    }
+  }
+
+  private async _refreshActivity(): Promise<void> {
+    if (!this.liveApi || !this.liveSession) return;
+
+    try {
+      const data = await this.liveApi.fetchActivity(this.liveSession.sessionId);
+      const events = (data["events"] ?? []) as Array<{
+        type?: string;
+        payload?: Record<string, unknown>;
+        ts?: number;
+        eventId?: string;
+      }>;
+
+      for (const evt of events) {
+        // Skip events we've already processed
+        if (evt.ts && evt.ts <= this.lastActivityTs) continue;
+
+        const ts = nowHms();
+        const payload = evt.payload ?? {};
+        const eventType = evt.type ?? "";
+
+        switch (eventType) {
+          case "brain.reply":
+          case "outbound_message": {
+            const channel = String(payload["channel"] ?? payload["target_channel"] ?? "brain");
+            const text = String(payload["text"] ?? "");
+            if (text) {
+              this.messagesPanel.push({ ts, role: "agent", channel, text });
+            }
+            break;
+          }
+          case "inbound_message":
+          case "operator_message_sent": {
+            const text = String(payload["text"] ?? payload["text_preview"] ?? "");
+            if (text && eventType === "inbound_message") {
+              const channel = String(payload["channel"] ?? "tui");
+              this.channelPanel.incrementCount(channel);
+              this.messagesPanel.push({ ts, role: "user", channel, text });
+            }
+            break;
+          }
+          case "tool_call": {
+            const label = `${String(payload["tool"] ?? "?")} ${String(payload["args"] ?? "")}`.trimEnd();
+            this.eventsPanel.push({ ts, kind: "tool_call", label });
+            this.branchTree.upsert({
+              id: String(payload["call_id"] ?? crypto.randomUUID()),
+              parentId: String(payload["parent_id"] ?? ""),
+              label,
+              status: "running",
+            });
+            break;
+          }
+          case "tool_result": {
+            const callId = String(payload["call_id"] ?? "");
+            const ok = payload["ok"] === true;
+            this.branchTree.upsert({
+              id: callId,
+              label: ok ? "done" : String(payload["error"] ?? "error"),
+              status: ok ? "ok" : "error",
+            });
+            break;
+          }
+          case "llm_latency": {
+            const ms = Number(payload["ms"] ?? 0);
+            const model = String(payload["model"] ?? "?");
+            this.eventsPanel.push({ ts, kind: "llm_latency", label: `${model} ${ms}ms` });
+            break;
+          }
+          case "error": {
+            const msg = String(payload["message"] ?? JSON.stringify(payload));
+            this.eventsPanel.push({ ts, kind: "error", label: msg });
+            break;
+          }
+          case "operator_command_sent": {
+            const cmdType = String(payload["command_type"] ?? "?");
+            this.eventsPanel.push({ ts, kind: "command", label: cmdType });
+            break;
+          }
+          default: {
+            if (eventType) {
+              this.eventsPanel.push({ ts, kind: "event", label: `${eventType}: ${JSON.stringify(payload).slice(0, 80)}` });
+            }
+            break;
+          }
+        }
+
+        if (evt.ts) {
+          this.lastActivityTs = Math.max(this.lastActivityTs, evt.ts);
+        }
+      }
+
+      this.dirty = true;
+    } catch {
+      // Silent — activity polling failure is not critical
     }
   }
 

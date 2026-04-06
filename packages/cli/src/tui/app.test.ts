@@ -28,6 +28,7 @@ describe("TuiApp live prompt dispatch", () => {
       }),
       dispatchPrompt: vi.fn().mockResolvedValue({ ok: true }),
       fetchChannelsStatus: vi.fn().mockResolvedValue({ channels: {} }),
+      fetchActivity: vi.fn().mockResolvedValue({ events: [] }),
       applyCommand: vi.fn().mockResolvedValue({ command: {} }),
       probeChannel: vi.fn().mockResolvedValue({ status: "ok" }),
       crossChannelSend: vi.fn().mockResolvedValue({ status: "ok" }),
@@ -59,6 +60,7 @@ describe("TuiApp live prompt dispatch", () => {
       }),
       dispatchPrompt: vi.fn().mockResolvedValue({ ok: true }),
       fetchChannelsStatus: vi.fn().mockResolvedValue({ channels: {} }),
+      fetchActivity: vi.fn().mockResolvedValue({ events: [] }),
       applyCommand: vi.fn().mockResolvedValue({ command: {} }),
       probeChannel: vi.fn().mockResolvedValue({ status: "ok" }),
       crossChannelSend: vi.fn().mockResolvedValue({ status: "ok" }),
@@ -89,6 +91,7 @@ describe("TuiApp live prompt dispatch", () => {
       }),
       dispatchPrompt: vi.fn().mockResolvedValue({ ok: true }),
       fetchChannelsStatus: vi.fn().mockResolvedValue({ channels: {} }),
+      fetchActivity: vi.fn().mockResolvedValue({ events: [] }),
       applyCommand: vi.fn().mockResolvedValue({
         command: {
           command_type: "pause_runtime",

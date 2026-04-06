@@ -140,7 +140,7 @@ async function runTuiCommand(opts: {
     token: opts.token,
     refreshIntervalSeconds: opts.refreshInterval,
     once: opts.once,
-    liveApi: new LiveWorkbenchAPI(context),
+    liveApi: new LiveWorkbenchAPI(context, opts.url),
   };
   const app = new TuiApp(
     opts.clientId ? { ...appOptions, clientId: opts.clientId } : appOptions
