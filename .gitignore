@@ -24,6 +24,7 @@ lib/
 lib64/
 !docs/src/lib/
 !visualizer/src/lib/
+!packages/*/src/lib/
 parts/
 sdist/
 var/
