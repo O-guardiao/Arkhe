@@ -7,7 +7,9 @@
  * Migrado de rlm/cli/tui/channel_console.py
  */
 
-import type { LiveWorkbenchAPI } from "./live-api.js";
+export interface ChannelStatusApi {
+  fetchChannelsStatus(): Promise<Record<string, unknown>>;
+}
 
 // ─────────────────────────────────────────────── Ícones de status
 
@@ -197,7 +199,7 @@ function extractSnapshots(data: Record<string, unknown>): ChannelSnapshot[] {
 
 /** Busca snapshots via HTTP /api/channels/status (live mode). */
 export async function fetchChannelSnapshotsLive(
-  liveApi: LiveWorkbenchAPI
+  liveApi: ChannelStatusApi
 ): Promise<ChannelSnapshot[]> {
   const data = await liveApi.fetchChannelsStatus();
   return extractSnapshots(data);
@@ -209,7 +211,7 @@ export async function fetchChannelSnapshotsLive(
  */
 export async function refreshChannelState(
   state: ChannelConsoleState,
-  opts: { liveApi?: LiveWorkbenchAPI }
+  opts: { liveApi?: ChannelStatusApi }
 ): Promise<void> {
   try {
     if (opts.liveApi) {

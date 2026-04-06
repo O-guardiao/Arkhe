@@ -61,7 +61,7 @@ const TELEGRAM_POLLING_MODE = (process.env["TELEGRAM_POLLING_MODE"] ?? "polling"
 // ---------------------------------------------------------------------------
 
 const stateMachine = new GatewayStateMachine();
-const bridge = new WsBridge(BRAIN_WS_URL, BRAIN_WS_TOKEN);
+const bridge = new WsBridge(BRAIN_WS_URL, BRAIN_WS_TOKEN, GATEWAY_ID);
 const registry = new ChannelRegistry(bridge);
 const health = new HealthAggregator(GATEWAY_ID, registry, bridge);
 

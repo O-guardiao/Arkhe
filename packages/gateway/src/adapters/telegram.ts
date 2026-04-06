@@ -4,7 +4,7 @@
 
 import { childLogger } from "../logger.js";
 import { chunkText } from "../chunker.js";
-import type { ChannelAdapter, ChannelInfo, SendResult } from "./interface.js";
+import type { ChannelAdapter, ChannelInfo, ProbeResult, SendResult } from "./interface.js";
 import type { Envelope } from "../envelope.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -78,6 +78,53 @@ export class TelegramAdapter implements ChannelAdapter {
       messagesReceived: this.messagesReceived,
       errors: this.errorCount,
     };
+  }
+
+  async probe(timeoutMs = this.config.timeoutMs): Promise<ProbeResult> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
+
+    try {
+      const response = await fetch(`${TELEGRAM_API_BASE}/bot${this.config.botToken}/getMe`, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      const json = (await response.json()) as {
+        ok: boolean;
+        result?: { id?: number; username?: string; first_name?: string };
+        description?: string;
+      };
+
+      if (!response.ok || !json.ok || !json.result) {
+        this.errorCount++;
+        return {
+          ok: false,
+          elapsedMs: Date.now() - startedAt,
+          error: json.description ?? `HTTP ${response.status}`,
+        };
+      }
+
+      this.lastSeenMs = Date.now();
+      return {
+        ok: true,
+        elapsedMs: Date.now() - startedAt,
+        identity: {
+          ...(json.result.id !== undefined ? { botId: json.result.id } : {}),
+          ...(json.result.username !== undefined ? { username: json.result.username } : {}),
+          ...(json.result.first_name !== undefined ? { displayName: json.result.first_name } : {}),
+        },
+      };
+    } catch (err) {
+      this.errorCount++;
+      return {
+        ok: false,
+        elapsedMs: Date.now() - startedAt,
+        error: String(err),
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Registra uma mensagem recebida (chamado pelo channel handler) */

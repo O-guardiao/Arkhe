@@ -14,7 +14,7 @@
 
 import { childLogger } from "../logger.js";
 import { chunkText } from "../chunker.js";
-import type { ChannelAdapter, ChannelInfo, SendResult } from "./interface.js";
+import type { ChannelAdapter, ChannelInfo, ProbeResult, SendResult } from "./interface.js";
 import type { Envelope } from "../envelope.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
@@ -88,6 +88,59 @@ export class DiscordAdapter implements ChannelAdapter {
       messagesReceived: this.messagesReceived,
       errors: this.errorCount,
     };
+  }
+
+  async probe(timeoutMs = this.config.timeoutMs): Promise<ProbeResult> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
+
+    try {
+      const response = await fetch(`${DISCORD_API}/users/@me`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bot ${this.config.botToken}`,
+          "User-Agent": "RLM-Gateway/1.0",
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        this.errorCount++;
+        return {
+          ok: false,
+          elapsedMs: Date.now() - startedAt,
+          error: `HTTP ${response.status}: ${errText}`,
+        };
+      }
+
+      const data = await response.json() as {
+        id?: string;
+        username?: string;
+        global_name?: string | null;
+      };
+
+      this.lastSeenMs = Date.now();
+      return {
+        ok: true,
+        elapsedMs: Date.now() - startedAt,
+        identity: {
+          ...(data.id !== undefined ? { botId: data.id } : {}),
+          ...(data.username !== undefined ? { username: data.username } : {}),
+          ...((data.global_name ?? data.username) !== undefined ? { displayName: data.global_name ?? data.username } : {}),
+        },
+      };
+    } catch (err) {
+      this.errorCount++;
+      return {
+        ok: false,
+        elapsedMs: Date.now() - startedAt,
+        error: String(err),
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // --------------------------------------------------------------------------

@@ -28,6 +28,19 @@ export interface SendResult {
   error?: string;
 }
 
+export interface ChannelIdentity {
+  botId?: string | number;
+  username?: string;
+  displayName?: string;
+}
+
+export interface ProbeResult {
+  ok: boolean;
+  elapsedMs: number;
+  error?: string;
+  identity?: ChannelIdentity;
+}
+
 // ---------------------------------------------------------------------------
 // Interface do adapter
 // ---------------------------------------------------------------------------
@@ -68,4 +81,9 @@ export interface ChannelAdapter {
    * Retorna informações atuais sobre o status do canal.
    */
   getChannelInfo(): ChannelInfo;
+
+  /**
+   * Executa um probe sob demanda no canal, quando suportado.
+   */
+  probe?(timeoutMs?: number): Promise<ProbeResult>;
 }

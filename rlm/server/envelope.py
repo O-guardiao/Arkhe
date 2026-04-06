@@ -14,11 +14,16 @@ Razão de existir:
 """
 from __future__ import annotations
 
-import re
+import json
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from typing import Any, Literal
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Literal, Mapping, cast
+
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import ValidationError
 
 # ---------------------------------------------------------------------------
 # Tipos derivados do schema
@@ -36,16 +41,37 @@ MessagePriority = Literal[-1, 0, 1]
 # Conjuntos de valores válidos (para validação sem isinstance de Literal)
 # ---------------------------------------------------------------------------
 
-_VALID_CHANNELS = frozenset({"telegram", "discord", "slack", "whatsapp", "webchat", "api", "internal"})
-_VALID_DIRECTIONS = frozenset({"inbound", "outbound", "internal"})
-_VALID_MESSAGE_TYPES = frozenset({
-    "text", "image", "audio", "video", "document",
-    "location", "command", "event", "action", "system"
-})
-_VALID_PRIORITIES = frozenset({-1, 0, 1})
+def _empty_metadata() -> dict[str, Any]:
+    return {}
 
-_ID_RE = re.compile(r'^[0-9a-f]{32}$')
-_CLIENT_ID_RE = re.compile(r'^[a-z_]+:.+$')
+
+@lru_cache(maxsize=1)
+def _envelope_schema_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "schemas" / "envelope.v1.json"
+
+
+@lru_cache(maxsize=1)
+def _load_envelope_schema() -> dict[str, Any]:
+    schema_text = _envelope_schema_path().read_text(encoding="utf-8")
+    loaded = json.loads(schema_text)
+    return cast(dict[str, Any], loaded)
+
+
+@lru_cache(maxsize=1)
+def _envelope_validator() -> Any:
+    return Draft202012Validator(
+        _load_envelope_schema(),
+        format_checker=FormatChecker(),
+    )
+
+
+def validate_envelope_payload(data: Mapping[str, Any]) -> None:
+    try:
+        _envelope_validator().validate(dict(data))
+    except ValidationError as exc:
+        path = ".".join(str(part) for part in exc.absolute_path)
+        prefix = f"{path}: " if path else ""
+        raise ValueError(f"Envelope inválido pelo schema: {prefix}{exc.message}") from exc
 
 # ---------------------------------------------------------------------------
 # Dataclass principal
@@ -84,7 +110,7 @@ class Envelope:
     message_type: str = "text"
     media_url: str | None = None
     media_mime: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=_empty_metadata)
 
     # --- Campos de delivery ---
     delivery_attempts: int = 0
@@ -92,45 +118,8 @@ class Envelope:
     priority: int = 0       # -1 (baixa) | 0 (normal) | 1 (alta)
 
     def __post_init__(self) -> None:
-        """Valida todos os campos contra as restrições do schema."""
-        if not _ID_RE.match(self.id):
-            raise ValueError(
-                f"Envelope.id deve ser UUID hex 32 chars sem hífens, recebido: {self.id!r}"
-            )
-        if self.source_channel not in _VALID_CHANNELS:
-            raise ValueError(
-                f"Envelope.source_channel deve ser um de {sorted(_VALID_CHANNELS)}, "
-                f"recebido: {self.source_channel!r}"
-            )
-        if not self.source_id:
-            raise ValueError("Envelope.source_id não pode ser vazio")
-        if not _CLIENT_ID_RE.match(self.source_client_id):
-            raise ValueError(
-                f"Envelope.source_client_id deve seguir ^[a-z_]+:.+$, "
-                f"recebido: {self.source_client_id!r}"
-            )
-        if self.direction not in _VALID_DIRECTIONS:
-            raise ValueError(
-                f"Envelope.direction deve ser um de {sorted(_VALID_DIRECTIONS)}, "
-                f"recebido: {self.direction!r}"
-            )
-        if len(self.text) > 65536:
-            raise ValueError(
-                f"Envelope.text excede 65 536 chars ({len(self.text)})"
-            )
-        if self.message_type not in _VALID_MESSAGE_TYPES:
-            raise ValueError(
-                f"Envelope.message_type deve ser um de {sorted(_VALID_MESSAGE_TYPES)}, "
-                f"recebido: {self.message_type!r}"
-            )
-        if self.priority not in _VALID_PRIORITIES:
-            raise ValueError(
-                f"Envelope.priority deve ser -1, 0 ou 1, recebido: {self.priority!r}"
-            )
-        if self.delivery_attempts < 0:
-            raise ValueError("Envelope.delivery_attempts deve ser >= 0")
-        if not (0 <= self.max_retries <= 10):
-            raise ValueError(f"Envelope.max_retries deve ser 0-10, recebido: {self.max_retries}")
+        """Valida o envelope contra o JSON Schema canônico."""
+        validate_envelope_payload(self.to_dict())
 
     # ---------------------------------------------------------------------------
     # Serialização
@@ -145,27 +134,10 @@ class Envelope:
         """
         Desserializa a partir de dict (vindo de JSON TypeScript).
 
-        Valida todos os campos obrigatórios e ignora campos desconhecidos
-        para compatibilidade com versões futuras do schema.
+        Valida o payload bruto contra o JSON Schema canônico antes de instanciar.
         """
-        required = (
-            "id", "source_channel", "source_id", "source_client_id",
-            "direction", "text", "timestamp"
-        )
-        missing = [r for r in required if r not in data or data[r] is None]
-        if missing:
-            raise ValueError(f"Envelope.from_dict: campos obrigatórios ausentes: {missing}")
-
-        known_fields = {
-            "id", "source_channel", "source_id", "source_client_id",
-            "correlation_id", "reply_to_id",
-            "target_channel", "target_id", "target_client_id",
-            "direction", "message_type", "text",
-            "media_url", "media_mime", "metadata",
-            "timestamp", "delivery_attempts", "max_retries", "priority",
-        }
-        filtered = {k: v for k, v in data.items() if k in known_fields}
-        return cls(**filtered)
+        validate_envelope_payload(data)
+        return cls(**data)
 
 
 # ---------------------------------------------------------------------------

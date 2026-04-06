@@ -4,6 +4,8 @@
   "title": "WebSocket Protocol Messages",
   "description": "Mensagens trocadas via WebSocket entre o Gateway TypeScript e o Brain Python.",
   "oneOf": [
+    { "$ref": "#/$defs/HelloMessage" },
+    { "$ref": "#/$defs/HelloAckMessage" },
     { "$ref": "#/$defs/EnvelopeMessage" },
     { "$ref": "#/$defs/AckMessage" },
     { "$ref": "#/$defs/BrainEvent" },
@@ -14,6 +16,84 @@
     { "$ref": "#/$defs/HealthReportMessage" }
   ],
   "$defs": {
+    "HelloMessage": {
+      "type": "object",
+      "title": "Hello",
+      "description": "Handshake inicial do Gateway para negociar versão e capacidades.",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "type": "string", "const": "hello" },
+        "data": {
+          "type": "object",
+          "required": ["schema_version", "client"],
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "description": "Versão do contrato ws-protocol/envelope suportada pelo cliente"
+            },
+            "client": {
+              "type": "string",
+              "description": "Identificador do cliente, ex: gateway-ts"
+            },
+            "client_version": {
+              "type": ["string", "null"],
+              "default": null
+            },
+            "gateway_id": {
+              "type": ["string", "null"],
+              "default": null
+            },
+            "capabilities": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": []
+            },
+            "timestamp": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelloAckMessage": {
+      "type": "object",
+      "title": "Hello Ack",
+      "description": "Resposta do Brain ao handshake inicial do Gateway.",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "type": "string", "const": "hello_ack" },
+        "data": {
+          "type": "object",
+          "required": ["accepted", "schema_version", "server"],
+          "properties": {
+            "accepted": { "type": "boolean", "default": true },
+            "schema_version": { "type": "string" },
+            "server": {
+              "type": "string",
+              "description": "Identificador do servidor, ex: brain-python"
+            },
+            "server_version": {
+              "type": ["string", "null"],
+              "default": null
+            },
+            "capabilities": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": []
+            },
+            "timestamp": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "EnvelopeMessage": {
       "type": "object",
       "title": "Envelope Message",
@@ -147,7 +227,7 @@
       "description": "Relatório de saúde do gateway enviado ao brain",
       "required": ["type", "data"],
       "properties": {
-        "type": { "type": "string", "const": "health.report" },
+        "type": { "type": "string", "const": "health_report" },
         "data": { "$ref": "health-report.v1.json" }
       },
       "additionalProperties": false

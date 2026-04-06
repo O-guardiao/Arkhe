@@ -32,6 +32,43 @@ export interface BridgeHealthSnapshot {
   lastDisconnectedMs: number | undefined;
 }
 
+interface HelloFrame {
+  type: "hello";
+  data: {
+    schema_version: string;
+    client: string;
+    client_version: string;
+    gateway_id: string | null;
+    capabilities: string[];
+    timestamp: string;
+  };
+}
+
+interface HelloAckFrame {
+  type: "hello_ack";
+  data?: {
+    accepted?: boolean;
+    schema_version?: string;
+    server?: string;
+    server_version?: string | null;
+    capabilities?: string[];
+    timestamp?: string;
+  };
+}
+
+interface HealthReportFrame {
+  type: "health_report";
+  data: object;
+}
+
+const WS_PROTOCOL_SCHEMA_VERSION = "1";
+const GATEWAY_CAPABILITIES = [
+  "envelope.v1",
+  "ack.v1",
+  "health_report.v1",
+  "ping-pong.v1",
+];
+
 // ---------------------------------------------------------------------------
 // WsBridge
 // ---------------------------------------------------------------------------
@@ -57,6 +94,7 @@ export class WsBridge {
   constructor(
     private readonly brainWsUrl: string,
     private readonly brainWsToken?: string,
+    private readonly gatewayId?: string,
   ) {
     this.backoff = new ExponentialBackoff({ initialMs: 500, maxMs: 30_000 });
   }
@@ -95,6 +133,16 @@ export class WsBridge {
     // Enfileira para reenvio na próxima conexão (max 512 msgs)
     if (this.pendingQueue.length < 512) {
       this.pendingQueue.push(msg);
+    }
+    return false;
+  }
+
+  /** Envia um frame de health_report ao Brain. */
+  sendHealthReport(report: object): boolean {
+    const msg: HealthReportFrame = { type: "health_report", data: report };
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+      return true;
     }
     return false;
   }
@@ -153,6 +201,8 @@ export class WsBridge {
     this.reconnectCount++;
     log.info({ reconnects: this.reconnectCount }, "Brain WS connected");
 
+    this.sendHello();
+
     // Drena fila de pendentes
     const pending = this.pendingQueue.splice(0);
     for (const msg of pending) {
@@ -177,6 +227,20 @@ export class WsBridge {
     }
 
     const msg = parsed as { type?: string; data?: unknown };
+
+    if (msg.type === "hello_ack") {
+      const helloAck = msg as HelloAckFrame;
+      log.info(
+        {
+          accepted: helloAck.data?.accepted ?? true,
+          schemaVersion: helloAck.data?.schema_version,
+          server: helloAck.data?.server,
+          capabilities: helloAck.data?.capabilities ?? [],
+        },
+        "Brain WS handshake acknowledged",
+      );
+      return;
+    }
 
     if (msg.type === "envelope" && msg.data) {
       try {
@@ -220,5 +284,23 @@ export class WsBridge {
     const delay = this.backoff.next();
     log.info({ delayMs: delay }, "Scheduling Brain WS reconnect");
     this.reconnectTimer = setTimeout(() => this.connect(), delay);
+  }
+
+  private sendHello(): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+
+    const frame: HelloFrame = {
+      type: "hello",
+      data: {
+        schema_version: WS_PROTOCOL_SCHEMA_VERSION,
+        client: "gateway-ts",
+        client_version: process.env["npm_package_version"] ?? "0.0.0-dev",
+        gateway_id: this.gatewayId ?? null,
+        capabilities: GATEWAY_CAPABILITIES,
+        timestamp: new Date().toISOString(),
+      },
+    };
+
+    this.ws.send(JSON.stringify(frame));
   }
 }

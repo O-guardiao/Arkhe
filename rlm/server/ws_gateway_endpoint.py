@@ -25,16 +25,17 @@ Compatibilidade:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime as _dt, timezone as _tz
 import json
 import logging
 import os
-import time
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 
-from rlm.server.envelope import Envelope, create_reply_envelope
+from rlm.server.brain_api import BrainAPI, RuntimePipelineBrainAPI
+from rlm.server.envelope import Envelope
 
 logger = logging.getLogger("rlm.ws_gateway")
 
@@ -123,108 +124,29 @@ def _constant_time_compare(a: str, b: str) -> bool:
     )
 
 
+def _build_hello_ack() -> dict[str, Any]:
+    """Monta o frame de confirmação do handshake inicial."""
+    return {
+        "type": "hello_ack",
+        "data": {
+            "accepted": True,
+            "schema_version": "1",
+            "server": "brain-python",
+            "server_version": os.environ.get("RLM_VERSION", "dev"),
+            "capabilities": [
+                "envelope.v1",
+                "ack.v1",
+                "health_report.v1",
+                "ping-pong.v1",
+            ],
+            "timestamp": _dt.now(_tz.utc).isoformat(),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Handler de mensagens
 # ---------------------------------------------------------------------------
-
-def _build_services(app_state: Any) -> Any:
-    """Constrói RuntimeDispatchServices a partir do estado do app FastAPI."""
-    from rlm.server.runtime_pipeline import RuntimeDispatchServices
-    return RuntimeDispatchServices(
-        session_manager=app_state.session_manager,
-        supervisor=app_state.supervisor,
-        plugin_loader=app_state.plugin_loader,
-        event_router=app_state.event_router,
-        hooks=app_state.hooks,
-        skill_loader=app_state.skill_loader,
-        runtime_guard=getattr(app_state, "runtime_guard", None),
-        eligible_skills=getattr(app_state, "skills_eligible", []),
-        skill_context=getattr(app_state, "skill_context", ""),
-        exec_approval=getattr(app_state, "exec_approval", None),
-        exec_approval_required=getattr(app_state, "exec_approval_required", False),
-    )
-
-
-def _envelope_to_payload(envelope: Envelope) -> dict[str, Any]:
-    """
-    Converte Envelope inbound para payload compatível com dispatch_runtime_prompt_sync.
-
-    Extrai campos que o pipeline espera: text, from_user, channel, metadata, etc.
-    """
-    meta = dict(envelope.metadata or {})
-    return {
-        "text": envelope.text,
-        "from_user": meta.get("from_user", envelope.source_id),
-        "channel": envelope.source_channel,
-        "content_type": envelope.message_type,
-        "envelope_id": envelope.id,
-        "correlation_id": envelope.correlation_id,
-        "timestamp": envelope.timestamp,
-        "channel_meta": meta,
-    }
-
-
-async def _dispatch_envelope(
-    envelope: Envelope,
-    app_state: Any,
-) -> Envelope:
-    """
-    Despacha Envelope inbound através do pipeline brain e retorna Envelope outbound.
-
-    Executa dispatch_runtime_prompt_sync em thread pool (é síncrono)
-    para não bloquear o event loop do WebSocket.
-    """
-    from rlm.server.runtime_pipeline import dispatch_runtime_prompt_sync, RuntimeDispatchRejected
-
-    services = _build_services(app_state)
-    client_id = envelope.source_client_id
-    payload = _envelope_to_payload(envelope)
-
-    loop = asyncio.get_event_loop()
-    start_ms = time.monotonic() * 1000
-
-    try:
-        result: dict[str, Any] = await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                dispatch_runtime_prompt_sync,
-                services,
-                client_id,
-                payload,
-            ),
-            timeout=_DISPATCH_TIMEOUT_S,
-        )
-    except RuntimeDispatchRejected as exc:
-        logger.warning(
-            "Envelope rejeitado pelo pipeline brain: %s (envelope_id=%s)",
-            exc.detail,
-            envelope.id,
-        )
-        result = {"reply": exc.detail, "error": True}
-    except asyncio.TimeoutError:
-        logger.error(
-            "Timeout despachando Envelope %s (%.0fs)", envelope.id, _DISPATCH_TIMEOUT_S
-        )
-        result = {"reply": "Timeout: brain não respondeu a tempo.", "error": True}
-    except Exception as exc:
-        logger.exception("Erro ao despachar Envelope %s", envelope.id)
-        result = {"reply": f"Erro interno: {exc}", "error": True}
-
-    elapsed_ms = time.monotonic() * 1000 - start_ms
-    reply_text = str(result.get("reply") or result.get("response") or "")
-
-    reply_meta: dict[str, Any] = {
-        "elapsed_ms": elapsed_ms,
-        "brain_session_id": result.get("session_id", ""),
-    }
-    if result.get("error"):
-        reply_meta["error"] = True
-
-    return create_reply_envelope(
-        inbound=envelope,
-        reply_text=reply_text,
-        metadata=reply_meta,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +155,6 @@ async def _dispatch_envelope(
 
 async def _ping_loop(websocket: WebSocket) -> None:
     """Envia pings periódicos ao Gateway TS para manter conexão viva."""
-    from datetime import datetime as _dt, timezone as _tz
     while websocket.client_state == WebSocketState.CONNECTED:
         await asyncio.sleep(_PING_INTERVAL_S)
         if websocket.client_state != WebSocketState.CONNECTED:
@@ -274,6 +195,10 @@ async def ws_gateway(websocket: WebSocket) -> None:
 
     app_state = websocket.app.state
     ping_task = asyncio.create_task(_ping_loop(websocket))
+    brain_api: BrainAPI = RuntimePipelineBrainAPI(
+        app_state,
+        dispatch_timeout_s=_DISPATCH_TIMEOUT_S,
+    )
 
     try:
         while True:
@@ -300,6 +225,49 @@ async def ws_gateway(websocket: WebSocket) -> None:
 
             msg_type: str = msg.get("type", "")
 
+            # ── Hello handshake ───────────────────────────────────────────
+            if msg_type == "hello":
+                data = msg.get("data")
+                if not isinstance(data, dict):
+                    await websocket.send_text(
+                        json.dumps({
+                            "type": "error",
+                            "code": "invalid_hello",
+                            "message": "Campo 'data' do hello ausente ou inválido",
+                        })
+                    )
+                    continue
+
+                data_dict = cast(dict[str, Any], data)
+
+                schema_version = str(data_dict.get("schema_version") or "")
+                client_name = str(data_dict.get("client") or "")
+                capabilities_obj = data_dict.get("capabilities")
+                capabilities = (
+                    [str(item) for item in cast(list[Any], capabilities_obj)]
+                    if isinstance(capabilities_obj, list)
+                    else []
+                )
+
+                if not schema_version or not client_name:
+                    await websocket.send_text(
+                        json.dumps({
+                            "type": "error",
+                            "code": "invalid_hello",
+                            "message": "hello requer schema_version e client",
+                        })
+                    )
+                    continue
+
+                logger.info(
+                    "WS Gateway: hello recebido client=%s schema=%s capabilities=%s",
+                    client_name,
+                    schema_version,
+                    capabilities,
+                )
+                await websocket.send_text(json.dumps(_build_hello_ack()))
+                continue
+
             # ── Envelope inbound ─────────────────────────────────────────
             if msg_type == "envelope":
                 data = msg.get("data")
@@ -311,7 +279,7 @@ async def ws_gateway(websocket: WebSocket) -> None:
                     continue
 
                 try:
-                    envelope = Envelope.from_dict(data)
+                    envelope = Envelope.from_dict(cast(dict[str, Any], data))
                 except (ValueError, TypeError) as exc:
                     logger.warning(
                         "WS Gateway: Envelope inválido: %s", exc
@@ -323,7 +291,7 @@ async def ws_gateway(websocket: WebSocket) -> None:
                     continue
 
                 # Despacha e retorna resposta
-                reply_envelope = await _dispatch_envelope(envelope, app_state)
+                reply_envelope = await brain_api.dispatch_prompt(envelope)
                 await websocket.send_text(
                     json.dumps({"type": "envelope", "data": reply_envelope.to_dict()})
                 )
@@ -346,7 +314,7 @@ async def ws_gateway(websocket: WebSocket) -> None:
                     )
 
             # ── Health report (Gateway reporta status dos canais) ─────────
-            elif msg_type == "health_report":
+            elif msg_type in ("health_report", "health.report"):
                 channels = msg.get("data", {}).get("channels", {})
                 logger.debug(
                     "WS Gateway: health_report recebido (%d canais)", len(channels)
@@ -384,11 +352,12 @@ def _try_update_channel_health(app_state: Any, channels: dict[str, Any]) -> None
         for channel_id, info in channels.items():
             if not isinstance(info, dict):
                 continue
-            status: str = str(info.get("status", "unknown"))
+            info_dict = cast(dict[str, Any], info)
+            status = str(info_dict.get("status", "unknown"))
             if status == "healthy":
                 csr.mark_connected(channel_id)
             elif status in ("unhealthy", "error"):
-                error = str(info.get("error", "gateway health check failed"))
+                error = str(info_dict.get("error", "gateway health check failed"))
                 csr.mark_error(channel_id, error=error)
     except Exception:
         pass  # Health update é não-crítico

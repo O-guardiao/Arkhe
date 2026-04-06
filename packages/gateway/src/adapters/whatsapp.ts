@@ -13,7 +13,7 @@
 
 import { childLogger } from "../logger.js";
 import { chunkText } from "../chunker.js";
-import type { ChannelAdapter, ChannelInfo, SendResult } from "./interface.js";
+import type { ChannelAdapter, ChannelInfo, ProbeResult, SendResult } from "./interface.js";
 import type { Envelope } from "../envelope.js";
 
 const META_GRAPH_API = "https://graph.facebook.com/v18.0";
@@ -82,6 +82,63 @@ export class WhatsAppAdapter implements ChannelAdapter {
       messagesReceived: this.messagesReceived,
       errors: this.errorCount,
     };
+  }
+
+  async probe(timeoutMs = this.config.timeoutMs): Promise<ProbeResult> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
+
+    try {
+      const response = await fetch(
+        `${META_GRAPH_API}/${this.config.phoneNumberId}?fields=display_phone_number,verified_name`,
+        {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${this.config.apiToken}`,
+          },
+          signal: controller.signal,
+        },
+      );
+
+      if (!response.ok) {
+        const errText = await response.text();
+        this.errorCount++;
+        return {
+          ok: false,
+          elapsedMs: Date.now() - startedAt,
+          error: `HTTP ${response.status}: ${errText}`,
+        };
+      }
+
+      const data = await response.json() as {
+        id?: string;
+        display_phone_number?: string;
+        verified_name?: string;
+      };
+
+      this.lastSeenMs = Date.now();
+      return {
+        ok: true,
+        elapsedMs: Date.now() - startedAt,
+        identity: {
+          botId: data.id ?? this.config.phoneNumberId,
+          ...(data.display_phone_number !== undefined ? { username: data.display_phone_number } : {}),
+          ...((data.verified_name ?? data.display_phone_number) !== undefined
+            ? { displayName: data.verified_name ?? data.display_phone_number }
+            : {}),
+        },
+      };
+    } catch (err) {
+      this.errorCount++;
+      return {
+        ok: false,
+        elapsedMs: Date.now() - startedAt,
+        error: String(err),
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // --------------------------------------------------------------------------

@@ -12,7 +12,7 @@
 
 import { childLogger } from "../logger.js";
 import { chunkText } from "../chunker.js";
-import type { ChannelAdapter, ChannelInfo, SendResult } from "./interface.js";
+import type { ChannelAdapter, ChannelInfo, ProbeResult, SendResult } from "./interface.js";
 import type { Envelope } from "../envelope.js";
 
 const SLACK_API = "https://slack.com/api";
@@ -81,6 +81,71 @@ export class SlackAdapter implements ChannelAdapter {
       messagesReceived: this.messagesReceived,
       errors: this.errorCount,
     };
+  }
+
+  async probe(timeoutMs = this.config.timeoutMs): Promise<ProbeResult> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
+
+    try {
+      const response = await fetch(`${SLACK_API}/auth.test`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${this.config.botToken}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({}),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        this.errorCount++;
+        return {
+          ok: false,
+          elapsedMs: Date.now() - startedAt,
+          error: `HTTP ${response.status}: ${errText}`,
+        };
+      }
+
+      const data = await response.json() as {
+        ok: boolean;
+        user_id?: string;
+        user?: string;
+        bot_id?: string;
+        error?: string;
+      };
+
+      if (!data.ok) {
+        this.errorCount++;
+        return {
+          ok: false,
+          elapsedMs: Date.now() - startedAt,
+          error: data.error ?? "Slack auth.test failed",
+        };
+      }
+
+      this.lastSeenMs = Date.now();
+      return {
+        ok: true,
+        elapsedMs: Date.now() - startedAt,
+        identity: {
+          ...((data.bot_id ?? data.user_id) !== undefined ? { botId: data.bot_id ?? data.user_id } : {}),
+          ...(data.user !== undefined ? { username: data.user } : {}),
+          ...(data.user !== undefined ? { displayName: data.user } : {}),
+        },
+      };
+    } catch (err) {
+      this.errorCount++;
+      return {
+        ok: false,
+        elapsedMs: Date.now() - startedAt,
+        error: String(err),
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // --------------------------------------------------------------------------

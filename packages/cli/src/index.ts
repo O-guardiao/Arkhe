@@ -24,7 +24,7 @@
 import { config as dotenvConfig } from "dotenv";
 dotenvConfig();
 
-import { Command } from "commander";
+import { Command, CommanderError, InvalidArgumentError } from "commander";
 import { createRequire } from "node:module";
 import { makePromptCommand } from "./commands/prompt.js";
 import { makeSessionCommand } from "./commands/session.js";
@@ -46,6 +46,14 @@ const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { version: string; description: string };
 
 const program = new Command();
+
+function parsePositiveFloatOption(value: string): number {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new InvalidArgumentError("valor deve ser um número positivo");
+  }
+  return parsed;
+}
 
 program
   .name("rlm")
@@ -71,19 +79,47 @@ program.addCommand(makePeerCommand());
 program.addCommand(makeClientCommand());
 
 // Comando TUI — abre o painel interactivo ao vivo
-program
-  .command("tui")
-  .description("Painel TUI ao vivo com eventos, mensagens e canais em tempo real")
-  .option("--url <url>", "URL base do gateway", process.env["GATEWAY_URL"] ?? "http://localhost:3000")
-  .option("--token <token>", "Token de autenticação", process.env["RLM_API_TOKEN"] ?? "")
-  .action(async (opts: { url: string; token: string }) => {
-    const { TuiApp } = await import("./tui/app.js");
-    const app = new TuiApp({ gatewayUrl: opts.url, token: opts.token });
-    await app.run();
-  });
+async function runTuiCommand(opts: {
+  url: string;
+  token: string;
+  clientId?: string;
+  refreshInterval: number;
+  once: boolean;
+}): Promise<void> {
+  const { TuiApp } = await import("./tui/app.js");
+  const { LiveWorkbenchAPI } = await import("./tui/live-api.js");
+  const { CliContext } = await import("./context.js");
+  const context = CliContext.fromEnvironment();
+  const appOptions = {
+    gatewayUrl: opts.url,
+    token: opts.token,
+    refreshIntervalSeconds: opts.refreshInterval,
+    once: opts.once,
+    liveApi: new LiveWorkbenchAPI(context),
+  };
+  const app = new TuiApp(
+    opts.clientId ? { ...appOptions, clientId: opts.clientId } : appOptions
+  );
+  await app.run();
+}
+
+function registerWorkbenchCommand(name: "tui" | "workbench", description: string): void {
+  program
+    .command(name)
+    .description(description)
+    .option("--url <url>", "URL base do gateway", process.env["GATEWAY_URL"] ?? "http://localhost:3000")
+    .option("--token <token>", "Token de autenticação", process.env["RLM_API_TOKEN"] ?? "")
+    .option("--client-id <id>", "Client id da sessão viva (default: tui:default)")
+    .option("--refresh-interval <seconds>", "Intervalo de atualização auxiliar do modo live", parsePositiveFloatOption, 0.75)
+    .option("--once", "Renderiza o painel uma vez e encerra", false)
+    .action(runTuiCommand);
+}
+
+registerWorkbenchCommand("tui", "Painel TUI ao vivo com eventos, mensagens e canais em tempo real");
+registerWorkbenchCommand("workbench", "Alias do painel TUI/live workbench do operador");
 
 // Tratar erros globais do Commander
-program.exitOverride((err) => {
+program.exitOverride((err: CommanderError) => {
   if (err.code !== "commander.helpDisplayed" && err.code !== "commander.version") {
     console.error(`Erro: ${err.message}`);
     process.exit(err.exitCode ?? 1);

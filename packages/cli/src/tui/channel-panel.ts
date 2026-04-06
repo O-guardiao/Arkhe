@@ -17,7 +17,7 @@ const STATUS_COLORS = {
   error:    chalk.red("✕"),
 } as const;
 
-type ChannelStatus = keyof typeof STATUS_COLORS;
+export type ChannelStatus = keyof typeof STATUS_COLORS;
 
 interface ChannelEntry {
   name: string;
@@ -50,6 +50,20 @@ export class ChannelPanel {
     const c = this.channels.get(name);
     if (c) c.count++;
     else this.channels.set(name, { name, status: "active", count: 1 });
+  }
+
+  sync(entries: ReadonlyArray<{ name: string; status: ChannelStatus }>): void {
+    const next = new Map<string, ChannelEntry>();
+    for (const entry of entries) {
+      const existing = this.channels.get(entry.name);
+      next.set(entry.name, {
+        name: entry.name,
+        status: entry.status,
+        count: existing?.count ?? 0,
+      });
+    }
+    this.channels = next;
+    this.selectedIdx = Math.min(this.selectedIdx, Math.max(this.channels.size - 1, 0));
   }
 
   moveDown(): void {
