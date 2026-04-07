@@ -19,8 +19,8 @@ import { EventEmitter } from "node:events";
 import { WsEventClient } from "../lib/ws-client.js";
 import { computeLayout } from "./workbench.js";
 import { ChannelPanel, type ChannelStatus } from "./channel-panel.js";
-import { MessagesPanel, type MessageEntry } from "./messages-panel.js";
-import { EventsPanel, type ObsEvent } from "./events-panel.js";
+import { MessagesPanel, type MessageEntry, type TimelineEntry } from "./messages-panel.js";
+import { EventsPanel } from "./events-panel.js";
 import { BranchTree } from "./branch-tree.js";
 import { Footer } from "./footer.js";
 import { HeaderPanel, type HeaderData } from "./header-panel.js";
@@ -98,6 +98,22 @@ function nowHms(): string {
   return new Date().toTimeString().slice(0, 8);
 }
 
+function formatClockValue(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value).toTimeString().slice(0, 8);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toTimeString().slice(0, 8);
+    }
+    if (value.length >= 19 && value[10] === "T") {
+      return value.slice(11, 19);
+    }
+  }
+  return nowHms();
+}
+
 function channelStatusFromSnapshot(snapshot: {
   running: boolean;
   healthy: boolean;
@@ -133,6 +149,7 @@ export class TuiApp {
   private running = false;
   private lastChannelRefreshError = "";
   private lastActivityTs = 0;
+  private readonly seenActivityKeys = new Set<string>();
   /** Fiel ao Python: última mensagem de status exibida no header. */
   private lastNotice = "Use /help para ver os comandos do operador.";
 
@@ -202,6 +219,10 @@ export class TuiApp {
       clientId: this.clientId,
       mode: "disconnected",
       lastNotice: this.lastNotice,
+    });
+    this.footer.updateRuntime({
+      lastNotice: this.lastNotice,
+      refreshIntervalSeconds: this.refreshIntervalMs / 1000,
     });
 
     // Recalcula layout se o terminal for redimensionado
@@ -344,6 +365,11 @@ export class TuiApp {
         snapshots.map((snapshot) => ({
           name: snapshot.channelId,
           status: channelStatusFromSnapshot(snapshot),
+          identityName: snapshot.identityName,
+          lastProbeMs: snapshot.lastProbeMs,
+          reconnectAttempts: snapshot.reconnectAttempts,
+          lastError: snapshot.lastError,
+          configured: snapshot.configured,
         }))
       );
       this.lastChannelRefreshError = "";
@@ -363,12 +389,12 @@ export class TuiApp {
     try {
       const data = await this.liveApi.fetchActivity(this.liveSession.sessionId);
 
-      // --- Atualiza header com dados da sessão (Python: _build_header) ---
       const sessionData = (data["session"] ?? data) as Record<string, unknown>;
       const runtime = (data["runtime"] ?? {}) as Record<string, unknown>;
       const controls = (runtime["controls"] ?? {}) as Record<string, unknown>;
       const coordination = (runtime["coordination"] ?? {}) as Record<string, unknown>;
       const summary = ((coordination["latest_parallel_summary"]) ?? {}) as Record<string, unknown>;
+      const sessionMetadata = (sessionData["metadata"] ?? {}) as Record<string, unknown>;
 
       this.headerPanel.update({
         sessionId: String(sessionData["session_id"] ?? this.liveSession.sessionId),
@@ -381,7 +407,68 @@ export class TuiApp {
         lastCheckpoint: String(controls["last_checkpoint_path"] ?? "-"),
       });
 
-      // --- Processa events (formato do gateway TS) ---
+      this.footer.updateRuntime({
+        lastNotice: this.lastNotice,
+        pauseReason: String(controls["pause_reason"] ?? ""),
+        operatorNote: String(controls["last_operator_note"] ?? ""),
+        stateDir: String(sessionData["state_dir"] ?? ""),
+        refreshIntervalSeconds: this.refreshIntervalMs / 1000,
+      });
+      this.eventsPanel.setLatestResponse(String(sessionMetadata["last_operator_response"] ?? "-"));
+
+      const recursiveSession = (runtime["recursive_session"] ?? {}) as Record<string, unknown>;
+      const runtimeMessages = ((recursiveSession["messages"] ?? []) as Array<Record<string, unknown>>)
+        .map((message) => ({
+          ts: formatClockValue(message["timestamp"] ?? message["created_at"] ?? message["ts"]),
+          role: this._normalizeMessageRole(message["role"]),
+          channel: String(message["channel"] ?? "runtime"),
+          text: String(message["content"] ?? message["text"] ?? ""),
+        }))
+        .filter((message) => message.text.trim().length > 0);
+      const timelineEntries = ((runtime["timeline"] ?? {}) as Record<string, unknown>)["entries"] as Array<Record<string, unknown>> | undefined;
+      const runtimeTimeline: TimelineEntry[] = (timelineEntries ?? [])
+        .map((entry) => ({
+          kind: String(entry["event_type"] ?? entry["kind"] ?? "-"),
+          summary: this._summarizeTimelineEntry(entry),
+        }))
+        .filter((entry) => entry.summary.trim().length > 0);
+      this.messagesPanel.setRuntimeSnapshot(runtimeMessages, runtimeTimeline);
+
+      const eventLog = (data["event_log"] ?? []) as Array<Record<string, unknown>>;
+      for (const item of eventLog) {
+        const payload = (item["payload"] ?? {}) as Record<string, unknown>;
+        const eventType = String(item["event_type"] ?? item["type"] ?? "event");
+        const kind = eventType.includes("error") ? "error" : eventType.includes("command") ? "command" : "event";
+        this._recordEvent(
+          "session",
+          kind,
+          `${eventType}: ${this._summarizePayload(payload)}`,
+          formatClockValue(item["timestamp"] ?? item["created_at"] ?? item["ts"]),
+        );
+      }
+
+      for (const item of ((recursiveSession["events"] ?? []) as Array<Record<string, unknown>>)) {
+        const payload = (item["payload"] ?? {}) as Record<string, unknown>;
+        const eventType = String(item["event_type"] ?? item["type"] ?? "runtime");
+        const kind = eventType.includes("error") ? "error" : eventType.includes("tool") ? "tool_call" : "event";
+        this._recordEvent(
+          "runtime",
+          kind,
+          `${eventType}: ${this._summarizePayload(payload)}`,
+          formatClockValue(item["timestamp"] ?? item["created_at"] ?? item["ts"]),
+        );
+      }
+
+      for (const item of ((coordination["events"] ?? []) as Array<Record<string, unknown>>)) {
+        const payloadPreview = String(item["payload_preview"] ?? item["topic"] ?? this._summarizePayload(item));
+        this._recordEvent(
+          "coord",
+          "event",
+          `${String(item["operation"] ?? "coord")}: ${payloadPreview}`,
+          formatClockValue(item["timestamp"] ?? item["created_at"] ?? item["ts"]),
+        );
+      }
+
       const events = (data["events"] ?? []) as Array<{
         type?: string;
         payload?: Record<string, unknown>;
@@ -390,88 +477,14 @@ export class TuiApp {
       }>;
 
       for (const evt of events) {
-        // Skip events we've already processed
         if (evt.ts && evt.ts <= this.lastActivityTs) continue;
-
-        const ts = nowHms();
-        const payload = evt.payload ?? {};
-        const eventType = evt.type ?? "";
-
-        switch (eventType) {
-          case "brain.reply":
-          case "outbound_message": {
-            const channel = String(payload["channel"] ?? payload["target_channel"] ?? "brain");
-            const text = String(payload["text"] ?? "");
-            if (text) {
-              this.messagesPanel.push({ ts, role: "agent", channel, text });
-            }
-            break;
-          }
-          case "inbound_message":
-          case "operator_message_sent": {
-            const text = String(payload["text"] ?? payload["text_preview"] ?? "");
-            if (text && eventType === "inbound_message") {
-              const channel = String(payload["channel"] ?? "tui");
-              this.channelPanel.incrementCount(channel);
-              this.messagesPanel.push({ ts, role: "user", channel, text });
-            }
-            break;
-          }
-          case "tool_call": {
-            const label = `${String(payload["tool"] ?? "?")} ${String(payload["args"] ?? "")}`.trimEnd();
-            this.eventsPanel.push({ ts, kind: "tool_call", label });
-            this.branchTree.upsert({
-              id: String(payload["call_id"] ?? crypto.randomUUID()),
-              parentId: String(payload["parent_id"] ?? ""),
-              label,
-              status: "running",
-            });
-            break;
-          }
-          case "tool_result": {
-            const callId = String(payload["call_id"] ?? "");
-            const ok = payload["ok"] === true;
-            this.branchTree.upsert({
-              id: callId,
-              label: ok ? "done" : String(payload["error"] ?? "error"),
-              status: ok ? "ok" : "error",
-            });
-            break;
-          }
-          case "llm_latency": {
-            const ms = Number(payload["ms"] ?? 0);
-            const model = String(payload["model"] ?? "?");
-            this.eventsPanel.push({ ts, kind: "llm_latency", label: `${model} ${ms}ms` });
-            // Atualiza modelo no header
-            if (model !== "?") {
-              this.headerPanel.update({ model });
-            }
-            break;
-          }
-          case "error": {
-            const msg = String(payload["message"] ?? JSON.stringify(payload));
-            this.eventsPanel.push({ ts, kind: "error", label: msg });
-            break;
-          }
-          case "operator_command_sent": {
-            const cmdType = String(payload["command_type"] ?? "?");
-            this.eventsPanel.push({ ts, kind: "command", label: cmdType });
-            break;
-          }
-          default: {
-            if (eventType) {
-              this.eventsPanel.push({ ts, kind: "event", label: `${eventType}: ${JSON.stringify(payload).slice(0, 80)}` });
-            }
-            break;
-          }
-        }
+        this._applyGatewayEvent(evt.type ?? "", evt.payload ?? {}, formatClockValue(evt.ts));
 
         if (evt.ts) {
           this.lastActivityTs = Math.max(this.lastActivityTs, evt.ts);
         }
       }
 
-      // --- Processa runtime snapshot (se presente — formato Python) ---
       if (runtime["tasks"]) {
         const tasks = runtime["tasks"] as Record<string, unknown>;
         const current = (tasks["current"] ?? {}) as Record<string, unknown>;
@@ -776,6 +789,7 @@ export class TuiApp {
   private _setNotice(text: string): void {
     this.lastNotice = text;
     this.headerPanel.update({ lastNotice: text });
+    this.footer.updateRuntime({ lastNotice: text });
     this.dirty = true;
   }
 
@@ -794,6 +808,128 @@ export class TuiApp {
       return error.message;
     }
     return String(error);
+  }
+
+  private _normalizeMessageRole(value: unknown): MessageEntry["role"] {
+    const role = String(value ?? "").toLowerCase();
+    if (role === "assistant" || role === "agent") {
+      return "agent";
+    }
+    if (role === "system" || role === "tool") {
+      return "system";
+    }
+    return "user";
+  }
+
+  private _summarizePayload(payload: Record<string, unknown>): string {
+    const fields = [
+      payload["text_preview"],
+      payload["response_preview"],
+      payload["error"],
+      payload["command_type"],
+      payload["message"],
+      payload["note"],
+      payload["text"],
+      payload["content"],
+    ];
+    for (const field of fields) {
+      const value = String(field ?? "").trim();
+      if (value) {
+        return value;
+      }
+    }
+    return JSON.stringify(payload).slice(0, 120);
+  }
+
+  private _summarizeTimelineEntry(entry: Record<string, unknown>): string {
+    const summary = entry["summary"] ?? entry["message"] ?? entry["title"] ?? entry["payload_preview"] ?? entry["payload"];
+    if (typeof summary === "string") {
+      return summary;
+    }
+    return JSON.stringify(summary ?? {}).slice(0, 120);
+  }
+
+  private _recordEvent(source: string, kind: string, label: string, ts: string): void {
+    const key = `${source}:${kind}:${label}`;
+    if (this.seenActivityKeys.has(key)) {
+      return;
+    }
+    if (this.seenActivityKeys.size > 4000) {
+      this.seenActivityKeys.clear();
+    }
+    this.seenActivityKeys.add(key);
+    this.eventsPanel.push({ ts, kind, label });
+  }
+
+  private _applyGatewayEvent(eventType: string, payload: Record<string, unknown>, ts: string): void {
+    switch (eventType) {
+      case "brain.reply":
+      case "outbound_message": {
+        const channel = String(payload["channel"] ?? payload["target_channel"] ?? "brain");
+        const text = String(payload["text"] ?? payload["content"] ?? "");
+        if (text) {
+          this.messagesPanel.push({ ts, role: "agent", channel, text });
+        }
+        break;
+      }
+      case "inbound_message": {
+        const text = String(payload["text"] ?? payload["text_preview"] ?? "");
+        if (text) {
+          const channel = String(payload["channel"] ?? "tui");
+          this.channelPanel.incrementCount(channel);
+          this.messagesPanel.push({ ts, role: "user", channel, text });
+        }
+        break;
+      }
+      case "operator_message_sent": {
+        this._recordEvent("gateway", "event", `${eventType}: ${this._summarizePayload(payload)}`, ts);
+        break;
+      }
+      case "tool_call": {
+        const label = `${String(payload["tool"] ?? "?")} ${String(payload["args"] ?? "")}`.trimEnd();
+        this._recordEvent("gateway", "tool_call", label, ts);
+        this.branchTree.upsert({
+          id: String(payload["call_id"] ?? crypto.randomUUID()),
+          parentId: String(payload["parent_id"] ?? ""),
+          label,
+          status: "running",
+        });
+        break;
+      }
+      case "tool_result": {
+        const callId = String(payload["call_id"] ?? "");
+        const ok = payload["ok"] === true;
+        this.branchTree.upsert({
+          id: callId,
+          label: ok ? "done" : String(payload["error"] ?? "error"),
+          status: ok ? "ok" : "error",
+        });
+        break;
+      }
+      case "llm_latency": {
+        const ms = Number(payload["ms"] ?? 0);
+        const model = String(payload["model"] ?? "?");
+        this._recordEvent("gateway", "llm_latency", `${model} ${ms}ms`, ts);
+        if (model !== "?") {
+          this.headerPanel.update({ model });
+        }
+        break;
+      }
+      case "operator_command_sent": {
+        this._recordEvent("gateway", "command", String(payload["command_type"] ?? "?"), ts);
+        break;
+      }
+      case "error": {
+        this._recordEvent("gateway", "error", String(payload["message"] ?? JSON.stringify(payload)), ts);
+        break;
+      }
+      default: {
+        if (eventType) {
+          this._recordEvent("gateway", "event", `${eventType}: ${this._summarizePayload(payload)}`, ts);
+        }
+        break;
+      }
+    }
   }
 
   // -------------------------------------------------------------------------

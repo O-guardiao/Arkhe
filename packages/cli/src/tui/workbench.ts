@@ -4,17 +4,17 @@
  * Layout manager para o painel de monitoramento ao vivo.
  * Calcula as dimensões dos 6 painéis a partir do tamanho actual do terminal.
  *
- * Layout (proporcional) — fiel ao Python workbench.py:
+ * Layout — fiel ao Python workbench.py:
  *
  *  ┌─────────────────────────────────────────────────────────────┐
  *  │  Header (5 linhas — sessão, status, controles)             │
  *  ├──────────────┬───────────────────────┬──────────────────────┤
- *  │  Channels    │  Messages + Timeline  │  Events + Comandos  │
- *  │   (20%)      │       (52%)           │      (28%)          │
- *  │              ├───────────────────────┤                     │
- *  │              │  BranchTree           │                     │
+ *  │  Branches    │  Messages + Timeline  │  Events              │
+ *  │   (38 cols)  │       (ratio 2)       │                      │
+ *  │              │                       ├──────────────────────┤
+ *  │              │                       │  Channels            │
  *  ├──────────────┴───────────────────────┴──────────────────────┤
- *  │  Footer (3 linhas — status, input, notice)                 │
+ *  │  Footer (5 linhas — notice, estado, input)                 │
  *  └─────────────────────────────────────────────────────────────┘
  */
 
@@ -27,10 +27,10 @@ export interface Rect {
 
 export interface WorkbenchLayout {
   header: Rect;
-  channels: Rect;
+  branch: Rect;
   messages: Rect;
   events: Rect;
-  branch: Rect;
+  channels: Rect;
   footer: Rect;
 }
 
@@ -40,28 +40,39 @@ export function computeLayout(): WorkbenchLayout {
   const rows = process.stdout.rows ?? 30;
 
   const headerRows = 5;
-  const footerRows = 3;
+  const footerRows = 5;
   const bodyRows = Math.max(rows - headerRows - footerRows, 4);
 
-  const channelCols = Math.floor(cols * 0.20);
-  const eventsCols  = Math.floor(cols * 0.28);
-  const centerCols  = cols - channelCols - eventsCols;
+  let branchCols = 38;
+  let rightCols = 48;
+  const minCenterCols = 28;
 
-  const topRows    = Math.floor(bodyRows * 0.55);
-  const bottomRows = bodyRows - topRows;
+  if (branchCols + rightCols + minCenterCols > cols) {
+    const overflow = branchCols + rightCols + minCenterCols - cols;
+    const shrinkBranch = Math.min(branchCols - 24, Math.ceil(overflow / 2));
+    branchCols -= Math.max(shrinkBranch, 0);
+    const remainingOverflow = branchCols + rightCols + minCenterCols - cols;
+    const shrinkRight = Math.min(rightCols - 30, Math.max(remainingOverflow, 0));
+    rightCols -= Math.max(shrinkRight, 0);
+  }
+
+  const centerCols = Math.max(cols - branchCols - rightCols, minCenterCols);
+
+  const eventsRows = Math.max(Math.floor(bodyRows * (2 / 3)), 8);
+  const channelsRows = Math.max(bodyRows - eventsRows, 6);
 
   const bodyTop = headerRows + 1;
 
-  const channelLeft  = 1;
-  const centerLeft   = channelCols + 1;
-  const eventsLeft   = channelCols + centerCols + 1;
+  const branchLeft = 1;
+  const centerLeft = branchCols + 1;
+  const rightLeft = branchCols + centerCols + 1;
 
   return {
     header:   { top: 1, left: 1, width: cols, height: headerRows },
-    channels: { top: bodyTop, left: channelLeft,  width: channelCols, height: bodyRows },
-    messages: { top: bodyTop, left: centerLeft,   width: centerCols,  height: topRows    },
-    branch:   { top: bodyTop + topRows, left: centerLeft, width: centerCols, height: bottomRows },
-    events:   { top: bodyTop, left: eventsLeft,   width: eventsCols,  height: bodyRows },
+    branch:   { top: bodyTop, left: branchLeft, width: branchCols, height: bodyRows },
+    messages: { top: bodyTop, left: centerLeft, width: centerCols, height: bodyRows },
+    events:   { top: bodyTop, left: rightLeft, width: rightCols, height: eventsRows },
+    channels: { top: bodyTop + eventsRows, left: rightLeft, width: rightCols, height: channelsRows },
     footer:   { top: rows - footerRows + 1, left: 1, width: cols, height: footerRows },
   };
 }

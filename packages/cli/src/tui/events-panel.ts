@@ -25,6 +25,8 @@ const KIND_COLOR: Record<string, (s: string) => string> = {
   memory_read:  (s) => chalk.blue(s),
   memory_write: (s) => chalk.magenta(s),
   llm_latency:  (s) => chalk.cyan(s),
+  command:      (s) => chalk.green(s),
+  event:        (s) => chalk.white(s),
   error:        (s) => chalk.red(s),
   default:      (s) => chalk.white(s),
 };
@@ -36,6 +38,7 @@ function colorKind(kind: string, text: string): string {
 
 export class EventsPanel {
   private events: ObsEvent[] = [];
+  private latestResponse = "-";
   private readonly MAX_ENTRIES = 1000;
 
   constructor(private rect: Rect) {}
@@ -51,6 +54,11 @@ export class EventsPanel {
     }
   }
 
+  setLatestResponse(value: string): void {
+    const trimmed = value.trim();
+    this.latestResponse = trimmed || "-";
+  }
+
   render(buf: string[]): void {
     const { top, left, width, height } = this.rect;
 
@@ -58,21 +66,42 @@ export class EventsPanel {
     buf.push(moveTo(top + 1, left) + chalk.dim("─".repeat(width)));
 
     const bodyHeight = height - 2;
-    const visible = this.events.slice(-bodyHeight);
+    const helpLines = [
+      "/pause /resume /checkpoint",
+      "/focus /winner /priority /note",
+      "/channels /probe /send /watch /quit",
+    ];
+    const reservedTop = 3;
+    const reservedBottom = Math.min(helpLines.length + 1, Math.max(bodyHeight - reservedTop, 0));
+    const eventsBudget = Math.max(bodyHeight - reservedTop - reservedBottom, 0);
+    const visible = this.events.slice(-eventsBudget);
+
+    const lines: string[] = [
+      chalk.bold.yellow(" Resposta mais recente"),
+      truncate(` ${this.latestResponse}`, width),
+      "",
+    ];
+
+    for (const ev of visible) {
+      const ts = ev.ts ? chalk.dim(ev.ts + " ") : "";
+      const kind = colorKind(ev.kind, ev.kind.padEnd(12));
+      lines.push(truncate(ts + kind + " " + ev.label, width));
+    }
+
+    if (helpLines.length > 0) {
+      lines.push("");
+      for (const help of helpLines.slice(0, Math.max(bodyHeight - lines.length, 0))) {
+        lines.push(chalk.dim(help));
+      }
+    }
 
     for (let i = 0; i < bodyHeight; i++) {
       const rowNum = top + 2 + i;
-      const ev = visible[i];
-      if (!ev) {
+      const line = lines[i];
+      if (!line) {
         buf.push(moveTo(rowNum, left) + " ".repeat(width));
         continue;
       }
-
-      const ts = chalk.dim(ev.ts + " ");
-      const kind = colorKind(ev.kind, ev.kind.padEnd(12));
-      const label = ev.label;
-
-      const line = ts + kind + " " + label;
       buf.push(moveTo(rowNum, left) + truncate(line, width));
     }
   }

@@ -17,7 +17,7 @@ import { Command } from "commander";
 import { createInterface } from "node:readline";
 import { writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
-import { c, printError } from "../format.js";
+import { c, printError, printNote } from "../format.js";
 
 function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
   return new Promise((resolve) => rl.question(question, resolve));
@@ -49,8 +49,11 @@ export function makeSetupCommand(): Command {
 async function runInteractive(envPath: string): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
-  process.stdout.write(`\n${c.bold("Bem-vindo ao RLM Setup Wizard")} 🤖\n\n`);
-  process.stdout.write("Pressione Enter para aceitar os valores padrão [entre colchetes].\n\n");
+  printNote(
+    "info",
+    "Pressione Enter para aceitar os valores padrão [entre colchetes].",
+    { title: "Bem-vindo ao RLM Setup Wizard" },
+  );
 
   try {
     const host = await prompt(rl, `  URL do servidor RLM [http://localhost:8000]: `);
@@ -96,11 +99,18 @@ async function runInteractive(envPath: string): Promise<void> {
 
     await writeFile(envPath, lines.join("\n") + "\n", "utf8");
 
-    process.stdout.write(`\n${c.success("✓")} Configuração salva em ${c.bold(envPath)}\n`);
-    process.stdout.write(`\n${c.bold("Próximos passos:")}\n`);
-    process.stdout.write(`  1. ${c.bold("source .env")} (ou use dotenv no projeto)\n`);
-    process.stdout.write(`  2. ${c.bold("rlm doctor")} — verifica se tudo está configurado\n`);
-    process.stdout.write(`  3. ${c.bold("rlm health")} — confirma conexão com o servidor\n\n`);
+    printNote(
+      "success",
+      [
+        `Configuração salva em ${envPath}`,
+        "",
+        "Próximos passos:",
+        "1. source .env (ou use dotenv no projeto)",
+        "2. rlm doctor — verifica se tudo está configurado",
+        "3. rlm health — confirma conexão com o servidor",
+      ].join("\n"),
+      { title: "Setup concluído" },
+    );
   } catch (err) {
     rl.close();
     printError(`Setup interrompido: ${String(err)}`);

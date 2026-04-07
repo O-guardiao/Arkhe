@@ -27,6 +27,7 @@ dotenvConfig();
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import type { CliContext } from "./context.js";
 import { makePromptCommand } from "./commands/prompt.js";
 import { makeSessionCommand } from "./commands/session.js";
 import { makeToolsCommand } from "./commands/tools.js";
@@ -58,6 +59,28 @@ function parsePositiveFloatOption(value: string): number {
     throw new InvalidArgumentError("valor deve ser um número positivo");
   }
   return parsed;
+}
+
+function resolveOperatorBaseUrl(context: CliContext, explicitUrl?: string): string {
+  const candidates = [
+    explicitUrl,
+    process.env["RLM_TUI_OPERATOR_URL"],
+    context.env["RLM_TUI_OPERATOR_URL"],
+    process.env["PYTHON_BRAIN_BASE_URL"],
+    context.env["PYTHON_BRAIN_BASE_URL"],
+    process.env["RLM_INTERNAL_HOST"],
+    context.env["RLM_INTERNAL_HOST"],
+    context.apiBaseUrl(),
+  ];
+
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+
+  return context.apiBaseUrl();
 }
 
 async function exitWithCommandResult(commandPromise: Promise<number>): Promise<void> {
@@ -126,6 +149,7 @@ function registerOperationalCommands(program: Command): void {
 // Comando TUI — abre o painel interactivo ao vivo
 async function runTuiCommand(opts: {
   url: string;
+  operatorUrl?: string;
   token: string;
   clientId?: string;
   refreshInterval: number;
@@ -135,12 +159,13 @@ async function runTuiCommand(opts: {
   const { LiveWorkbenchAPI } = await import("./tui/live-api.js");
   const { CliContext } = await import("./context.js");
   const context = CliContext.fromEnvironment();
+  const operatorUrl = resolveOperatorBaseUrl(context, opts.operatorUrl);
   const appOptions = {
     gatewayUrl: opts.url,
     token: opts.token,
     refreshIntervalSeconds: opts.refreshInterval,
     once: opts.once,
-    liveApi: new LiveWorkbenchAPI(context, opts.url),
+    liveApi: new LiveWorkbenchAPI(context, operatorUrl),
   };
   const app = new TuiApp(
     opts.clientId ? { ...appOptions, clientId: opts.clientId } : appOptions
@@ -153,6 +178,10 @@ function registerWorkbenchCommand(program: Command, name: "tui" | "workbench", d
     .command(name)
     .description(description)
     .option("--url <url>", "URL base do gateway", process.env["GATEWAY_URL"] ?? "http://localhost:3000")
+    .option(
+      "--operator-url <url>",
+      "URL base da API operador/runtime (default: RLM_TUI_OPERATOR_URL ou PYTHON_BRAIN_BASE_URL)",
+    )
     .option("--token <token>", "Token de autenticação", process.env["RLM_API_TOKEN"] ?? "")
     .option("--client-id <id>", "Client id da sessão viva (default: tui:default)")
     .option("--refresh-interval <seconds>", "Intervalo de atualização auxiliar do modo live", parsePositiveFloatOption, 0.75)

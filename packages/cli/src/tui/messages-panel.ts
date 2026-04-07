@@ -18,6 +18,11 @@ export interface MessageEntry {
   text: string;
 }
 
+export interface TimelineEntry {
+  kind: string;
+  summary: string;
+}
+
 const ROLE_PREFIX: Record<MessageRole, string> = {
   user:   chalk.green("▸ user  "),
   agent:  chalk.cyan("◂ agent "),
@@ -26,6 +31,8 @@ const ROLE_PREFIX: Record<MessageRole, string> = {
 
 export class MessagesPanel {
   private messages: MessageEntry[] = [];
+  private runtimeMessages: MessageEntry[] = [];
+  private timeline: TimelineEntry[] = [];
   private readonly MAX_ENTRIES = 500;
 
   constructor(private rect: Rect) {}
@@ -41,6 +48,11 @@ export class MessagesPanel {
     }
   }
 
+  setRuntimeSnapshot(messages: MessageEntry[], timeline: TimelineEntry[]): void {
+    this.runtimeMessages = messages.slice(-40);
+    this.timeline = timeline.slice(-20);
+  }
+
   render(buf: string[]): void {
     const { top, left, width, height } = this.rect;
 
@@ -49,23 +61,49 @@ export class MessagesPanel {
     buf.push(moveTo(top + 1, left) + chalk.dim("─".repeat(width)));
 
     const bodyHeight = height - 2;
-    const visible = this.messages.slice(-bodyHeight);
+    const activeMessages = (this.runtimeMessages.length > 0 ? this.runtimeMessages : this.messages).slice(-40);
+    const activeTimeline = this.timeline.slice(-20);
+    const hasTimeline = activeTimeline.length > 0;
+
+    const messageBudget = hasTimeline
+      ? Math.max(Math.floor(bodyHeight * 0.55), 4)
+      : bodyHeight;
+    const visibleMessages = activeMessages.slice(-messageBudget);
+
+    const lines: string[] = [];
+    for (const msg of visibleMessages) {
+      const prefix = ROLE_PREFIX[msg.role];
+      const ts = msg.ts ? chalk.dim(msg.ts + " ") : "";
+      const ch = chalk.dim(`[${msg.channel}] `);
+      lines.push(truncate(ts + prefix + ch + msg.text, width));
+    }
+
+    if (hasTimeline) {
+      if (lines.length < bodyHeight) {
+        lines.push("");
+      }
+      if (lines.length < bodyHeight) {
+        lines.push(chalk.bold.magenta(" Timeline"));
+      }
+      const remaining = Math.max(bodyHeight - lines.length, 0);
+      for (const entry of activeTimeline.slice(-remaining)) {
+        lines.push(
+          truncate(
+            chalk.magenta((entry.kind || "-").padEnd(16)) + " " + entry.summary,
+            width,
+          ),
+        );
+      }
+    }
 
     for (let i = 0; i < bodyHeight; i++) {
       const rowNum = top + 2 + i;
-      const msg = visible[i];
-      if (!msg) {
+      const line = lines[i];
+      if (!line) {
         buf.push(moveTo(rowNum, left) + " ".repeat(width));
         continue;
       }
-
-      const prefix = ROLE_PREFIX[msg.role];
-      const ts = chalk.dim(msg.ts + " ");
-      const ch = chalk.dim(`[${msg.channel}] `);
-      const text = msg.text;
-
-      const composed = ts + prefix + ch + text;
-      buf.push(moveTo(rowNum, left) + truncate(composed, width));
+      buf.push(moveTo(rowNum, left) + padEnd(line, width));
     }
   }
 }

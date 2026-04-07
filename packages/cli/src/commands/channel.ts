@@ -10,7 +10,7 @@
 
 import { Command } from "commander";
 import { RlmClient } from "../client.js";
-import { c, printTable, printError } from "../format.js";
+import { c, healthBadge, printTable, printError } from "../format.js";
 
 interface ChannelInfo {
   id: string;
@@ -24,10 +24,8 @@ interface ChannelInfo {
 }
 
 function statusBadge(status: string): string {
-  if (status === "healthy" || status === "ok") return c.success(status);
-  if (status === "degraded") return c.warn(status);
-  if (status === "disabled") return c.bold(status);
-  return c.error(status);
+  if (status === "disabled") return c.dim(status);
+  return `${healthBadge(status)} ${status}`;
 }
 
 export function makeChannelCommand(): Command {

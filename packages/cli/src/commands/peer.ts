@@ -11,7 +11,7 @@
 
 import { Command } from "commander";
 import { RlmClient } from "../client.js";
-import { c, printTable, printError } from "../format.js";
+import { c, healthBadge, printTable, printError } from "../format.js";
 
 interface PeerInfo {
   id: string;
@@ -23,9 +23,7 @@ interface PeerInfo {
 }
 
 function statusBadge(status: string): string {
-  if (status === "online" || status === "connected") return c.success(status);
-  if (status === "degraded") return c.warn(status);
-  return c.error(status);
+  return `${healthBadge(status)} ${status}`;
 }
 
 export function makePeerCommand(): Command {

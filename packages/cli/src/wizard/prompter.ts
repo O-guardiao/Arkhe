@@ -6,6 +6,21 @@
  */
 
 import * as readline from "node:readline";
+import {
+  ANSI,
+  StreamWriter,
+  clearActiveProgressLine,
+  registerActiveProgressLine,
+  renderNote,
+  restoreTerminalState,
+  sanitizeForTerminal,
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+  unregisterActiveProgressLine,
+  wrapWords,
+  getTheme,
+} from "@arkhe/terminal";
 
 // ---------------------------------------------------------------------------
 // WizardCancelledError
@@ -58,6 +73,18 @@ function cleanMarkup(text: string): string {
   return text.replace(/\[\/?\w[^\]]*\]/g, "");
 }
 
+function cleanTerminalText(text: string): string {
+  return sanitizeForTerminal(cleanMarkup(text));
+}
+
+function wrapNoteMessage(message: string, width: number): string {
+  const innerWidth = Math.max(4, width - 4);
+  return cleanTerminalText(message)
+    .split("\n")
+    .flatMap((line) => wrapWords(line, innerWidth))
+    .join("\n");
+}
+
 const SEP60 = "═".repeat(60);
 const DASH60 = "─".repeat(60);
 
@@ -80,13 +107,13 @@ export class NodePrompter implements WizardPrompter {
   }
 
   private println(msg = ""): void {
-    process.stdout.write(cleanMarkup(msg) + "\n");
+    process.stdout.write(msg + "\n");
   }
 
   intro(title: string): void {
     this.println();
     this.println(SEP60);
-    this.println(`  ${cleanMarkup(title)}`);
+    this.println(`  ${stylePromptTitle(cleanTerminalText(title)) ?? cleanTerminalText(title)}`);
     this.println(SEP60);
     this.println();
   }
@@ -94,13 +121,21 @@ export class NodePrompter implements WizardPrompter {
   outro(message: string): void {
     this.println();
     this.println(DASH60);
-    this.println(`  ${cleanMarkup(message)}`);
+    this.println(`  ${stylePromptTitle(cleanTerminalText(message)) ?? cleanTerminalText(message)}`);
     this.println();
   }
 
   note(message: string, title = ""): void {
-    if (title) this.println(`\n[${cleanMarkup(title)}]`);
-    this.println(cleanMarkup(message));
+    const width = Math.max(48, Math.min(88, (process.stdout.columns ?? 80) - 2));
+    const noteOptions = title
+      ? {
+          title: cleanTerminalText(title),
+          width,
+        }
+      : { width };
+    this.println(
+      renderNote("info", wrapNoteMessage(message, width), noteOptions),
+    );
   }
 
   async select<T>(
@@ -109,11 +144,14 @@ export class NodePrompter implements WizardPrompter {
     initialValue?: T,
   ): Promise<T> {
     this.println();
-    this.println(cleanMarkup(message));
+    this.println(stylePromptMessage(cleanTerminalText(message)));
     for (let i = 0; i < options.length; i++) {
       const opt = options[i];
-      const hint = opt.hint ? `  (${opt.hint})` : "";
-      this.println(`  ${i + 1}) ${cleanMarkup(opt.label)}${hint}`);
+      if (!opt) {
+        continue;
+      }
+      const hint = opt.hint ? ` ${stylePromptHint(`(${cleanTerminalText(opt.hint)})`) ?? ""}` : "";
+      this.println(`  ${i + 1}) ${cleanTerminalText(opt.label)}${hint}`);
     }
 
     let defaultIdx = "1";
@@ -125,14 +163,17 @@ export class NodePrompter implements WizardPrompter {
     while (true) {
       let raw: string;
       try {
-        raw = await this.ask(`  Escolha [${defaultIdx}]: `);
+        raw = await this.ask(`${stylePromptMessage("  Escolha")} [${defaultIdx}]: `);
       } catch {
         throw new WizardCancelledError();
       }
       const choice = raw.trim() || defaultIdx;
       const num = parseInt(choice, 10);
       if (!isNaN(num) && num >= 1 && num <= options.length) {
-        return options[num - 1].value;
+        const selected = options[num - 1];
+        if (selected) {
+          return selected.value;
+        }
       }
       this.println("  Opção inválida. Tente novamente.");
     }
@@ -148,11 +189,12 @@ export class NodePrompter implements WizardPrompter {
     const { message, default: def = "", placeholder = "", validate } = opts;
     const hint = placeholder && !def ? ` (${placeholder})` : "";
     const suffix = def ? ` [${def}]` : "";
+    const promptLabel = stylePromptMessage(cleanTerminalText(message));
 
     while (true) {
       let raw: string;
       try {
-        raw = await this.ask(`${cleanMarkup(message)}${hint}${suffix}: `);
+        raw = await this.ask(`${promptLabel}${cleanTerminalText(hint)}${suffix}: `);
       } catch {
         throw new WizardCancelledError();
       }
@@ -172,7 +214,7 @@ export class NodePrompter implements WizardPrompter {
     const hint = defaultValue ? "S/n" : "s/N";
     let raw: string;
     try {
-      raw = await this.ask(`${cleanMarkup(message)} [${hint}]: `);
+      raw = await this.ask(`${stylePromptMessage(cleanTerminalText(message))} [${hint}]: `);
     } catch {
       throw new WizardCancelledError();
     }
@@ -182,26 +224,67 @@ export class NodePrompter implements WizardPrompter {
   }
 
   progress(label: string): ProgressHandle {
-    process.stdout.write(`  ⏳ ${label}\n`);
+    const writer = new StreamWriter(process.stdout);
+    const render = (message: string, icon: string) => {
+      const line = `${getTheme().info}${icon}${ANSI.RESET} ${stylePromptMessage(cleanTerminalText(message))}`;
+      if (process.stdout.isTTY) {
+        registerActiveProgressLine(process.stdout);
+      }
+      writer.rewrite(line);
+    };
+
+    render(label, "⏳");
+
     return {
-      update: (msg: string) => process.stdout.write(`  … ${msg}\n`),
-      stop: (msg = "") => { if (msg) process.stdout.write(`${cleanMarkup(msg)}\n`); },
+      update: (msg: string) => render(msg, "…"),
+      stop: (msg = "") => {
+        clearActiveProgressLine();
+        unregisterActiveProgressLine(process.stdout);
+        if (msg) {
+          void writer.writeLine(`${getTheme().success}✓${ANSI.RESET} ${cleanTerminalText(msg)}`);
+        }
+      },
     };
   }
 
   private ask(prompt: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const rl = this.getRL();
-      rl.question(prompt, (answer) => resolve(answer));
-      rl.once("close", () => reject(new WizardCancelledError()));
-      process.once("SIGINT", () => {
-        rl.close();
-        reject(new WizardCancelledError());
-      });
+      let settled = false;
+
+      const finish = (fn: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        rl.off("close", onClose);
+        process.off("SIGINT", onSigint);
+        fn();
+      };
+
+      const onClose = () => {
+        finish(() => {
+          restoreTerminalState("wizard close", { resumeStdinIfPaused: true });
+          reject(new WizardCancelledError());
+        });
+      };
+
+      const onSigint = () => {
+        finish(() => {
+          restoreTerminalState("wizard interrupt", { resumeStdinIfPaused: true });
+          rl.close();
+          reject(new WizardCancelledError());
+        });
+      };
+
+      rl.once("close", onClose);
+      process.once("SIGINT", onSigint);
+      rl.question(prompt, (answer) => finish(() => resolve(answer)));
     });
   }
 
   close(): void {
+    restoreTerminalState("wizard cleanup", { resumeStdinIfPaused: true });
     this.rl?.close();
     this.rl = null;
   }

@@ -17,7 +17,7 @@
 
 import { Command } from "commander";
 import { RlmClient, RlmApiError } from "../client.js";
-import { c, printError } from "../format.js";
+import { c, printError, printNote } from "../format.js";
 
 type CheckStatus = "ok" | "warn" | "fail";
 
@@ -145,10 +145,14 @@ export function makeDoctorCommand(): Command {
       process.stdout.write("\n");
 
       if (hasFailure) {
-        printError("Foram encontrados problemas. Verifique os itens marcados com ✗.");
+        printNote("error", "Foram encontrados problemas. Verifique os itens marcados com ✗.", {
+          title: "RLM Doctor",
+        });
         process.exit(1);
       } else {
-        process.stdout.write(`${c.success("Tudo ok!")} Sistema RLM operacional.\n\n`);
+        printNote("success", "Sistema RLM operacional.", {
+          title: "Tudo ok!",
+        });
       }
     });
 }

@@ -17,6 +17,12 @@ export { type TableOptions, renderTable, renderRow } from "./table.js";
 
 export { type ProgressLineOptions, ProgressLine } from "./progress-line.js";
 
+export {
+  registerActiveProgressLine,
+  clearActiveProgressLine,
+  unregisterActiveProgressLine,
+} from "./progress-coordinator.js";
+
 export { StreamWriter } from "./stream-writer.js";
 
 export {
@@ -34,6 +40,17 @@ export {
   type NoteRenderOptions,
   renderNote,
 } from "./note.js";
+
+export {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "./prompt-style.js";
+
+export {
+  restoreTerminalState,
+  type RestoreTerminalStateOptions,
+} from "./restore.js";
 
 export {
   type HealthStatus,

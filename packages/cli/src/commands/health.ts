@@ -8,7 +8,7 @@
 
 import { Command } from "commander";
 import { RlmClient, RlmApiError } from "../client.js";
-import { c, fmtTimestamp, printError } from "../format.js";
+import { c, fmtTimestamp, healthBadge, printError } from "../format.js";
 
 interface GatewayHealth {
   status: string;
@@ -68,9 +68,7 @@ export function makeHealthCommand(): Command {
 
       if (gatewayData !== null) {
         const st = gatewayData.status;
-        const icon =
-          st === "healthy" ? c.success("●") : st === "degraded" ? c.warn("●") : c.error("●");
-        console.log(`${icon} Gateway: ${c.bold(st)}`);
+        console.log(`${healthBadge(st)} Gateway: ${c.bold(st)}`);
 
         const bridge = gatewayData.bridge?.connected ? c.success("conectado") : c.error("desconectado");
         console.log(`   Bridge:  ${bridge}`);
@@ -78,9 +76,7 @@ export function makeHealthCommand(): Command {
         const channels = Object.entries(gatewayData.channels ?? {});
         if (channels.length > 0) {
           for (const [name, info] of channels) {
-            const cs =
-              info.status === "active" ? c.success("●") : c.warn("●");
-            console.log(`   ${cs} ${name}: ${info.inbound_count} msgs recebidas`);
+            console.log(`   ${healthBadge(info.status)} ${name}: ${info.inbound_count} msgs recebidas`);
           }
         }
 
@@ -93,8 +89,7 @@ export function makeHealthCommand(): Command {
       }
 
       if (brainData !== null) {
-        const icon = brainData.status === "healthy" ? c.success("●") : c.error("●");
-        console.log(`${icon} Brain: ${c.bold(brainData.status)}`);
+        console.log(`${healthBadge(brainData.status)} Brain: ${c.bold(brainData.status)}`);
         console.log(`   ferramentas registradas: ${brainData.tool_count}`);
         if (brainData.timestamp) {
           console.log(c.dim(`   última atualização: ${fmtTimestamp(brainData.timestamp)}`));
