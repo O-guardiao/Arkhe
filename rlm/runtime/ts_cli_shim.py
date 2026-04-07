@@ -24,6 +24,12 @@ def _should_use_legacy_cli() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _should_route_to_legacy_cli(argv: list[str]) -> bool:
+    if not argv:
+        return False
+    return argv[0] == "update"
+
+
 def _node_binary() -> str | None:
     return shutil.which("node")
 
@@ -114,7 +120,7 @@ def _run_legacy_cli(argv: list[str]) -> int:
 def main(argv: list[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
 
-    if _should_use_legacy_cli():
+    if _should_use_legacy_cli() or _should_route_to_legacy_cli(args):
         raise SystemExit(_run_legacy_cli(args))
 
     try:

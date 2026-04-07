@@ -5,6 +5,7 @@ from os import PathLike
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from pytest import MonkeyPatch
 
 from rlm.runtime import ts_cli_shim
@@ -68,3 +69,20 @@ def test_ensure_cli_dist_prepares_terminal_before_cli(tmp_path: Path, monkeypatc
         (("npm", "install"), cli_dir),
         (("npm", "run", "build"), cli_dir),
     ]
+
+
+def test_main_routes_update_to_legacy_cli(monkeypatch: MonkeyPatch) -> None:
+    def fake_typescript_cli(argv: list[str]) -> int:
+        return 99
+
+    def fake_legacy_cli(argv: list[str]) -> int:
+        return 7
+
+    monkeypatch.setattr(ts_cli_shim, "_should_use_legacy_cli", lambda: False)
+    monkeypatch.setattr(ts_cli_shim, "_run_typescript_cli", fake_typescript_cli)
+    monkeypatch.setattr(ts_cli_shim, "_run_legacy_cli", fake_legacy_cli)
+
+    with pytest.raises(SystemExit) as exc_info:
+        ts_cli_shim.main(["update"])
+
+    assert exc_info.value.code == 7
