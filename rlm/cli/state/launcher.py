@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import platform
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, cast
 
 from rlm.cli.context import CliContext
 
@@ -19,6 +19,35 @@ from rlm.cli.context import CliContext
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _as_payload_dict(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    typed_value = cast(dict[object, object], value)
+    return {str(key): item for key, item in typed_value.items()}
+
+
+def _coerce_schema_version(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return int(value)
+    raise ValueError("schema_version inválido")
+
+
+def _coerce_dataclass_payload(
+    cls: type[LauncherMetadata] | type[RuntimeArtifacts],
+    payload: dict[str, object],
+) -> dict[str, str]:
+    allowed = {field_info.name for field_info in fields(cls)}
+    return {
+        key: str(value)
+        for key, value in payload.items()
+        if key in allowed
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -105,16 +134,16 @@ def _artifacts_for_context(
 
 
 def _state_from_dict(payload: dict[str, object]) -> LauncherState:
-    metadata_payload = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-    bootstrap_payload = payload.get("last_valid_bootstrap") if isinstance(payload.get("last_valid_bootstrap"), dict) else {}
-    artifacts_payload = payload.get("runtime_artifacts") if isinstance(payload.get("runtime_artifacts"), dict) else {}
+    metadata_payload = _as_payload_dict(payload.get("metadata"))
+    bootstrap_payload = _as_payload_dict(payload.get("last_valid_bootstrap"))
+    artifacts_payload = _as_payload_dict(payload.get("runtime_artifacts"))
     return LauncherState(
-        schema_version=int(payload.get("schema_version", 1)),
+        schema_version=_coerce_schema_version(payload.get("schema_version", 1)),
         updated_at=str(payload.get("updated_at", "")),
         last_known_status=str(payload.get("last_known_status", "stopped")),
         last_launch_mode=str(payload.get("last_launch_mode", "")),
         last_operation=str(payload.get("last_operation", "")),
-        metadata=LauncherMetadata(**{k: str(v) for k, v in metadata_payload.items()}),
+        metadata=LauncherMetadata(**_coerce_dataclass_payload(LauncherMetadata, metadata_payload)),
         last_valid_bootstrap=BootstrapRecord(
             source=str(bootstrap_payload.get("source", "")),
             mode=str(bootstrap_payload.get("mode", "")),
@@ -122,7 +151,7 @@ def _state_from_dict(payload: dict[str, object]) -> LauncherState:
             api_enabled=bool(bootstrap_payload.get("api_enabled", False)),
             ws_enabled=bool(bootstrap_payload.get("ws_enabled", False)),
         ),
-        runtime_artifacts=RuntimeArtifacts(**{k: str(v) for k, v in artifacts_payload.items()}),
+        runtime_artifacts=RuntimeArtifacts(**_coerce_dataclass_payload(RuntimeArtifacts, artifacts_payload)),
     )
 
 
@@ -158,7 +187,11 @@ def load_launcher_state(
     except (json.JSONDecodeError, OSError):
         return _default_state(context, project_root=project_root, env_path=env_path)
 
-    state = _state_from_dict(payload if isinstance(payload, dict) else {})
+    try:
+        state = _state_from_dict(_as_payload_dict(payload))
+    except (TypeError, ValueError):
+        return _default_state(context, project_root=project_root, env_path=env_path)
+
     state.metadata = _metadata_for_context(context, project_root=project_root, env_path=env_path)
     state.runtime_artifacts = _artifacts_for_context(
         context,

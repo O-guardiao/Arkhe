@@ -1207,6 +1207,66 @@ class TestLauncherState:
         assert payload["last_known_status"] == "stopped"
         assert payload["last_operation"] == "stop"
 
+    def test_load_launcher_state_ignores_legacy_metadata_keys(self, tmp_path: Path) -> None:
+        from rlm.cli.context import CliContext
+        from rlm.cli.state.launcher import load_launcher_state
+
+        context = CliContext(env={}, cwd=tmp_path, home=tmp_path)
+        context.paths.launcher_state_path.parent.mkdir(parents=True, exist_ok=True)
+        context.paths.launcher_state_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "updated_at": "2026-04-07T00:00:00+00:00",
+                    "last_known_status": "stopped",
+                    "last_operation": "update",
+                    "metadata": {
+                        "project_root": "/root/.arkhe/repo",
+                        "cwd": "/root/.arkhe/repo",
+                        "env_path": "/root/.rlm/.env",
+                        "python_executable": "/root/.arkhe/repo/.venv/bin/python",
+                        "platform": "Linux",
+                        "node_executable": "/usr/bin/node",
+                    },
+                    "runtime_artifacts": {
+                        "runtime_dir": "/root/.rlm/run",
+                        "unknown_artifact": "/tmp/ignored",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        state = load_launcher_state(context)
+
+        assert state.last_operation == "update"
+        assert state.metadata.python_executable
+        assert not hasattr(state.metadata, "node_executable")
+        assert state.runtime_artifacts.runtime_dir
+
+    def test_load_launcher_state_falls_back_when_payload_is_incompatible(self, tmp_path: Path) -> None:
+        from rlm.cli.context import CliContext
+        from rlm.cli.state import launcher as launcher_state
+
+        context = CliContext(env={}, cwd=tmp_path, home=tmp_path)
+        context.paths.launcher_state_path.parent.mkdir(parents=True, exist_ok=True)
+        context.paths.launcher_state_path.write_text("{\"schema_version\": 1}", encoding="utf-8")
+
+        original_state_from_dict = launcher_state._state_from_dict
+
+        def raising_state_from_dict(payload: dict[str, object]) -> launcher_state.LauncherState:
+            raise TypeError("LauncherMetadata.__init__() got an unexpected keyword argument 'node_executable'")
+
+        launcher_state._state_from_dict = raising_state_from_dict
+        try:
+            state = launcher_state.load_launcher_state(context)
+        finally:
+            launcher_state._state_from_dict = original_state_from_dict
+
+        assert state.last_known_status == "stopped"
+        assert state.metadata.project_root
+        assert state.runtime_artifacts.runtime_dir
+
     def test_install_systemd_persists_daemon_artifact(self, tmp_path: Path) -> None:
         from rlm.cli.context import CliContext
         from rlm.cli import service as svc
