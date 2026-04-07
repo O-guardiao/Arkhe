@@ -74,13 +74,13 @@ class _DummyEnv:
                 "events": [{"event_type": "assistant_message_emitted", "payload": {"role": "assistant"}}],
             },
             "coordination": {
-                "events": [{"operation": "consensus", "payload_preview": "branch 2 venceu"}],
+                "events": [{"operation": "consensus", "topic": "winner", "payload_preview": "branch 2 venceu", "sender_id": 2, "timestamp": "2026-03-20T00:00:00Z"}],
                 "branch_tasks": [
-                    {"branch_id": 2, "title": "Branch 2", "mode": "implement", "status": "completed", "metadata": {"role": "implementation"}},
+                    {"branch_id": 2, "title": "Branch 2", "mode": "implement", "status": "completed", "metadata": {"role": "implementation", "child_depth": 1, "elapsed_s": 0.5}},
                 ],
                 "latest_parallel_summary": {"winner_branch_id": 2},
             },
-            "controls": {"paused": False, "pause_reason": "", "focused_branch_id": 2, "branch_priorities": {"2": 9}, "last_checkpoint_path": None, "last_operator_note": "seguir"},
+            "controls": {"paused": False, "pause_reason": "", "focused_branch_id": 2, "fixed_winner_branch_id": 2, "branch_priorities": {"2": 9}, "last_checkpoint_path": None, "last_operator_note": "seguir"},
         }
         self.recorded: list[tuple[str, str]] = []
 
@@ -151,6 +151,30 @@ def test_apply_operator_command_updates_focus() -> None:
     assert entry["status"] == "completed"
     assert runtime["controls"]["focused_branch_id"] == 2
     assert manager.events[-1]["event_type"] == "tui_command_applied"
+
+
+def test_build_runtime_snapshot_adds_recursion_projection() -> None:
+    from rlm.core.observability.operator_surface import build_runtime_snapshot
+
+    session = _make_session()
+
+    runtime = build_runtime_snapshot(session)
+
+    assert runtime is not None
+    recursion = runtime["recursion"]
+    assert recursion["controls"]["focused_branch_id"] == 2
+    assert recursion["controls"]["fixed_winner_branch_id"] == 2
+    assert recursion["summary"]["winner_branch_id"] == 2
+    assert recursion["summary"]["branch_count"] == 1
+    assert recursion["summary"]["branch_status_counts"]["completed"] == 1
+    assert recursion["events"][0]["operation"] == "consensus"
+    assert recursion["events"][0]["topic"] == "winner"
+    assert recursion["branches"][0]["branch_id"] == 2
+    assert recursion["branches"][0]["depth"] == 1
+    assert recursion["branches"][0]["duration_ms"] == 500.0
+    assert recursion["branches"][0]["operator_focused"] is True
+    assert recursion["branches"][0]["operator_fixed_winner"] is True
+    assert recursion["branches"][0]["operator_priority"] == 9
 
 
 def test_dispatch_operator_prompt_records_response() -> None:

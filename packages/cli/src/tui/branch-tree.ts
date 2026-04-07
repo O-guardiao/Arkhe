@@ -49,32 +49,61 @@ export class BranchTree {
   upsert(node: Omit<BranchNode, "children">): void {
     const existing = this.nodeIndex.get(node.id);
     if (existing) {
+      if (node.parentId != null) {
+        existing.parentId = node.parentId;
+      } else {
+        delete existing.parentId;
+      }
       existing.label = node.label;
       existing.status = node.status;
       existing.durationMs = node.durationMs;
+      this._rebuild();
       return;
     }
     const newNode: BranchNode = { ...node, children: [] };
     this.nodeIndex.set(node.id, newNode);
+    this._rebuild();
+  }
 
-    if (node.parentId) {
-      const parent = this.nodeIndex.get(node.parentId);
-      if (parent) {
-        parent.children.push(newNode);
-        return;
-      }
+  replaceAll(nodes: Array<Omit<BranchNode, "children">>): void {
+    this.nodeIndex.clear();
+    for (const node of nodes) {
+      this.nodeIndex.set(node.id, { ...node, children: [] });
     }
-    // Sem parent encontrado → adiciona como raiz
-    this.roots.push(newNode);
-    if (this.roots.length > this.MAX_ROOTS) {
-      const removed = this.roots.shift();
-      if (removed) this._pruneIndex(removed);
-    }
+    this._rebuild();
   }
 
   private _pruneIndex(node: BranchNode): void {
     this.nodeIndex.delete(node.id);
     for (const child of node.children) this._pruneIndex(child);
+  }
+
+  private _rebuild(): void {
+    this.roots = [];
+    const nodes = Array.from(this.nodeIndex.values());
+    for (const node of nodes) {
+      node.children = [];
+    }
+    for (const node of nodes) {
+      if (node.parentId) {
+        const parent = this.nodeIndex.get(node.parentId);
+        if (parent) {
+          parent.children.push(node);
+          continue;
+        }
+      }
+      this.roots.push(node);
+    }
+    if (this.roots.length <= this.MAX_ROOTS) {
+      return;
+    }
+    const removed = this.roots.splice(0, this.roots.length - this.MAX_ROOTS);
+    for (const root of removed) {
+      this._pruneIndex(root);
+    }
+    this.roots = Array.from(this.nodeIndex.values()).filter((node) => {
+      return !node.parentId || !this.nodeIndex.has(node.parentId);
+    });
   }
 
   render(buf: string[]): void {

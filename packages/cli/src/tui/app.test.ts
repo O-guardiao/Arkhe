@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { TuiApp, normalizeClientId, normalizeRefreshIntervalSeconds, type TuiLiveApi } from "./app.js";
+import { normalizeActivityPayload } from "./activity-contract.js";
 
 type TuiAppInternals = {
   _initPanels: () => void;
@@ -10,6 +11,7 @@ type TuiAppInternals = {
   messagesPanel: { runtimeMessages: Array<{ text: string }>; timeline: Array<{ summary: string }> };
   eventsPanel: { latestResponse: string };
   footer: { pauseReason: string; operatorNote: string; stateDir: string };
+  branchTree: unknown;
 };
 
 describe("TuiApp option normalization", () => {
@@ -39,7 +41,7 @@ describe("TuiApp live prompt dispatch", () => {
       }),
       dispatchPrompt: vi.fn().mockResolvedValue({ ok: true }),
       fetchChannelsStatus: vi.fn().mockResolvedValue({ channels: {} }),
-      fetchActivity: vi.fn().mockResolvedValue({ events: [] }),
+      fetchActivity: vi.fn().mockResolvedValue(normalizeActivityPayload({ events: [] })),
       applyCommand: vi.fn().mockResolvedValue({ command: {} }),
       probeChannel: vi.fn().mockResolvedValue({ status: "ok" }),
       crossChannelSend: vi.fn().mockResolvedValue({ status: "ok" }),
@@ -72,7 +74,7 @@ describe("TuiApp live prompt dispatch", () => {
       }),
       dispatchPrompt: vi.fn().mockResolvedValue({ ok: true }),
       fetchChannelsStatus: vi.fn().mockResolvedValue({ channels: {} }),
-      fetchActivity: vi.fn().mockResolvedValue({ events: [] }),
+      fetchActivity: vi.fn().mockResolvedValue(normalizeActivityPayload({ events: [] })),
       applyCommand: vi.fn().mockResolvedValue({ command: {} }),
       probeChannel: vi.fn().mockResolvedValue({ status: "ok" }),
       crossChannelSend: vi.fn().mockResolvedValue({ status: "ok" }),
@@ -104,7 +106,7 @@ describe("TuiApp live prompt dispatch", () => {
       }),
       dispatchPrompt: vi.fn().mockResolvedValue({ ok: true }),
       fetchChannelsStatus: vi.fn().mockResolvedValue({ channels: {} }),
-      fetchActivity: vi.fn().mockResolvedValue({
+      fetchActivity: vi.fn().mockResolvedValue(normalizeActivityPayload({
         session: {
           session_id: "sess-1",
           client_id: "tui:test",
@@ -164,13 +166,27 @@ describe("TuiApp live prompt dispatch", () => {
           coordination: {
             latest_parallel_summary: {
               winner_branch_id: 3,
+              failed_count: 1,
+              total_tasks: 2,
             },
             branch_tasks: [
               {
+                branch_id: 1,
+                title: "root",
+                mode: "parallel",
+                status: "completed",
+                duration_ms: 220,
+              },
+              {
                 branch_id: 2,
+                parent_branch_id: 1,
                 title: "planner",
                 mode: "parallel",
-                status: "running",
+                status: "blocked",
+                metadata: {
+                  child_depth: 1,
+                  error: "timeout",
+                },
               },
             ],
             events: [
@@ -181,7 +197,7 @@ describe("TuiApp live prompt dispatch", () => {
             ],
           },
         },
-      }),
+      })),
       applyCommand: vi.fn().mockResolvedValue({ command: {} }),
       probeChannel: vi.fn().mockResolvedValue({ status: "ok" }),
       crossChannelSend: vi.fn().mockResolvedValue({ status: "ok" }),
@@ -217,6 +233,12 @@ describe("TuiApp live prompt dispatch", () => {
     expect(footer.pauseReason).toBe("manutenção");
     expect(footer.operatorNote).toBe("observar ramo 2");
     expect(footer.stateDir).toBe("C:/tmp/state");
+
+    const roots = ((internalApp.branchTree as unknown) as { roots: Array<{ id: string; status: string; children: Array<{ id: string; status: string }> }> }).roots;
+    expect(roots[0]?.id).toBe("1");
+    expect(roots[0]?.status).toBe("ok");
+    expect(roots[0]?.children[0]?.id).toBe("2");
+    expect(roots[0]?.children[0]?.status).toBe("error");
   });
 
   it("routes slash operator commands through applyCommand", async () => {
@@ -230,7 +252,7 @@ describe("TuiApp live prompt dispatch", () => {
       }),
       dispatchPrompt: vi.fn().mockResolvedValue({ ok: true }),
       fetchChannelsStatus: vi.fn().mockResolvedValue({ channels: {} }),
-      fetchActivity: vi.fn().mockResolvedValue({ events: [] }),
+      fetchActivity: vi.fn().mockResolvedValue(normalizeActivityPayload({ events: [] })),
       applyCommand: vi.fn().mockResolvedValue({
         command: {
           command_type: "pause_runtime",

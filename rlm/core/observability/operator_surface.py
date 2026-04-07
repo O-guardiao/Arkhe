@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from collections import Counter
 import threading
 import time
 from pathlib import Path
@@ -40,6 +41,187 @@ def _require_command_entry(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except Exception:
+            return None
+    return None
+
+
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except Exception:
+            return None
+    return None
+
+
+def _normalize_branch_final_status(status: str, metadata: dict[str, Any], error_message: str | None) -> str | None:
+    normalized = str(status or "").strip().lower()
+    if normalized in {"completed", "done", "success"}:
+        return "success"
+    if normalized in {"cancelled", "canceled"}:
+        return "cancelled"
+    if normalized in {"error", "failed"}:
+        return "error"
+    if normalized == "blocked":
+        if metadata.get("timed_out") is True:
+            return "timeout"
+        if error_message:
+            return "error"
+        return "blocked"
+    return None
+
+
+def _build_recursion_controls(controls: dict[str, Any]) -> dict[str, Any]:
+    branch_priorities = _as_dict(controls.get("branch_priorities"))
+    normalized_priorities = {
+        str(key): int(value)
+        for key, value in branch_priorities.items()
+        if _as_int(value) is not None
+        for value in [_as_int(value)]
+    }
+    return {
+        "paused": bool(controls.get("paused", False)),
+        "pause_reason": str(controls.get("pause_reason") or ""),
+        "focused_branch_id": _as_int(controls.get("focused_branch_id")),
+        "fixed_winner_branch_id": _as_int(controls.get("fixed_winner_branch_id")),
+        "branch_priorities": normalized_priorities,
+        "last_checkpoint_path": str(controls.get("last_checkpoint_path") or "-"),
+        "last_operator_note": str(controls.get("last_operator_note") or ""),
+    }
+
+
+def _build_recursion_branch_view(branch: dict[str, Any], controls: dict[str, Any]) -> dict[str, Any]:
+    raw = dict(branch)
+    metadata = _as_dict(raw.get("metadata"))
+    branch_id = _as_int(raw.get("branch_id"))
+    focused_branch_id = _as_int(controls.get("focused_branch_id"))
+    fixed_winner_branch_id = _as_int(controls.get("fixed_winner_branch_id"))
+    branch_priorities = _as_dict(controls.get("branch_priorities"))
+    parent_branch_id = _as_int(raw.get("parent_branch_id"))
+    if parent_branch_id is None:
+        parent_branch_id = _as_int(metadata.get("parent_branch_id"))
+    depth = _as_int(raw.get("depth"))
+    if depth is None:
+        depth = _as_int(metadata.get("child_depth"))
+    if depth is None:
+        depth = _as_int(metadata.get("depth"))
+    duration_ms = _as_float(raw.get("duration_ms"))
+    if duration_ms is None:
+        elapsed_s = _as_float(metadata.get("elapsed_s"))
+        if elapsed_s is not None:
+            duration_ms = round(elapsed_s * 1000, 3)
+    error_message = str(raw.get("error_message") or metadata.get("error") or "").strip() or None
+    operator_priority = _as_int(raw.get("operator_priority"))
+    if operator_priority is None:
+        operator_priority = _as_int(metadata.get("operator_priority"))
+    if operator_priority is None and branch_id is not None:
+        operator_priority = _as_int(branch_priorities.get(str(branch_id)))
+    status_text = str(raw.get("status") or "")
+
+    view = {
+        "branch_id": branch_id,
+        "task_id": _as_int(raw.get("task_id")),
+        "parent_task_id": _as_int(raw.get("parent_task_id")),
+        "parent_branch_id": parent_branch_id,
+        "depth": depth,
+        "role": raw.get("role") or metadata.get("role"),
+        "mode": str(raw.get("mode") or ""),
+        "title": str(raw.get("title") or ""),
+        "status": status_text,
+        "final_status": _normalize_branch_final_status(status_text, metadata, error_message),
+        "duration_ms": duration_ms,
+        "error_type": raw.get("error_type") or metadata.get("error_type"),
+        "error_message": error_message,
+        "operator_focused": bool(metadata.get("operator_focus")) or (branch_id is not None and branch_id == focused_branch_id),
+        "operator_fixed_winner": bool(metadata.get("operator_fixed_winner")) or (branch_id is not None and branch_id == fixed_winner_branch_id),
+        "operator_priority": operator_priority,
+        "created_at": raw.get("created_at"),
+        "updated_at": raw.get("updated_at"),
+        "metadata": metadata,
+    }
+    return view
+
+
+def _build_recursion_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        raw = dict(item)
+        normalized.append(
+            {
+                "operation": str(raw.get("operation") or "unknown"),
+                "topic": str(raw.get("topic") or ""),
+                "sender_id": _as_int(raw.get("sender_id")),
+                "receiver_id": _as_int(raw.get("receiver_id")),
+                "payload_preview": str(raw.get("payload_preview") or ""),
+                "metadata": _as_dict(raw.get("metadata")),
+                "timestamp": str(raw.get("timestamp") or ""),
+            }
+        )
+    return normalized
+
+
+def _build_recursion_summary(
+    summary: dict[str, Any],
+    controls: dict[str, Any],
+    branches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    status_counts = Counter(str(branch.get("status") or "unknown") for branch in branches)
+    winner_branch_id = _as_int(summary.get("winner_branch_id"))
+    fixed_winner_branch_id = _as_int(controls.get("fixed_winner_branch_id"))
+    if fixed_winner_branch_id is not None:
+        winner_branch_id = fixed_winner_branch_id
+    return {
+        "winner_branch_id": winner_branch_id,
+        "cancelled_count": int(_as_int(summary.get("cancelled_count")) or 0),
+        "failed_count": int(_as_int(summary.get("failed_count")) or 0),
+        "total_tasks": int(_as_int(summary.get("total_tasks")) or len(branches)),
+        "branch_count": len(branches),
+        "branch_status_counts": dict(status_counts),
+        "strategy": _as_dict(summary.get("strategy")),
+        "stop_evaluation": _as_dict(summary.get("stop_evaluation")),
+        "focused_branch_id": _as_int(controls.get("focused_branch_id")),
+        "fixed_winner_branch_id": fixed_winner_branch_id,
+    }
+
+
+def _build_recursion_projection(runtime: dict[str, Any]) -> dict[str, Any]:
+    coordination = _as_dict(runtime.get("coordination"))
+    controls = _build_recursion_controls(_as_dict(runtime.get("controls")))
+    branch_tasks = [
+        _build_recursion_branch_view(item, controls)
+        for item in _as_list(coordination.get("branch_tasks"))
+        if isinstance(item, dict)
+    ]
+    return {
+        "attached": bool(coordination.get("attached", False)),
+        "active_branch_id": _as_int(coordination.get("branch_id")),
+        "controls": controls,
+        "summary": _build_recursion_summary(
+            _as_dict(coordination.get("latest_parallel_summary")),
+            controls,
+            branch_tasks,
+        ),
+        "branches": branch_tasks,
+        "events": _build_recursion_events(_as_list(coordination.get("events"))),
+        "latest_stats": _as_dict(coordination.get("latest_stats")),
+    }
+
+
 def build_runtime_snapshot(session: Any) -> dict[str, Any] | None:
     env = get_runtime_environment(session)
     snapshot = getattr(env, "get_runtime_state_snapshot", None)
@@ -56,6 +238,7 @@ def build_runtime_snapshot(session: Any) -> dict[str, Any] | None:
     attachments = _as_dict(runtime.get("attachments"))
     timeline = _as_dict(runtime.get("timeline"))
     coordination = _as_dict(runtime.get("coordination"))
+    controls = _as_dict(runtime.get("controls"))
 
     recursive["messages"] = _tail(list(recursive.get("messages") or []), 40)
     recursive["commands"] = _tail(list(recursive.get("commands") or []), 20)
@@ -70,6 +253,8 @@ def build_runtime_snapshot(session: Any) -> dict[str, Any] | None:
     runtime["attachments"] = attachments
     runtime["timeline"] = timeline
     runtime["coordination"] = coordination
+    runtime["controls"] = controls
+    runtime["recursion"] = _build_recursion_projection(runtime)
     return runtime
 
 

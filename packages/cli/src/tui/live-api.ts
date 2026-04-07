@@ -5,6 +5,7 @@
  */
 
 import type { CliContext } from "../context.js";
+import { normalizeActivityPayload, type NormalizedActivityPayload } from "../lib/runtime-activity.js";
 
 // ─────────────────────────────────────────────── Erro operacional
 
@@ -93,8 +94,9 @@ export class LiveWorkbenchAPI {
   }
 
   /** Busca atividade da sessão. */
-  async fetchActivity(sessionId: string): Promise<Record<string, unknown>> {
-    return this._requestJson("GET", `/operator/session/${sessionId}/activity`);
+  async fetchActivity(sessionId: string): Promise<NormalizedActivityPayload> {
+    const payload = await this._requestJson("GET", `/operator/session/${sessionId}/activity`);
+    return normalizeActivityPayload(payload);
   }
 
   /** Envia um prompt para a sessão. */
@@ -165,11 +167,16 @@ export class LiveWorkbenchAPI {
 
     let resp: Response;
     try {
-      resp = await fetch(url, {
+      const requestInit: RequestInit = {
         method,
         headers: this._headers,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(timeoutMs),
+      };
+      if (body !== undefined) {
+        requestInit.body = JSON.stringify(body);
+      }
+      resp = await fetch(url, {
+        ...requestInit,
       });
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {

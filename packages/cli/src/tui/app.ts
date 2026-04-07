@@ -27,6 +27,11 @@ import { HeaderPanel, type HeaderData } from "./header-panel.js";
 import { fetchChannelSnapshotsLive } from "./channel-console.js";
 import type { LiveSessionInfo } from "./live-api.js";
 import {
+  toBranchTreeNodes,
+  type ActivityRecord,
+  type NormalizedActivityPayload,
+} from "./activity-contract.js";
+import {
   ENTER_ALT, EXIT_ALT,
   HIDE_CURSOR, SHOW_CURSOR,
   CLEAR_SCREEN,
@@ -56,7 +61,7 @@ export interface TuiLiveApi {
   ensureSession(clientId: string): Promise<LiveSessionInfo>;
   dispatchPrompt(sessionId: string, clientId: string, text: string): Promise<Record<string, unknown>>;
   fetchChannelsStatus(): Promise<Record<string, unknown>>;
-  fetchActivity(sessionId: string): Promise<Record<string, unknown>>;
+  fetchActivity(sessionId: string): Promise<NormalizedActivityPayload>;
   applyCommand(sessionId: string, opts: TuiApplyCommandOptions): Promise<Record<string, unknown>>;
   probeChannel(channelId: string): Promise<Record<string, unknown>>;
   crossChannelSend(targetClientId: string, message: string): Promise<Record<string, unknown>>;
@@ -388,55 +393,50 @@ export class TuiApp {
 
     try {
       const data = await this.liveApi.fetchActivity(this.liveSession.sessionId);
-
-      const sessionData = (data["session"] ?? data) as Record<string, unknown>;
-      const runtime = (data["runtime"] ?? {}) as Record<string, unknown>;
-      const controls = (runtime["controls"] ?? {}) as Record<string, unknown>;
-      const coordination = (runtime["coordination"] ?? {}) as Record<string, unknown>;
-      const summary = ((coordination["latest_parallel_summary"]) ?? {}) as Record<string, unknown>;
-      const sessionMetadata = (sessionData["metadata"] ?? {}) as Record<string, unknown>;
+      const sessionData = data.session;
+      const runtime = data.runtime;
+      const controls = runtime.controls;
+      const summary = runtime.summary;
+      const sessionMetadata = sessionData.metadata;
 
       this.headerPanel.update({
-        sessionId: String(sessionData["session_id"] ?? this.liveSession.sessionId),
-        clientId: String(sessionData["client_id"] ?? this.liveSession.clientId),
-        status: String(sessionData["status"] ?? "idle"),
+        sessionId: sessionData.sessionId || this.liveSession.sessionId,
+        clientId: sessionData.clientId || this.liveSession.clientId,
+        status: sessionData.status || "idle",
         mode: "live",
-        paused: Boolean(controls["paused"]),
-        focusedBranchId: controls["focused_branch_id"] != null ? controls["focused_branch_id"] as number : null,
-        winnerBranchId: summary["winner_branch_id"] != null ? summary["winner_branch_id"] as number : null,
-        lastCheckpoint: String(controls["last_checkpoint_path"] ?? "-"),
+        paused: controls.paused,
+        focusedBranchId: controls.focusedBranchId,
+        winnerBranchId: controls.fixedWinnerBranchId ?? summary.winnerBranchId,
+        lastCheckpoint: controls.lastCheckpointPath,
       });
 
       this.footer.updateRuntime({
         lastNotice: this.lastNotice,
-        pauseReason: String(controls["pause_reason"] ?? ""),
-        operatorNote: String(controls["last_operator_note"] ?? ""),
-        stateDir: String(sessionData["state_dir"] ?? ""),
+        pauseReason: controls.pauseReason,
+        operatorNote: controls.lastOperatorNote,
+        stateDir: sessionData.stateDir,
         refreshIntervalSeconds: this.refreshIntervalMs / 1000,
       });
       this.eventsPanel.setLatestResponse(String(sessionMetadata["last_operator_response"] ?? "-"));
 
-      const recursiveSession = (runtime["recursive_session"] ?? {}) as Record<string, unknown>;
-      const runtimeMessages = ((recursiveSession["messages"] ?? []) as Array<Record<string, unknown>>)
-        .map((message) => ({
+      const runtimeMessages = runtime.recursiveMessages
+        .map((message: ActivityRecord) => ({
           ts: formatClockValue(message["timestamp"] ?? message["created_at"] ?? message["ts"]),
           role: this._normalizeMessageRole(message["role"]),
           channel: String(message["channel"] ?? "runtime"),
           text: String(message["content"] ?? message["text"] ?? ""),
         }))
-        .filter((message) => message.text.trim().length > 0);
-      const timelineEntries = ((runtime["timeline"] ?? {}) as Record<string, unknown>)["entries"] as Array<Record<string, unknown>> | undefined;
-      const runtimeTimeline: TimelineEntry[] = (timelineEntries ?? [])
-        .map((entry) => ({
+        .filter((message: MessageEntry) => message.text.trim().length > 0);
+      const runtimeTimeline: TimelineEntry[] = runtime.timelineEntries
+        .map((entry: ActivityRecord) => ({
           kind: String(entry["event_type"] ?? entry["kind"] ?? "-"),
           summary: this._summarizeTimelineEntry(entry),
         }))
-        .filter((entry) => entry.summary.trim().length > 0);
+        .filter((entry: TimelineEntry) => entry.summary.trim().length > 0);
       this.messagesPanel.setRuntimeSnapshot(runtimeMessages, runtimeTimeline);
 
-      const eventLog = (data["event_log"] ?? []) as Array<Record<string, unknown>>;
-      for (const item of eventLog) {
-        const payload = (item["payload"] ?? {}) as Record<string, unknown>;
+      for (const item of data.eventLog) {
+        const payload = this._asRecord(item["payload"]);
         const eventType = String(item["event_type"] ?? item["type"] ?? "event");
         const kind = eventType.includes("error") ? "error" : eventType.includes("command") ? "command" : "event";
         this._recordEvent(
@@ -447,8 +447,8 @@ export class TuiApp {
         );
       }
 
-      for (const item of ((recursiveSession["events"] ?? []) as Array<Record<string, unknown>>)) {
-        const payload = (item["payload"] ?? {}) as Record<string, unknown>;
+      for (const item of runtime.recursiveEvents) {
+        const payload = this._asRecord(item["payload"]);
         const eventType = String(item["event_type"] ?? item["type"] ?? "runtime");
         const kind = eventType.includes("error") ? "error" : eventType.includes("tool") ? "tool_call" : "event";
         this._recordEvent(
@@ -459,49 +459,30 @@ export class TuiApp {
         );
       }
 
-      for (const item of ((coordination["events"] ?? []) as Array<Record<string, unknown>>)) {
-        const payloadPreview = String(item["payload_preview"] ?? item["topic"] ?? this._summarizePayload(item));
+      for (const item of runtime.coordinationEvents) {
+        const payloadPreview = item.payloadPreview || item.topic || this._summarizePayload(item.raw);
         this._recordEvent(
           "coord",
           "event",
-          `${String(item["operation"] ?? "coord")}: ${payloadPreview}`,
-          formatClockValue(item["timestamp"] ?? item["created_at"] ?? item["ts"]),
+          `${item.operation}: ${payloadPreview}`,
+          formatClockValue(item.timestamp),
         );
       }
 
-      const events = (data["events"] ?? []) as Array<{
-        type?: string;
-        payload?: Record<string, unknown>;
-        ts?: number;
-        eventId?: string;
-      }>;
-
-      for (const evt of events) {
+      for (const evt of data.gatewayEvents) {
         if (evt.ts && evt.ts <= this.lastActivityTs) continue;
-        this._applyGatewayEvent(evt.type ?? "", evt.payload ?? {}, formatClockValue(evt.ts));
+        this._applyGatewayEvent(evt.type, evt.payload, formatClockValue(evt.ts));
 
         if (evt.ts) {
           this.lastActivityTs = Math.max(this.lastActivityTs, evt.ts);
         }
       }
 
-      if (runtime["tasks"]) {
-        const tasks = runtime["tasks"] as Record<string, unknown>;
-        const current = (tasks["current"] ?? {}) as Record<string, unknown>;
-        if (current["title"]) {
-          this._setNotice(`Task: ${current["title"]} [${current["status"] ?? "-"}]`);
-        }
+      if (runtime.currentTask?.title) {
+        this._setNotice(`Task: ${runtime.currentTask.title} [${runtime.currentTask.status}]`);
       }
 
-      // Processa branch_tasks do runtime (Python: _build_branches_panel)
-      const branchTasks = ((coordination["branch_tasks"]) ?? []) as Array<Record<string, unknown>>;
-      for (const bt of branchTasks) {
-        this.branchTree.upsert({
-          id: String(bt["branch_id"] ?? ""),
-          label: `${bt["title"] ?? "sem titulo"} | ${bt["mode"] ?? "-"} | ${bt["status"] ?? "-"}`,
-          status: bt["status"] === "done" ? "ok" : bt["status"] === "error" ? "error" : "running",
-        });
-      }
+      this.branchTree.replaceAll(toBranchTreeNodes(runtime.branchTasks));
 
       this.dirty = true;
     } catch {
@@ -755,8 +736,7 @@ export class TuiApp {
       if (!this.liveApi || !this.liveSession) return true; // sem sessão = para de esperar
       try {
         const data = await this.liveApi.fetchActivity(this.liveSession.sessionId);
-        const sessionData = (data["session"] ?? data) as Record<string, unknown>;
-        const status = String(sessionData["status"] ?? "idle");
+        const status = data.session.status;
         // Idle ou completed = trabalho terminou
         return status === "idle" || status === "completed" || status === "done";
       } catch {
@@ -819,6 +799,13 @@ export class TuiApp {
       return "system";
     }
     return "user";
+  }
+
+  private _asRecord(value: unknown): ActivityRecord {
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      return value as ActivityRecord;
+    }
+    return {};
   }
 
   private _summarizePayload(payload: Record<string, unknown>): string {
