@@ -75,8 +75,46 @@ function resolveProjectRoot(context: CliContext, targetPath?: string): string | 
 
 export interface UpdateCallbacks {
   ok: (msg: string) => void;
+  warn: (msg: string) => void;
   err: (msg: string) => void;
   info: (msg: string) => void;
+}
+
+function installAndBuildNodePackage(
+  pkgManager: string,
+  packageDir: string,
+  label: string,
+  callbacks: UpdateCallbacks,
+  opts: {
+    buildDisplayName: string;
+    buildSuccessMessage: string;
+    buildFailureHint: string;
+  },
+): boolean {
+  const { ok, err, info } = callbacks;
+
+  info(`Reinstalando dependências Node (${label}) com ${pkgManager} install...`);
+  const install = spawnSync(pkgManager, ["install"], {
+    cwd: packageDir, encoding: "utf8", timeout: 120_000,
+    stdio: "inherit",
+  });
+  if (install.status !== 0) {
+    err(`Falha no ${pkgManager} install em ${label}.`);
+    return false;
+  }
+  ok(`Dependências Node (${label}) sincronizadas.`);
+
+  info(`Reconstruindo ${opts.buildDisplayName} TypeScript...`);
+  const build = spawnSync(pkgManager, ["run", "build"], {
+    cwd: packageDir, encoding: "utf8", timeout: 120_000,
+    stdio: "inherit",
+  });
+  if (build.status !== 0) {
+    err(opts.buildFailureHint);
+    return false;
+  }
+  ok(opts.buildSuccessMessage);
+  return true;
 }
 
 export async function updateInstallation(
@@ -94,7 +132,7 @@ export async function updateInstallation(
   },
 ): Promise<number> {
   const { checkOnly = false, restart = false, targetPath } = opts;
-  const { ok, err, info } = callbacks;
+  const { ok, warn, err, info } = callbacks;
 
   const projectRoot = resolveProjectRoot(context, targetPath);
   if (projectRoot === null) {
@@ -174,8 +212,12 @@ export async function updateInstallation(
     err("Saída inesperada do git rev-list ao comparar atualizações.");
     return 1;
   }
-  const aheadCount = parseInt(counts[0], 10);
-  const behindCount = parseInt(counts[1], 10);
+  const aheadCount = Number.parseInt(counts[0] ?? "", 10);
+  const behindCount = Number.parseInt(counts[1] ?? "", 10);
+  if (Number.isNaN(aheadCount) || Number.isNaN(behindCount)) {
+    err("Saída inválida do git rev-list ao comparar atualizações.");
+    return 1;
+  }
 
   function restoreStash(): void {
     if (!hasLocalChanges) return;
@@ -229,7 +271,9 @@ export async function updateInstallation(
 
   // TypeScript: usa pnpm (em vez de uv) para dependências Node
   const pkgManager = context.hasTool("pnpm") ? "pnpm" : "npm";
+  const terminalDir = join(projectRoot, "packages", "terminal");
   const cliDir = join(projectRoot, "packages", "cli");
+  const hasTerminalPkg = existsSync(join(terminalDir, "package.json"));
   const hasCliPkg = existsSync(join(cliDir, "package.json"));
 
   // Deps da raiz (se houver package.json na raiz)
@@ -244,30 +288,39 @@ export async function updateInstallation(
     }
   }
 
+  if (hasTerminalPkg) {
+    const terminalReady = installAndBuildNodePackage(
+      pkgManager,
+      terminalDir,
+      "packages/terminal",
+      callbacks,
+      {
+        buildDisplayName: "pacote terminal",
+        buildSuccessMessage: "Pacote terminal reconstruído com sucesso.",
+        buildFailureHint:
+          `Falha ao reconstruir pacote terminal. ` +
+          `Tente manualmente: ${pkgManager} install && ${pkgManager} run build em packages/terminal.`,
+      },
+    );
+    if (!terminalReady) return 1;
+  }
+
   // Deps do packages/cli
   if (hasCliPkg) {
-    info(`Reinstalando dependências Node (packages/cli) com ${pkgManager} install...`);
-    const installCli = spawnSync(pkgManager, ["install"], {
-      cwd: cliDir, encoding: "utf8", timeout: 120_000,
-      stdio: "inherit",
-    });
-    if (installCli.status !== 0) {
-      err(`Falha no ${pkgManager} install em packages/cli.`);
-      return 1;
-    }
-    ok("Dependências Node (CLI) sincronizadas.");
-
-    // Rebuild do CLI (gera dist/index.js atualizado)
-    info("Reconstruindo CLI TypeScript...");
-    const build = spawnSync(pkgManager, ["run", "build"], {
-      cwd: cliDir, encoding: "utf8", timeout: 120_000,
-      stdio: "inherit",
-    });
-    if (build.status !== 0) {
-      err("Falha ao reconstruir CLI. Tente manualmente: npm run build em packages/cli.");
-      return 1;
-    }
-    ok("CLI reconstruído com sucesso.");
+    const cliReady = installAndBuildNodePackage(
+      pkgManager,
+      cliDir,
+      "packages/cli",
+      callbacks,
+      {
+        buildDisplayName: "CLI",
+        buildSuccessMessage: "CLI reconstruído com sucesso.",
+        buildFailureHint:
+          `Falha ao reconstruir CLI. ` +
+          `Tente manualmente: ${pkgManager} install && ${pkgManager} run build em packages/cli.`,
+      },
+    );
+    if (!cliReady) return 1;
   }
 
   // Python: se uv está disponível e há pyproject.toml, sincroniza deps Python

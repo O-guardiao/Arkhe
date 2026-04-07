@@ -15,6 +15,10 @@ def _cli_package_dir() -> Path:
     return _repo_root() / "packages" / "cli"
 
 
+def _terminal_package_dir() -> Path:
+    return _repo_root() / "packages" / "terminal"
+
+
 def _should_use_legacy_cli() -> bool:
     value = (os.environ.get("RLM_USE_PYTHON_CLI_LEGACY") or "").strip().lower()
     return value in {"1", "true", "yes", "on"}
@@ -33,6 +37,25 @@ def _npm_binary() -> str | None:
     return None
 
 
+def _ensure_node_package_ready(
+    package_dir: Path,
+    npm: str,
+    *,
+    install_error: str,
+    build_error: str,
+) -> None:
+    if not (package_dir / "node_modules").exists():
+        install = subprocess.run([npm, "install"], cwd=package_dir, check=False)
+        if install.returncode != 0:
+            raise RuntimeError(install_error)
+
+    dist_entry = package_dir / "dist" / "index.js"
+    if not dist_entry.exists():
+        build = subprocess.run([npm, "run", "build"], cwd=package_dir, check=False)
+        if build.returncode != 0 or not dist_entry.exists():
+            raise RuntimeError(build_error)
+
+
 def _ensure_cli_dist(package_dir: Path) -> Path:
     dist_entry = package_dir / "dist" / "index.js"
     if dist_entry.exists():
@@ -44,14 +67,21 @@ def _ensure_cli_dist(package_dir: Path) -> Path:
             "npm não encontrado no PATH. Defina RLM_USE_PYTHON_CLI_LEGACY=true para usar a CLI Python legada."
         )
 
-    if not (package_dir / "node_modules").exists():
-        install = subprocess.run([npm, "install"], cwd=package_dir, check=False)
-        if install.returncode != 0:
-            raise RuntimeError("Falha ao instalar dependências de packages/cli via npm install.")
+    terminal_dir = _terminal_package_dir()
+    if terminal_dir.exists():
+        _ensure_node_package_ready(
+            terminal_dir,
+            npm,
+            install_error="Falha ao instalar dependências de packages/terminal via npm install.",
+            build_error="Falha ao compilar packages/terminal via npm run build.",
+        )
 
-    build = subprocess.run([npm, "run", "build"], cwd=package_dir, check=False)
-    if build.returncode != 0 or not dist_entry.exists():
-        raise RuntimeError("Falha ao compilar packages/cli via npm run build.")
+    _ensure_node_package_ready(
+        package_dir,
+        npm,
+        install_error="Falha ao instalar dependências de packages/cli via npm install.",
+        build_error="Falha ao compilar packages/cli via npm run build.",
+    )
 
     return dist_entry
 
