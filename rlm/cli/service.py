@@ -244,7 +244,13 @@ def update_installation(
         start_services=lambda: start_services(foreground=False, context=current_context),
     )
     if rc == 0 and not check_only:
-        mark_update(current_context, restarted=restart and _services_are_running())
+        try:
+            mark_update(current_context, restarted=restart and _services_are_running())
+        except Exception as exc:
+            _warn(
+                "Update concluído, mas não foi possível atualizar o launcher-state: "
+                f"{exc}"
+            )
     return rc
 
 

@@ -1096,8 +1096,10 @@ class TestUpdateInstallation:
 
     def test_update_runs_pull_sync_and_restart(self, tmp_project: Path) -> None:
         from rlm.cli import service as svc
+        from rlm.cli.context import CliContext
 
         (tmp_project / ".git").mkdir()
+        context = CliContext(env={}, cwd=tmp_project, home=tmp_project)
 
         def fake_run(cmd, cwd=None, capture_output=False, text=False, timeout=None):
             joined = " ".join(cmd)
@@ -1121,20 +1123,60 @@ class TestUpdateInstallation:
             return result
 
         with (
-            patch("pathlib.Path.cwd", return_value=tmp_project),
             patch("shutil.which", side_effect=lambda name: f"C:/fake/{name}.exe"),
             patch("subprocess.run", side_effect=fake_run),
             patch("rlm.cli.service._services_are_running", return_value=True),
             patch("rlm.cli.service.stop_services", return_value=0) as mock_stop,
             patch("rlm.cli.service.start_services", return_value=0) as mock_start,
         ):
-            rc = svc.update_installation()
+            rc = svc.update_installation(context=context)
 
         assert rc == 0
         mock_stop.assert_called_once()
         mock_start.assert_called_once()
         assert mock_start.call_args.kwargs["foreground"] is False
         assert "context" in mock_start.call_args.kwargs
+
+    def test_update_ignores_launcher_state_bookkeeping_failure(self, tmp_project: Path) -> None:
+        from rlm.cli import service as svc
+        from rlm.cli.context import CliContext
+
+        (tmp_project / ".git").mkdir()
+        context = CliContext(env={}, cwd=tmp_project, home=tmp_project)
+
+        def fake_run(cmd, cwd=None, capture_output=False, text=False, timeout=None):
+            joined = " ".join(cmd)
+            result = MagicMock()
+            result.returncode = 0
+            result.stderr = ""
+            if "status --porcelain" in joined:
+                result.stdout = ""
+            elif "rev-parse --abbrev-ref HEAD" in joined:
+                result.stdout = "main\n"
+            elif "fetch origin main --quiet" in joined:
+                result.stdout = ""
+            elif "rev-list --left-right --count HEAD...origin/main" in joined:
+                result.stdout = "0 1\n"
+            elif "pull --ff-only origin main" in joined:
+                result.stdout = "Updating abc..def"
+            elif joined == "uv sync":
+                result.stdout = "Synced"
+            else:
+                raise AssertionError(f"Comando inesperado: {joined}")
+            return result
+
+        with (
+            patch("shutil.which", side_effect=lambda name: f"C:/fake/{name}.exe"),
+            patch("subprocess.run", side_effect=fake_run),
+            patch("rlm.cli.service._services_are_running", return_value=False),
+            patch("rlm.cli.service.mark_update", side_effect=RuntimeError("legacy launcher state")),
+            patch("rlm.cli.service._warn") as mock_warn,
+        ):
+            rc = svc.update_installation(restart=False, context=context)
+
+        assert rc == 0
+        mock_warn.assert_called_once()
+        assert "launcher-state" in mock_warn.call_args.args[0]
 
     def test_show_status_with_env_file(self, tmp_path: Path) -> None:
         from rlm.cli import service as svc
