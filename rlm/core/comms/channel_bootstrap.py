@@ -250,12 +250,12 @@ def bootstrap_channel_infrastructure(
 
         meta: dict[str, Any] = {}
         if desc.channel_id == "telegram" and configured:
-            api_port = os.environ.get("RLM_API_PORT", os.environ.get("PORT", "8000"))
+            api_port = os.environ.get("RLM_API_PORT", os.environ.get("PORT", "5000"))
             meta["api_base_url"] = f"http://127.0.0.1:{api_port}"
 
         csr.register(
             desc.channel_id,
-            prober=prober,
+            prober=prober if configured else None,
             configured=configured,
             enabled=configured,
             meta=meta or None,

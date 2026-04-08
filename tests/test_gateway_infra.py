@@ -30,17 +30,17 @@ import pytest
 class TestBackoffPolicy:
 
     def test_compute_backoff_attempt_zero_returns_zero(self):
-        from rlm.server.backoff import BackoffPolicy, compute_backoff
+        from rlm.gateway.backoff import BackoffPolicy, compute_backoff
         p = BackoffPolicy(initial_s=5.0, max_s=300.0, factor=2.0)
         assert compute_backoff(p, 0) == 0.0
 
     def test_compute_backoff_attempt_one_near_initial(self):
-        from rlm.server.backoff import BackoffPolicy, compute_backoff
+        from rlm.gateway.backoff import BackoffPolicy, compute_backoff
         p = BackoffPolicy(initial_s=5.0, max_s=300.0, factor=2.0, jitter_fraction=0.0)
         assert compute_backoff(p, 1) == 5.0
 
     def test_compute_backoff_grows_exponentially(self):
-        from rlm.server.backoff import BackoffPolicy, compute_backoff
+        from rlm.gateway.backoff import BackoffPolicy, compute_backoff
         p = BackoffPolicy(initial_s=1.0, max_s=1000.0, factor=2.0, jitter_fraction=0.0)
         assert compute_backoff(p, 1) == 1.0
         assert compute_backoff(p, 2) == 2.0
@@ -48,19 +48,19 @@ class TestBackoffPolicy:
         assert compute_backoff(p, 4) == 8.0
 
     def test_compute_backoff_capped_at_max(self):
-        from rlm.server.backoff import BackoffPolicy, compute_backoff
+        from rlm.gateway.backoff import BackoffPolicy, compute_backoff
         p = BackoffPolicy(initial_s=100.0, max_s=200.0, factor=3.0, jitter_fraction=0.0)
         assert compute_backoff(p, 5) == 200.0
 
     def test_compute_backoff_jitter_is_positive(self):
-        from rlm.server.backoff import BackoffPolicy, compute_backoff
+        from rlm.gateway.backoff import BackoffPolicy, compute_backoff
         p = BackoffPolicy(initial_s=10.0, max_s=1000.0, factor=2.0, jitter_fraction=0.5)
         for _ in range(50):
             val = compute_backoff(p, 1)
             assert val >= 10.0  # jitter é sempre positivo
 
     def test_predefined_policies_exist(self):
-        from rlm.server.backoff import GATEWAY_RECONNECT, HTTP_RETRY, HEALTH_CHECK
+        from rlm.gateway.backoff import GATEWAY_RECONNECT, HTTP_RETRY, HEALTH_CHECK
         assert GATEWAY_RECONNECT.initial_s == 5.0
         assert HTTP_RETRY.max_attempts == 5
         assert HEALTH_CHECK.factor == 1.5
@@ -69,11 +69,11 @@ class TestBackoffPolicy:
 class TestSleepSync:
 
     def test_sleep_sync_completes_on_zero(self):
-        from rlm.server.backoff import sleep_sync
+        from rlm.gateway.backoff import sleep_sync
         assert sleep_sync(0.0) is True
 
     def test_sleep_sync_completes_short_duration(self):
-        from rlm.server.backoff import sleep_sync
+        from rlm.gateway.backoff import sleep_sync
         t0 = time.monotonic()
         result = sleep_sync(0.05)
         elapsed = time.monotonic() - t0
@@ -81,7 +81,7 @@ class TestSleepSync:
         assert elapsed >= 0.04
 
     def test_sleep_sync_cancelled_by_token(self):
-        from rlm.server.backoff import sleep_sync
+        from rlm.gateway.backoff import sleep_sync
         from rlm.core.lifecycle.cancellation import CancellationTokenSource
 
         cts = CancellationTokenSource()
@@ -97,7 +97,7 @@ class TestSleepSync:
         cts.dispose()
 
     def test_sleep_sync_already_cancelled(self):
-        from rlm.server.backoff import sleep_sync
+        from rlm.gateway.backoff import sleep_sync
         from rlm.core.lifecycle.cancellation import CancellationToken
         assert sleep_sync(5.0, cancel_token=CancellationToken.CANCELLED) is False
 
@@ -105,7 +105,7 @@ class TestSleepSync:
 class TestSleepAsync:
 
     def test_sleep_async_completes(self):
-        from rlm.server.backoff import sleep_async
+        from rlm.gateway.backoff import sleep_async
 
         async def _run():
             return await sleep_async(0.05)
@@ -113,7 +113,7 @@ class TestSleepAsync:
         assert asyncio.run(_run()) is True
 
     def test_sleep_async_cancelled(self):
-        from rlm.server.backoff import sleep_async
+        from rlm.gateway.backoff import sleep_async
         from rlm.core.lifecycle.cancellation import CancellationTokenSource
 
         async def _run():
@@ -208,7 +208,7 @@ class TestMessageDedup:
 class TestSyncHeartbeat:
 
     def test_calls_action_periodically(self):
-        from rlm.server.heartbeat import SyncHeartbeat
+        from rlm.gateway.heartbeat import SyncHeartbeat
         calls = []
         hb = SyncHeartbeat(action=lambda: calls.append(1), interval_s=0.05)
         hb.start()
@@ -217,7 +217,7 @@ class TestSyncHeartbeat:
         assert len(calls) >= 2
 
     def test_stop_stops_calling(self):
-        from rlm.server.heartbeat import SyncHeartbeat
+        from rlm.gateway.heartbeat import SyncHeartbeat
         calls = []
         hb = SyncHeartbeat(action=lambda: calls.append(1), interval_s=0.05)
         hb.start()
@@ -228,13 +228,13 @@ class TestSyncHeartbeat:
         assert len(calls) - count_at_stop <= 1  # no máximo 1 call extra
 
     def test_dispose_idempotent(self):
-        from rlm.server.heartbeat import SyncHeartbeat
+        from rlm.gateway.heartbeat import SyncHeartbeat
         hb = SyncHeartbeat(action=lambda: None)
         hb.dispose()
         hb.dispose()  # não deve lançar
 
     def test_cancelled_token_prevents_start(self):
-        from rlm.server.heartbeat import SyncHeartbeat
+        from rlm.gateway.heartbeat import SyncHeartbeat
         from rlm.core.lifecycle.cancellation import CancellationToken
         calls = []
         hb = SyncHeartbeat(
@@ -249,7 +249,7 @@ class TestSyncHeartbeat:
 class TestAsyncHeartbeat:
 
     def test_calls_action_periodically(self):
-        from rlm.server.heartbeat import AsyncHeartbeat
+        from rlm.gateway.heartbeat import AsyncHeartbeat
 
         async def _run():
             calls = []
@@ -262,7 +262,7 @@ class TestAsyncHeartbeat:
         assert asyncio.run(_run()) >= 2
 
     def test_context_manager(self):
-        from rlm.server.heartbeat import AsyncHeartbeat
+        from rlm.gateway.heartbeat import AsyncHeartbeat
 
         async def _run():
             calls = []
@@ -665,12 +665,12 @@ class TestAsyncGate:
 class TestSmartChunk:
 
     def test_short_text_single_chunk(self):
-        from rlm.server.chunker import smart_chunk
+        from rlm.gateway.chunker import smart_chunk
         result = smart_chunk("hello world", max_chars=100)
         assert result == ["hello world"]
 
     def test_splits_by_paragraphs(self):
-        from rlm.server.chunker import smart_chunk
+        from rlm.gateway.chunker import smart_chunk
         text = "Parágrafo 1.\n\nParágrafo 2.\n\nParágrafo 3."
         result = smart_chunk(text, max_chars=25)
         assert len(result) >= 2
@@ -678,13 +678,13 @@ class TestSmartChunk:
             assert len(chunk) <= 25
 
     def test_splits_by_lines_fallback(self):
-        from rlm.server.chunker import smart_chunk
+        from rlm.gateway.chunker import smart_chunk
         text = "Linha 1\nLinha 2\nLinha 3\nLinha 4"
         result = smart_chunk(text, max_chars=15)
         assert len(result) >= 2
 
     def test_preserves_code_blocks(self):
-        from rlm.server.chunker import smart_chunk
+        from rlm.gateway.chunker import smart_chunk
         text = "Antes\n\n```python\nprint('hello')\n```\n\nDepois"
         result = smart_chunk(text, max_chars=100)
         # Deve manter o bloco de código inteiro
@@ -693,25 +693,25 @@ class TestSmartChunk:
         assert "print('hello')" in full
 
     def test_empty_text(self):
-        from rlm.server.chunker import smart_chunk
+        from rlm.gateway.chunker import smart_chunk
         assert smart_chunk("") == [""]
         assert smart_chunk("", max_chars=10) == [""]
 
     def test_very_long_word_hard_split(self):
-        from rlm.server.chunker import smart_chunk
+        from rlm.gateway.chunker import smart_chunk
         text = "a" * 100
         result = smart_chunk(text, max_chars=30)
         assert all(len(c) <= 30 for c in result)
         assert "".join(result) == text
 
     def test_headers_split(self):
-        from rlm.server.chunker import smart_chunk
+        from rlm.gateway.chunker import smart_chunk
         text = "# Section 1\nContent 1\n\n# Section 2\nContent 2\n\n# Section 3\nContent 3"
         result = smart_chunk(text, max_chars=35)
         assert len(result) >= 2
 
     def test_channel_limits_exist(self):
-        from rlm.server.chunker import TELEGRAM_LIMIT, WHATSAPP_LIMIT, DISCORD_LIMIT, SLACK_LIMIT
+        from rlm.gateway.chunker import TELEGRAM_LIMIT, WHATSAPP_LIMIT, DISCORD_LIMIT, SLACK_LIMIT
         assert TELEGRAM_LIMIT == 4000
         assert WHATSAPP_LIMIT == 4000
         assert DISCORD_LIMIT == 1900
