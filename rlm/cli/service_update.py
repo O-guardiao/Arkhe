@@ -59,51 +59,7 @@ def _resolve_project_root(context: CliContext, target_path: str | None) -> Path 
     return None
 
 
-def _node_package_manager(context: CliContext) -> str | None:
-    if context.has_tool("pnpm"):
-        return "pnpm"
-    if context.has_tool("npm"):
-        return "npm"
-    return None
 
-
-def _install_and_build_node_package(
-    package_manager: str,
-    package_dir: Path,
-    *,
-    label: str,
-    build_display_name: str,
-    build_success_message: str,
-    build_failure_hint: str,
-    info: Callable[[str], None],
-    ok: Callable[[str], None],
-    err: Callable[[str], None],
-) -> bool:
-    info(f"Reinstalando dependências Node ({label}) com {package_manager} install...")
-    install = subprocess.run(
-        [package_manager, "install"],
-        cwd=package_dir,
-        capture_output=True,
-        text=True,
-    )
-    if install.returncode != 0:
-        err((install.stderr or install.stdout or f"Falha no {package_manager} install em {label}.").strip())
-        return False
-    ok(f"Dependências Node ({label}) sincronizadas.")
-
-    info(f"Reconstruindo {build_display_name} TypeScript...")
-    build = subprocess.run(
-        [package_manager, "run", "build"],
-        cwd=package_dir,
-        capture_output=True,
-        text=True,
-    )
-    if build.returncode != 0:
-        detail = (build.stderr or build.stdout or build_failure_hint).strip()
-        err(detail if detail else build_failure_hint)
-        return False
-    ok(build_success_message)
-    return True
 
 
 def update_installation_impl(
@@ -262,50 +218,7 @@ def update_installation_impl(
         return 1
     ok("Dependências sincronizadas.")
 
-    package_manager = _node_package_manager(context)
-    terminal_dir = project_root / "packages" / "terminal"
-    cli_dir = project_root / "packages" / "cli"
 
-    if (terminal_dir / "package.json").exists() or (cli_dir / "package.json").exists():
-        if package_manager is None:
-            err("Nem pnpm nem npm foram encontrados no PATH para sincronizar a CLI TypeScript.")
-            return 1
-
-    if (terminal_dir / "package.json").exists():
-        terminal_ready = _install_and_build_node_package(
-            package_manager,
-            terminal_dir,
-            label="packages/terminal",
-            build_display_name="pacote terminal",
-            build_success_message="Pacote terminal reconstruído com sucesso.",
-            build_failure_hint=(
-                f"Falha ao reconstruir pacote terminal. "
-                f"Tente manualmente: {package_manager} install && {package_manager} run build em packages/terminal."
-            ),
-            info=info,
-            ok=ok,
-            err=err,
-        )
-        if not terminal_ready:
-            return 1
-
-    if (cli_dir / "package.json").exists():
-        cli_ready = _install_and_build_node_package(
-            package_manager,
-            cli_dir,
-            label="packages/cli",
-            build_display_name="CLI",
-            build_success_message="CLI reconstruída com sucesso.",
-            build_failure_hint=(
-                f"Falha ao reconstruir CLI. "
-                f"Tente manualmente: {package_manager} install && {package_manager} run build em packages/cli."
-            ),
-            info=info,
-            ok=ok,
-            err=err,
-        )
-        if not cli_ready:
-            return 1
 
     _restore_stash()
 
