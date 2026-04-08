@@ -213,6 +213,7 @@ cython_debug/
 *.sqlite3
 *.sqlite3-journal
 test_rlm_states/
+rlm_states/
 test_cli_output.txt
 *.pid
 *.out
