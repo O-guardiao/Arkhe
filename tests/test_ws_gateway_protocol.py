@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from rlm.server.ws_gateway_endpoint import router
+from rlm.gateway.ws_gateway_endpoint import router
 
 
 def _build_app() -> FastAPI:

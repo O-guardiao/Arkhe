@@ -348,7 +348,7 @@ class TestTelegramGatewayConfig:
     """Testa configuração e utilitários do gateway."""
 
     def test_gateway_config_defaults(self):
-        from rlm.server.telegram_gateway import GatewayConfig
+        from rlm.gateway.telegram_gateway import GatewayConfig
         cfg = GatewayConfig()
         assert cfg.poll_timeout_s == 30
         assert cfg.max_requests_per_min == 10
@@ -359,20 +359,20 @@ class TestTelegramGatewayConfig:
         assert cfg.api_timeout_s == 120
 
     def test_rate_limiter_allows_within_limit(self):
-        from rlm.server.telegram_gateway import RateLimiter
+        from rlm.gateway.telegram_gateway import RateLimiter
         rl = RateLimiter(max_per_window=5, window_s=60.0)
         for _ in range(5):
             assert rl.allow(chat_id=123) is True
 
     def test_rate_limiter_blocks_over_limit(self):
-        from rlm.server.telegram_gateway import RateLimiter
+        from rlm.gateway.telegram_gateway import RateLimiter
         rl = RateLimiter(max_per_window=3, window_s=60.0)
         for _ in range(3):
             rl.allow(chat_id=456)
         assert rl.allow(chat_id=456) is False
 
     def test_rate_limiter_isolates_chat_ids(self):
-        from rlm.server.telegram_gateway import RateLimiter
+        from rlm.gateway.telegram_gateway import RateLimiter
         rl = RateLimiter(max_per_window=2, window_s=60.0)
         rl.allow(chat_id=111)
         rl.allow(chat_id=111)
@@ -381,7 +381,7 @@ class TestTelegramGatewayConfig:
         assert rl.allow(chat_id=222) is True
 
     def test_rate_limiter_resets_after_window(self):
-        from rlm.server.telegram_gateway import RateLimiter
+        from rlm.gateway.telegram_gateway import RateLimiter
         rl = RateLimiter(max_per_window=1, window_s=0.05)  # janela de 50ms
         rl.allow(chat_id=999)
         assert rl.allow(chat_id=999) is False
@@ -397,7 +397,7 @@ class TestTelegramGatewayCommands:
     """Testa tratamento de comandos especiais (/help, /reset, /status)."""
 
     def _make_gateway(self):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         cfg = GatewayConfig(bot_token="fake:TOKEN")
         gw = TelegramGateway(config=cfg)
         return gw
@@ -415,7 +415,7 @@ class TestTelegramGatewayCommands:
 
     def test_reset_command_calls_bridge(self):
         gw = self._make_gateway()
-        with patch("rlm.server.telegram_gateway._bridge_post", return_value={"status": "ok"}) as mock_bridge:
+        with patch("rlm.gateway.telegram_gateway._bridge_post", return_value={"status": "ok"}) as mock_bridge:
             resp = gw._handle_command(chat_id=42, command="/reset", username="user")
         assert "reiniciada" in resp.lower() or "reset" in resp.lower()
         mock_bridge.assert_called_once()
@@ -434,7 +434,7 @@ class TestTelegramGatewayCommands:
 
     def test_send_message_truncates_long_text(self):
         """Mensagens > 4000 chars são truncadas antes de enviar."""
-        from rlm.server.telegram_gateway import _send_message
+        from rlm.gateway.telegram_gateway import _send_message
         long_text = "a" * 5000
         captured = {}
 
@@ -442,7 +442,7 @@ class TestTelegramGatewayCommands:
             captured.update(data or {})
             return {"ok": True}
 
-        with patch("rlm.server.telegram_gateway._tg_request", side_effect=fake_tg_request):
+        with patch("rlm.gateway.telegram_gateway._tg_request", side_effect=fake_tg_request):
             _send_message("fake:TOKEN", 123, long_text)
 
         assert len(captured.get("text", "")) <= 4000 + 60  # margem para sufixo

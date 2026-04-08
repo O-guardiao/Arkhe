@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from rlm.server.envelope import Envelope, create_envelope, validate_envelope_payload
+from rlm.gateway.envelope import Envelope, create_envelope, validate_envelope_payload
 
 
 def _schema_path() -> Path:

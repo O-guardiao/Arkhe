@@ -5,7 +5,7 @@ Encapsula a montagem dos roteadores de canal Python (Discord, WhatsApp, Slack, W
 
 Uso em api.py::
 
-    from rlm.server.transport_router import mount_channel_routers
+    from rlm.gateway.transport_router import mount_channel_routers
     mount_channel_routers(app)
 """
 from __future__ import annotations
@@ -28,35 +28,35 @@ _log = _get_logger("transport_router")
 # ---------------------------------------------------------------------------
 
 try:
-    from rlm.server.discord_gateway import router as _discord_router
+    from rlm.gateway.discord_gateway import router as _discord_router
     _has_discord_gw = True
 except ImportError:
     _discord_router = None
     _has_discord_gw = False
 
 try:
-    from rlm.server.whatsapp_gateway import router as _whatsapp_router
+    from rlm.gateway.whatsapp_gateway import router as _whatsapp_router
     _has_whatsapp_gw = True
 except ImportError:
     _whatsapp_router = None
     _has_whatsapp_gw = False
 
 try:
-    from rlm.server.slack_gateway import router as _slack_router
+    from rlm.gateway.slack_gateway import router as _slack_router
     _has_slack_gw = True
 except ImportError:
     _slack_router = None
     _has_slack_gw = False
 
 try:
-    from rlm.server.webchat import router as _webchat_router
+    from rlm.gateway.webchat import router as _webchat_router
     _has_webchat = True
 except ImportError:
     _webchat_router = None
     _has_webchat = False
 
 try:
-    from rlm.server.operator_bridge import router as _operator_router
+    from rlm.gateway.operator_bridge import router as _operator_router
     _has_operator_bridge = True
 except ImportError:
     _operator_router = None
@@ -68,9 +68,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def mount_channel_routers(app: "FastAPI") -> bool:
-    """Monta os roteadores de canal Python na ``app`` FastAPI.
-
-    # Modo de transporte unificado. Os canais são gerenciados via Python.
+    """Monta os roteadores de canal Python na ``app`` FastAPI."""
 
     # Discord
     if _has_discord_gw and (

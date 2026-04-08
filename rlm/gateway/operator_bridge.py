@@ -13,7 +13,7 @@ from rlm.core.observability.operator_surface import (
 )
 from rlm.logging import get_runtime_logger
 from rlm.plugins.channel_registry import ChannelAdapter
-from rlm.server.auth_helpers import require_token
+from rlm.gateway.auth_helpers import require_token
 from rlm.server.runtime_pipeline import RuntimeDispatchServices
 
 

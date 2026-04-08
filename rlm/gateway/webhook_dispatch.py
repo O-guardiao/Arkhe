@@ -150,7 +150,7 @@ def create_webhook_router(
         max_body_bytes:   Tamanho máximo do body em bytes.
 
     Usage em api.py:
-        from rlm.server.webhook_dispatch import create_webhook_router
+        from rlm.gateway.webhook_dispatch import create_webhook_router
         token = os.environ.get("RLM_HOOK_TOKEN", "")
         if token:
             app.include_router(create_webhook_router(token), prefix="")
@@ -353,7 +353,7 @@ def create_webhook_router(
         if use_bus:
             try:
                 bus = request.app.state.message_bus
-                from rlm.server.message_envelope import InboundMessage
+                from rlm.gateway.message_envelope import InboundMessage
 
                 prefix = client_id.split(":", 1)[0] if ":" in client_id else "webhook"
                 inbound_msg = InboundMessage(

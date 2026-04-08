@@ -327,7 +327,7 @@ class TestWebhookDispatchBusIntegration:
 
     def test_bus_ingest_from_webhook_body(self, bus):
         """Bus.ingest cria envelope a partir de InboundMessage no padrão do webhook_dispatch."""
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
 
         msg = InboundMessage(
             channel="n8n",
@@ -343,7 +343,7 @@ class TestWebhookDispatchBusIntegration:
 
     def test_bus_route_response_not_called_when_already_replied(self, bus):
         """Se session.__reply_delivered__ = True, route_response NÃO é chamado."""
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
 
         msg = InboundMessage(
             channel="webhook",
@@ -370,7 +370,7 @@ class TestWebhookDispatchBusIntegration:
 
     def test_bus_route_response_called_when_not_replied(self, bus):
         """Se session.__reply_delivered__ = False + response_text, route_response é chamado."""
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
 
         msg = InboundMessage(
             channel="webhook",

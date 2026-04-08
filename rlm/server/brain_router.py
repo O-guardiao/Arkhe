@@ -37,7 +37,7 @@ from rlm.core.security.execution_fence import (
 )
 from rlm.core.tools import ToolDispatcher, get_registry
 from rlm.core.tools.specs import PermissionMode
-from rlm.server.auth_helpers import require_token
+from rlm.gateway.auth_helpers import require_token
 
 logger = logging.getLogger(__name__)
 

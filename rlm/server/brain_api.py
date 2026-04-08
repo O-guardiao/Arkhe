@@ -6,7 +6,7 @@ import asyncio
 import time
 from typing import Any, Protocol
 
-from rlm.server.envelope import Envelope, create_reply_envelope
+from rlm.gateway.envelope import Envelope, create_reply_envelope
 
 
 class BrainAPI(Protocol):

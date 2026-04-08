@@ -912,7 +912,7 @@ class TestSlackAdapter:
 
 @pytest.fixture(scope="module")
 def discord_client() -> TestClient:
-    from rlm.server.discord_gateway import router
+    from rlm.gateway.discord_gateway import router
     app = FastAPI()
     app.include_router(router)
     return TestClient(app, raise_server_exceptions=True)
@@ -921,7 +921,7 @@ def discord_client() -> TestClient:
 class TestVerifyDiscordSignature:
     def test_skip_verify_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RLM_DISCORD_SKIP_VERIFY", "true")
-        from rlm.server.discord_gateway import _verify_discord_signature
+        from rlm.gateway.discord_gateway import _verify_discord_signature
         import unittest.mock as mock
         # Simula ausência do pacote cryptography para acionar o branch de skip
         crypto_mods = {
@@ -940,7 +940,7 @@ class TestVerifyDiscordSignature:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("RLM_DISCORD_SKIP_VERIFY", "false")
-        from rlm.server.discord_gateway import _verify_discord_signature
+        from rlm.gateway.discord_gateway import _verify_discord_signature
         import unittest.mock as mock
 
         with mock.patch.dict("sys.modules", {"cryptography": None,
@@ -955,7 +955,7 @@ class TestVerifyDiscordSignature:
 
 class TestExtractInteractionData:
     def test_application_command_with_options(self) -> None:
-        from rlm.server.discord_gateway import _extract_interaction_data
+        from rlm.gateway.discord_gateway import _extract_interaction_data
         interaction = {
             "type": 2,
             "guild_id": "guild_abc",
@@ -976,7 +976,7 @@ class TestExtractInteractionData:
         assert info["guild_id"] == "guild_abc"
 
     def test_message_component_custom_id(self) -> None:
-        from rlm.server.discord_gateway import _extract_interaction_data
+        from rlm.gateway.discord_gateway import _extract_interaction_data
         interaction = {
             "type": 3,
             "guild_id": "guild_x",
@@ -988,7 +988,7 @@ class TestExtractInteractionData:
         assert info["custom_id"] == "btn_confirm"
 
     def test_dm_uses_user_not_member(self) -> None:
-        from rlm.server.discord_gateway import _extract_interaction_data
+        from rlm.gateway.discord_gateway import _extract_interaction_data
         interaction = {
             "type": 2,
             "user": {"id": "dm_user", "username": "carlos"},
@@ -999,7 +999,7 @@ class TestExtractInteractionData:
         assert info["guild_id"] == "dm"
 
     def test_no_options_empty_args(self) -> None:
-        from rlm.server.discord_gateway import _extract_interaction_data
+        from rlm.gateway.discord_gateway import _extract_interaction_data
         interaction = {
             "type": 2,
             "data": {"name": "help", "options": []},
@@ -1045,7 +1045,7 @@ class TestDiscordInteractionsEndpoint:
         }
         body = json.dumps(interaction).encode()
 
-        with patch("rlm.server.discord_gateway._run_rlm_and_followup", new_callable=AsyncMock) as mock_fn:
+        with patch("rlm.gateway.discord_gateway._run_rlm_and_followup", new_callable=AsyncMock) as mock_fn:
             resp = discord_client.post(
                 "/discord/interactions",
                 content=body,
@@ -1075,7 +1075,7 @@ class TestDiscordInteractionsEndpoint:
         }
         body = json.dumps(interaction).encode()
 
-        with patch("rlm.server.discord_gateway._run_rlm_and_followup", new_callable=AsyncMock):
+        with patch("rlm.gateway.discord_gateway._run_rlm_and_followup", new_callable=AsyncMock):
             resp = discord_client.post(
                 "/discord/interactions",
                 content=body,
@@ -1150,7 +1150,7 @@ class TestDiscordInteractionsEndpoint:
 
 @pytest.fixture(scope="module")
 def wa_client() -> TestClient:
-    from rlm.server.whatsapp_gateway import router
+    from rlm.gateway.whatsapp_gateway import router
     app = FastAPI()
     app.include_router(router)
     return TestClient(app, raise_server_exceptions=True)
@@ -1233,7 +1233,7 @@ class TestWhatsAppInbound:
     def test_text_message_returns_200(
         self, wa_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        with patch("rlm.server.whatsapp_gateway._process_whatsapp_payload", new_callable=AsyncMock):
+        with patch("rlm.gateway.whatsapp_gateway._process_whatsapp_payload", new_callable=AsyncMock):
             resp = wa_client.post(
                 "/whatsapp/webhook",
                 content=self._text_payload(),
@@ -1272,11 +1272,11 @@ class TestWhatsAppInbound:
         async def fake_dispatch(client_id: str, data: dict) -> None:
             dispatched.append((client_id, data))
 
-        with patch("rlm.server.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
-            with patch("rlm.server.whatsapp_gateway._mark_read_async", AsyncMock()):
+        with patch("rlm.gateway.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
+            with patch("rlm.gateway.whatsapp_gateway._mark_read_async", AsyncMock()):
                 asyncio.run(
                     __import__(
-                        "rlm.server.whatsapp_gateway",
+                        "rlm.gateway.whatsapp_gateway",
                         fromlist=["_process_whatsapp_payload"],
                     )._process_whatsapp_payload(None, payload)
                 )
@@ -1309,11 +1309,11 @@ class TestWhatsAppInbound:
         async def fake_dispatch(client_id: str, data: dict) -> None:
             dispatched.append((client_id, data))
 
-        with patch("rlm.server.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
-            with patch("rlm.server.whatsapp_gateway._mark_read_async", AsyncMock()):
+        with patch("rlm.gateway.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
+            with patch("rlm.gateway.whatsapp_gateway._mark_read_async", AsyncMock()):
                 asyncio.run(
                     __import__(
-                        "rlm.server.whatsapp_gateway",
+                        "rlm.gateway.whatsapp_gateway",
                         fromlist=["_process_whatsapp_payload"],
                     )._process_whatsapp_payload(None, payload)
                 )
@@ -1343,10 +1343,10 @@ class TestWhatsAppInbound:
         async def fake_dispatch(client_id: str, data: dict) -> None:
             dispatched.append((client_id, data))
 
-        with patch("rlm.server.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
+        with patch("rlm.gateway.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
             asyncio.run(
                 __import__(
-                    "rlm.server.whatsapp_gateway",
+                    "rlm.gateway.whatsapp_gateway",
                     fromlist=["_process_whatsapp_payload"],
                 )._process_whatsapp_payload(None, payload)
             )
@@ -1376,11 +1376,11 @@ class TestWhatsAppInbound:
         async def fake_dispatch(client_id: str, data: dict) -> None:
             dispatched.append((client_id, data))
 
-        with patch("rlm.server.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
-            with patch("rlm.server.whatsapp_gateway._mark_read_async", AsyncMock()):
+        with patch("rlm.gateway.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
+            with patch("rlm.gateway.whatsapp_gateway._mark_read_async", AsyncMock()):
                 asyncio.run(
                     __import__(
-                        "rlm.server.whatsapp_gateway",
+                        "rlm.gateway.whatsapp_gateway",
                         fromlist=["_process_whatsapp_payload"],
                     )._process_whatsapp_payload(None, payload)
                 )
@@ -1415,11 +1415,11 @@ class TestWhatsAppInbound:
         async def fake_dispatch(client_id: str, data: dict) -> None:
             pass
 
-        with patch("rlm.server.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
-            with patch("rlm.server.whatsapp_gateway._mark_read_async", fake_mark_read):
+        with patch("rlm.gateway.whatsapp_gateway._dispatch_to_rlm", fake_dispatch):
+            with patch("rlm.gateway.whatsapp_gateway._mark_read_async", fake_mark_read):
                 asyncio.run(
                     __import__(
-                        "rlm.server.whatsapp_gateway",
+                        "rlm.gateway.whatsapp_gateway",
                         fromlist=["_process_whatsapp_payload"],
                     )._process_whatsapp_payload(None, payload)
                 )
@@ -1433,7 +1433,7 @@ class TestWhatsAppInbound:
 
 @pytest.fixture(scope="module")
 def slack_client() -> TestClient:
-    from rlm.server.slack_gateway import router
+    from rlm.gateway.slack_gateway import router
     app = FastAPI()
     app.include_router(router)
     return TestClient(app, raise_server_exceptions=True)
@@ -1449,27 +1449,27 @@ class TestVerifySlackSignature:
         return ts, sig, self._SECRET
 
     def test_valid_signature(self) -> None:
-        from rlm.server.slack_gateway import _verify_slack_signature
+        from rlm.gateway.slack_gateway import _verify_slack_signature
         body = b'{"type":"event_callback"}'
         ts, sig, secret = self._valid_headers(body)
         assert _verify_slack_signature(secret, ts, body, sig) is True
 
     def test_invalid_signature_raises(self) -> None:
-        from rlm.server.slack_gateway import _verify_slack_signature
+        from rlm.gateway.slack_gateway import _verify_slack_signature
         body = b'{"type":"event_callback"}'
         ts = str(int(time.time()))
         with pytest.raises(ValueError, match="inválida"):
             _verify_slack_signature(self._SECRET, ts, body, "v0=deadbeef")
 
     def test_expired_timestamp_raises(self) -> None:
-        from rlm.server.slack_gateway import _verify_slack_signature
+        from rlm.gateway.slack_gateway import _verify_slack_signature
         body = b'body'
         old_ts = str(int(time.time()) - 400)  # 400s ago > 300s tolerance
         with pytest.raises(ValueError, match="expirado|replay"):
             _verify_slack_signature(self._SECRET, old_ts, body, "v0=any")
 
     def test_invalid_timestamp_format_raises(self) -> None:
-        from rlm.server.slack_gateway import _verify_slack_signature
+        from rlm.gateway.slack_gateway import _verify_slack_signature
         with pytest.raises(ValueError, match="inválido"):
             _verify_slack_signature(self._SECRET, "not-a-number", b"body", "v0=x")
 
@@ -1516,7 +1516,7 @@ class TestSlackEventsEndpoint:
         headers = self._headers(body)
         headers["Content-Type"] = "application/json"
 
-        with patch("rlm.server.slack_gateway._process_slack_event", new_callable=AsyncMock) as mock_fn:
+        with patch("rlm.gateway.slack_gateway._process_slack_event", new_callable=AsyncMock) as mock_fn:
             resp = slack_client.post("/slack/events", content=body, headers=headers)
 
         assert resp.status_code == 200
@@ -1543,7 +1543,7 @@ class TestSlackEventsEndpoint:
         headers = self._headers(body)
         headers["Content-Type"] = "application/json"
 
-        with patch("rlm.server.slack_gateway._dispatch_to_rlm", new_callable=AsyncMock) as mock_dispatch:
+        with patch("rlm.gateway.slack_gateway._dispatch_to_rlm", new_callable=AsyncMock) as mock_dispatch:
             resp = slack_client.post("/slack/events", content=body, headers=headers)
 
         assert resp.status_code == 200
@@ -1587,10 +1587,10 @@ class TestSlackEventsEndpoint:
         async def fake_dispatch(cid: str, data: dict) -> None:
             dispatched.append(cid)
 
-        with patch("rlm.server.slack_gateway._dispatch_to_rlm", fake_dispatch):
+        with patch("rlm.gateway.slack_gateway._dispatch_to_rlm", fake_dispatch):
             aio.run(
                 __import__(
-                    "rlm.server.slack_gateway",
+                    "rlm.gateway.slack_gateway",
                     fromlist=["_process_slack_event"],
                 )._process_slack_event(None, payload_base, "")
             )
@@ -1616,10 +1616,10 @@ class TestSlackEventsEndpoint:
         async def fake_dispatch(cid: str, data: dict) -> None:
             captured.append(data)
 
-        with patch("rlm.server.slack_gateway._dispatch_to_rlm", fake_dispatch):
+        with patch("rlm.gateway.slack_gateway._dispatch_to_rlm", fake_dispatch):
             aio.run(
                 __import__(
-                    "rlm.server.slack_gateway",
+                    "rlm.gateway.slack_gateway",
                     fromlist=["_process_slack_event"],
                 )._process_slack_event(None, payload, "")
             )
@@ -1646,10 +1646,10 @@ class TestSlackEventsEndpoint:
         async def fake_dispatch(cid: str, data: dict) -> None:
             dispatched.append(cid)
 
-        with patch("rlm.server.slack_gateway._dispatch_to_rlm", fake_dispatch):
+        with patch("rlm.gateway.slack_gateway._dispatch_to_rlm", fake_dispatch):
             aio.run(
                 __import__(
-                    "rlm.server.slack_gateway",
+                    "rlm.gateway.slack_gateway",
                     fromlist=["_process_slack_event"],
                 )._process_slack_event(None, payload, "")
             )
@@ -1675,10 +1675,10 @@ class TestSlackEventsEndpoint:
         async def fake_dispatch(cid: str, data: dict) -> None:
             captured.append((cid, data))
 
-        with patch("rlm.server.slack_gateway._dispatch_to_rlm", fake_dispatch):
+        with patch("rlm.gateway.slack_gateway._dispatch_to_rlm", fake_dispatch):
             aio.run(
                 __import__(
-                    "rlm.server.slack_gateway",
+                    "rlm.gateway.slack_gateway",
                     fromlist=["_process_slack_event"],
                 )._process_slack_event(None, payload, "")
             )
@@ -1703,7 +1703,7 @@ class TestSlackEventsEndpoint:
             },
         }
         body = json.dumps(payload).encode()
-        with patch("rlm.server.slack_gateway._process_slack_event", new_callable=AsyncMock):
+        with patch("rlm.gateway.slack_gateway._process_slack_event", new_callable=AsyncMock):
             resp = slack_client.post(
                 "/slack/events",
                 content=body,
@@ -1718,7 +1718,7 @@ class TestSlackEventsEndpoint:
 
 @pytest.fixture(scope="module")
 def webchat_client() -> TestClient:
-    from rlm.server.webchat import router
+    from rlm.gateway.webchat import router
 
     class _DummyEnv:
         def __init__(self) -> None:
@@ -1982,7 +1982,7 @@ class TestWebChatMessage:
     def test_valid_message_returns_runtime_activity_contract(
         self, webchat_client: TestClient
     ) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             resp = webchat_client.post(
                 "/webchat/message",
                 json={"text": "Qual é a capital do Brasil?", "session_id": "sess_abc"},
@@ -1996,7 +1996,7 @@ class TestWebChatMessage:
         assert "result_key" not in data
 
     def test_generates_session_id_if_missing(self, webchat_client: TestClient) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             resp = webchat_client.post(
                 "/webchat/message",
                 json={"text": "Olá!"},
@@ -2006,7 +2006,7 @@ class TestWebChatMessage:
         assert len(data["session_id"]) == 16  # secrets.token_hex(8) = 16 chars hex
 
     def test_runtime_session_id_matches_browser_session(self, webchat_client: TestClient) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             resp = webchat_client.post(
                 "/webchat/message",
                 json={"text": "Teste", "session_id": "my_session"},
@@ -2017,7 +2017,7 @@ class TestWebChatMessage:
 
 class TestWebChatActivity:
     def test_activity_returns_runtime_snapshot(self, webchat_client: TestClient) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             webchat_client.post(
                 "/webchat/message",
                 json={"text": "Teste", "session_id": "sess_runtime"},
@@ -2036,7 +2036,7 @@ class TestWebChatActivity:
 
 class TestWebChatCommands:
     def test_command_endpoint_executes_focus_branch(self, webchat_client: TestClient) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             webchat_client.post(
                 "/webchat/message",
                 json={"text": "Teste", "session_id": "sess_cmd"},
@@ -2059,7 +2059,7 @@ class TestWebChatCommands:
         assert data["runtime"]["recursive_session"]["commands"][-1]["command_type"] == "focus_branch"
 
     def test_command_endpoint_executes_pause_runtime(self, webchat_client: TestClient) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             webchat_client.post(
                 "/webchat/message",
                 json={"text": "Teste", "session_id": "sess_pause"},
@@ -2080,7 +2080,7 @@ class TestWebChatCommands:
         assert data["runtime"]["controls"]["pause_reason"] == "congelar execucao"
 
     def test_command_endpoint_executes_checkpoint(self, webchat_client: TestClient) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             webchat_client.post(
                 "/webchat/message",
                 json={"text": "Teste", "session_id": "sess_checkpoint"},
@@ -2101,7 +2101,7 @@ class TestWebChatCommands:
         assert data["runtime"]["controls"]["last_checkpoint_path"].endswith("snapshot-a")
 
     def test_command_endpoint_requires_branch_for_reprioritize(self, webchat_client: TestClient) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             webchat_client.post(
                 "/webchat/message",
                 json={"text": "Teste", "session_id": "sess_reprio"},
@@ -2117,7 +2117,7 @@ class TestWebChatCommands:
         assert resp.status_code == 400
 
     def test_command_endpoint_rejects_unknown_command_type(self, webchat_client: TestClient) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             webchat_client.post(
                 "/webchat/message",
                 json={"text": "Teste", "session_id": "sess_unknown_cmd"},
@@ -2142,7 +2142,7 @@ class TestWebChatCommands:
         assert "command_type sem executor dedicado" in command["outcome"]["error"]
 
     def test_command_endpoint_rejects_empty_type(self, webchat_client: TestClient) -> None:
-        with patch("rlm.server.webchat._dispatch_to_rlm", new_callable=AsyncMock):
+        with patch("rlm.gateway.webchat._dispatch_to_rlm", new_callable=AsyncMock):
             webchat_client.post(
                 "/webchat/message",
                 json={"text": "Teste", "session_id": "sess_cmd_empty"},
@@ -2158,7 +2158,7 @@ class TestWebChatCommands:
 class TestWebChatUI:
     def test_html_not_found_returns_404(self, webchat_client: TestClient, tmp_path) -> None:
         """Se webchat.html não existe, retorna 404."""
-        import rlm.server.webchat as wc_module
+        import rlm.gateway.webchat as wc_module
 
         original_static = wc_module._STATIC_DIR
         try:

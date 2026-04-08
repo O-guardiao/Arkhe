@@ -59,7 +59,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from rlm.core.structured_log import get_logger
-from rlm.server.auth_helpers import token_matches, authenticate_request
+from rlm.gateway.auth_helpers import token_matches, authenticate_request
 
 compat_log = get_logger("openai_compat")
 
@@ -193,7 +193,7 @@ def create_openai_compat_router(expected_token: str) -> APIRouter:
         Quando nenhum token está configurado (nem expected_token, nem env),
         retorna 503 — endpoint desabilitado por design (sem auth = inseguro).
         """
-        from rlm.server.auth_helpers import configured_tokens as _ct
+        from rlm.gateway.auth_helpers import configured_tokens as _ct
 
         sm = getattr(request.app.state, "session_manager", None)
         _raw = getattr(sm, "db_path", None) if sm else None

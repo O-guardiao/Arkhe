@@ -89,11 +89,11 @@ def test_operational_modules_use_runtime_logger():
         ("rlm.core.engine.lm_handler", "logger"),
         ("rlm.core.lifecycle.shutdown", "log"),
         ("rlm.core.lifecycle.disposable", "log"),
-        ("rlm.server.slack_gateway", "log"),
-        ("rlm.server.discord_gateway", "log"),
-        ("rlm.server.whatsapp_gateway", "log"),
-        ("rlm.server.webchat", "log"),
-        ("rlm.server.telegram_gateway", "logger"),
+        ("rlm.gateway.slack_gateway", "log"),
+        ("rlm.gateway.discord_gateway", "log"),
+        ("rlm.gateway.whatsapp_gateway", "log"),
+        ("rlm.gateway.webchat", "log"),
+        ("rlm.gateway.telegram_gateway", "logger"),
         ("rlm.server.event_router", "log"),
     ]
 

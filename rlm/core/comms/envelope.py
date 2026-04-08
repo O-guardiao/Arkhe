@@ -1,7 +1,7 @@
 """
 Envelope — Unidade atômica do MessageBus multichannel.
 
-Coexiste com ``InboundMessage`` (rlm/server/message_envelope.py) sem duplicação:
+Coexiste com ``InboundMessage`` (rlm/gateway/message_envelope.py) sem duplicação:
 
 - ``InboundMessage``: formato canônico que gateways produzem ao normalizar
   mensagens nativas de cada plataforma. Imutável (frozen), sem campos de
@@ -28,7 +28,8 @@ from enum import Enum
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from rlm.server.message_envelope import InboundMessage
+    from rlm.gateway.message_envelope import InboundMessage
+
 
 
 class MessageType(Enum):

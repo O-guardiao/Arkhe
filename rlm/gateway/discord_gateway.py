@@ -44,7 +44,7 @@ from fastapi.responses import JSONResponse
 from starlette.background import BackgroundTask
 
 from rlm.logging import get_runtime_logger
-from rlm.server.auth_helpers import build_internal_auth_headers
+from rlm.gateway.auth_helpers import build_internal_auth_headers
 
 log = get_runtime_logger("discord_gateway")
 

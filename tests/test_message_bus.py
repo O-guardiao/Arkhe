@@ -142,7 +142,7 @@ class TestEnvelope:
 
     def test_from_inbound_message(self):
         """Testa conversão InboundMessage → Envelope."""
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
 
         msg = InboundMessage(
             channel="whatsapp",
@@ -426,7 +426,7 @@ class TestDeliveryWorker:
 
 class TestMessageBus:
     def test_ingest_inbound_message(self, bus):
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
 
         msg = InboundMessage(
             channel="telegram",
@@ -499,7 +499,7 @@ class TestIntegration:
         4. MessageBus roteia → Outbox
         5. DeliveryWorker entrega
         """
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
 
         # 1. Gateway normaliza
         msg = InboundMessage(

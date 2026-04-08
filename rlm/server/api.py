@@ -41,10 +41,10 @@ from rlm.core.orchestration.role_orchestrator import PENDING_HANDOFFS_KEY, orche
 from rlm.core.orchestration.scheduler import RLMScheduler, CronJob
 from rlm.core.skillkit.skill_loader import SkillLoader
 from rlm.core.security.exec_approval import ExecApprovalGate
-from rlm.server.webhook_dispatch import create_webhook_router
+from rlm.gateway.webhook_dispatch import create_webhook_router
 from rlm.server.openai_compat import create_openai_compat_router
 from rlm.server.runtime_pipeline import RuntimeDispatchRejected, RuntimeDispatchServices, dispatch_runtime_prompt_sync
-from rlm.server.auth_helpers import configured_tokens, require_token
+from rlm.gateway.auth_helpers import configured_tokens, require_token
 from rlm.server.ws_server import RLMEventBus, start_ws_server
 from rlm.server.drain import DrainGuard
 from rlm.server.health_monitor import HealthMonitor
@@ -52,14 +52,14 @@ from rlm.plugins.channel_registry import ChannelRegistry, sanitize_text_payload
 from rlm.plugins import PluginLoader
 from rlm.core.comms.message_bus import get_message_bus
 from rlm.core.comms.channel_status import ChannelStatusRegistry
-from rlm.server.message_envelope import InboundMessage
+from rlm.gateway.message_envelope import InboundMessage
 from rlm.runtime import build_runtime_guard_from_env
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
 from rlm.core.skillkit.skill_telemetry import get_skill_telemetry
 
-# Channel gateways — agora gerenciados por transport_router.py (montagem condicional).
-# Os try/except abaixo foram removidos; use `from rlm.server.transport_router import ...`
+# Channel gateways — agora gerenciados por rlm.gateway.transport_router.
+# Os try/except abaixo foram removidos; use `from rlm.gateway.transport_router import ...`
 
 gateway_log = get_logger("api")
 
@@ -330,7 +330,7 @@ async def lifespan(app: FastAPI):
     _tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if _tg_token:
         try:
-            from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig as TGConfig
+            from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig as TGConfig
             _tg_api_url = f"http://127.0.0.1:{os.environ.get('RLM_API_PORT', os.environ.get('PORT', '8000'))}"
             _tg_config = TGConfig(
                 bot_token=_tg_token,
@@ -448,17 +448,16 @@ _api_token = os.environ.get("RLM_API_TOKEN", "").strip()
 app.include_router(create_openai_compat_router(_api_token))
 
 # Channel gateways — ativos se as env vars obrigatórias estiverem presentes.
-# Controlado por RLM_GATEWAY_MODE (padrão: "python").
-# Defina RLM_GATEWAY_MODE=typescript para delegar todos os canais ao Gateway TS.
-from rlm.server.transport_router import mount_channel_routers
+# O pacote canônico dos transports Python agora é rlm.gateway.
+from rlm.gateway.transport_router import mount_channel_routers
 mount_channel_routers(app)
 
 # Brain router — endpoints /brain/* (ToolDispatcher, PermissionPolicy, SessionJournal)
 from rlm.server.brain_router import router as _brain_router
 app.include_router(_brain_router)
 
-# WS Gateway — endpoint /ws/gateway (protocolo ws-protocol.v1.json, para Gateway TS)
-from rlm.server.ws_gateway_endpoint import router as _ws_gateway_router
+# WS Gateway — endpoint /ws/gateway (protocolo ws-protocol.v1.json, para consumers remotos)
+from rlm.gateway.ws_gateway_endpoint import router as _ws_gateway_router
 app.include_router(_ws_gateway_router)
 
 

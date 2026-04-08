@@ -280,25 +280,25 @@ class TestAsyncHeartbeat:
 class TestGatewayStateMachine:
 
     def test_initial_state_is_idle(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         sm = GatewayStateMachine("test")
         assert sm.state == GatewayState.IDLE
 
     def test_valid_transition_succeeds(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         sm = GatewayStateMachine("test")
         assert sm.transition(GatewayState.CONNECTING) is True
         assert sm.state == GatewayState.CONNECTING
 
     def test_invalid_transition_fails(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         sm = GatewayStateMachine("test")
         # IDLE → RUNNING é inválido (deve passar por CONNECTING)
         assert sm.transition(GatewayState.RUNNING) is False
         assert sm.state == GatewayState.IDLE
 
     def test_full_lifecycle(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         sm = GatewayStateMachine("test")
         assert sm.transition(GatewayState.CONNECTING)
         assert sm.transition(GatewayState.RUNNING)
@@ -307,7 +307,7 @@ class TestGatewayStateMachine:
         assert sm.is_terminal
 
     def test_error_and_reconnect_cycle(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         sm = GatewayStateMachine("test")
         sm.transition(GatewayState.CONNECTING)
         sm.transition(GatewayState.RUNNING)
@@ -319,12 +319,12 @@ class TestGatewayStateMachine:
         assert sm.state == GatewayState.RUNNING
 
     def test_idempotent_same_state(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         sm = GatewayStateMachine("test")
         assert sm.transition(GatewayState.IDLE) is True  # already there
 
     def test_emits_to_event_bus(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         from unittest.mock import MagicMock
         bus = MagicMock()
         sm = GatewayStateMachine("test", event_bus=bus)
@@ -334,7 +334,7 @@ class TestGatewayStateMachine:
         assert args[0][0] == "gateway_state"
 
     def test_on_change_listener(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         transitions = []
         sm = GatewayStateMachine("test")
         sm.on_change(lambda old, new, reason: transitions.append((old, new, reason)))
@@ -343,7 +343,7 @@ class TestGatewayStateMachine:
         assert transitions[0] == (GatewayState.IDLE, GatewayState.CONNECTING, "startup")
 
     def test_dispose_moves_to_stopped(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         sm = GatewayStateMachine("test")
         sm.transition(GatewayState.CONNECTING)
         sm.transition(GatewayState.RUNNING)
@@ -351,7 +351,7 @@ class TestGatewayStateMachine:
         assert sm.state == GatewayState.STOPPED
 
     def test_to_dict(self):
-        from rlm.server.gateway_state import GatewayStateMachine, GatewayState
+        from rlm.gateway.gateway_state import GatewayStateMachine, GatewayState
         sm = GatewayStateMachine("telegram")
         d = sm.to_dict()
         assert d["gateway"] == "telegram"
@@ -366,20 +366,20 @@ class TestGatewayStateMachine:
 class TestInboundMessage:
 
     def test_create_minimal(self):
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
         msg = InboundMessage(channel="test", client_id="test:1", text="hello")
         assert msg.channel == "test"
         assert msg.text == "hello"
         assert msg.timestamp > 0
 
     def test_frozen(self):
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
         msg = InboundMessage(channel="test", client_id="test:1", text="hello")
         with pytest.raises(AttributeError):
             msg.text = "changed"  # type: ignore[misc]
 
     def test_round_trip_serialization(self):
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
         msg = InboundMessage(
             channel="whatsapp", client_id="whatsapp:5511",
             text="oi", msg_id="wamid.123", from_user="User",
@@ -391,7 +391,7 @@ class TestInboundMessage:
         assert msg2.msg_id == msg.msg_id
 
     def test_from_dict_ignores_unknown_fields(self):
-        from rlm.server.message_envelope import InboundMessage
+        from rlm.gateway.message_envelope import InboundMessage
         d = {"channel": "test", "client_id": "t:1", "text": "hi", "unknown_field": 42}
         msg = InboundMessage.from_dict(d)
         assert msg.text == "hi"
@@ -400,7 +400,7 @@ class TestInboundMessage:
 class TestNormalizersTelegram:
 
     def test_normalize_telegram(self):
-        from rlm.server.message_envelope import normalize_telegram
+        from rlm.gateway.message_envelope import normalize_telegram
         msg = normalize_telegram(12345, "hello", username="user1", msg_id=99)
         assert msg.channel == "telegram"
         assert msg.client_id == "tg:12345"
@@ -411,7 +411,7 @@ class TestNormalizersTelegram:
 class TestNormalizersWhatsapp:
 
     def test_normalize_text(self):
-        from rlm.server.message_envelope import normalize_whatsapp
+        from rlm.gateway.message_envelope import normalize_whatsapp
         msg = normalize_whatsapp({
             "type": "text", "from": "5511999", "id": "wamid.1",
             "text": {"body": "oi"},
@@ -421,12 +421,12 @@ class TestNormalizersWhatsapp:
         assert msg.text == "oi"
 
     def test_normalize_status_returns_none(self):
-        from rlm.server.message_envelope import normalize_whatsapp
+        from rlm.gateway.message_envelope import normalize_whatsapp
         msg = normalize_whatsapp({"type": "status", "from": "5511", "id": "x"})
         assert msg is None
 
     def test_normalize_image(self):
-        from rlm.server.message_envelope import normalize_whatsapp
+        from rlm.gateway.message_envelope import normalize_whatsapp
         msg = normalize_whatsapp({
             "type": "image", "from": "5511999", "id": "wamid.2",
             "image": {"id": "media123", "mime_type": "image/jpeg", "caption": "foto"},
@@ -439,7 +439,7 @@ class TestNormalizersWhatsapp:
 class TestNormalizersSlack:
 
     def test_normalize_basic(self):
-        from rlm.server.message_envelope import normalize_slack
+        from rlm.gateway.message_envelope import normalize_slack
         msg = normalize_slack(
             {"user": "U123", "text": "<@U999> deploy now", "channel": "C456"},
             team_id="T789",
@@ -449,7 +449,7 @@ class TestNormalizersSlack:
         assert msg.client_id == "slack:T789:C456"
 
     def test_empty_after_mention_strip(self):
-        from rlm.server.message_envelope import normalize_slack
+        from rlm.gateway.message_envelope import normalize_slack
         msg = normalize_slack(
             {"user": "U123", "text": "<@U999>", "channel": "C456"},
         )
@@ -459,7 +459,7 @@ class TestNormalizersSlack:
 class TestNormalizersDiscord:
 
     def test_normalize_command(self):
-        from rlm.server.message_envelope import normalize_discord
+        from rlm.gateway.message_envelope import normalize_discord
         msg = normalize_discord({
             "type": "command", "command": "ask",
             "args": {"q": "hello"}, "user_id": "U1", "guild_id": "G1",
@@ -468,7 +468,7 @@ class TestNormalizersDiscord:
         assert "/ask" in msg.text
 
     def test_empty_content_returns_none(self):
-        from rlm.server.message_envelope import normalize_discord
+        from rlm.gateway.message_envelope import normalize_discord
         msg = normalize_discord({"type": "message", "content": "", "user_id": "U1"})
         assert msg is None
 

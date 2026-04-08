@@ -42,7 +42,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.background import BackgroundTask
 
 from rlm.logging import get_runtime_logger
-from rlm.server.auth_helpers import build_internal_auth_headers
+from rlm.gateway.auth_helpers import build_internal_auth_headers
 from rlm.server.dedup import MessageDedup
 
 log = get_runtime_logger("whatsapp_gateway")

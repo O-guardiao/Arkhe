@@ -268,7 +268,7 @@ class TestExecApprovalGate:
 class TestRateLimiter:
 
     def test_allows_within_limit(self):
-        from rlm.server.webhook_dispatch import _RateLimiter
+        from rlm.gateway.webhook_dispatch import _RateLimiter
         limiter = _RateLimiter(rpm=10)
         for _ in range(10):
             allowed, retry = limiter.is_allowed("1.2.3.4")
@@ -276,7 +276,7 @@ class TestRateLimiter:
             assert retry == 0
 
     def test_blocks_after_limit(self):
-        from rlm.server.webhook_dispatch import _RateLimiter
+        from rlm.gateway.webhook_dispatch import _RateLimiter
         limiter = _RateLimiter(rpm=3)
         for _ in range(3):
             limiter.is_allowed("1.2.3.4")
@@ -285,7 +285,7 @@ class TestRateLimiter:
         assert retry > 0
 
     def test_different_ips_independent(self):
-        from rlm.server.webhook_dispatch import _RateLimiter
+        from rlm.gateway.webhook_dispatch import _RateLimiter
         limiter = _RateLimiter(rpm=2)
         limiter.is_allowed("1.1.1.1")
         limiter.is_allowed("1.1.1.1")
@@ -296,7 +296,7 @@ class TestRateLimiter:
         assert allowed_b is True
 
     def test_rpm_zero_always_allows(self):
-        from rlm.server.webhook_dispatch import _RateLimiter
+        from rlm.gateway.webhook_dispatch import _RateLimiter
         limiter = _RateLimiter(rpm=0)
         for _ in range(200):
             allowed, retry = limiter.is_allowed("1.2.3.4")
@@ -313,7 +313,7 @@ class TestWebhookDispatch:
         """Cria app mínimo com webhook router e supervisor mockado."""
         from fastapi import FastAPI
         from contextlib import asynccontextmanager
-        from rlm.server.webhook_dispatch import create_webhook_router
+        from rlm.gateway.webhook_dispatch import create_webhook_router
 
         @asynccontextmanager
         async def lifespan(app):
@@ -409,7 +409,7 @@ class TestWebhookDispatch:
 
     def test_rate_limit_blocks_after_rpm(self):
         from fastapi.testclient import TestClient
-        from rlm.server.webhook_dispatch import create_webhook_router
+        from rlm.gateway.webhook_dispatch import create_webhook_router
         from fastapi import FastAPI
         from contextlib import asynccontextmanager
 
@@ -611,7 +611,7 @@ class TestOpenAICompat:
 class TestApiAuthHelpers:
 
     def test_build_internal_auth_headers_prefers_internal_token(self, monkeypatch):
-        from rlm.server.auth_helpers import build_internal_auth_headers
+        from rlm.gateway.auth_helpers import build_internal_auth_headers
 
         monkeypatch.setenv("RLM_INTERNAL_TOKEN", "internal-token")
         monkeypatch.setenv("RLM_WS_TOKEN", "ws-token")
@@ -623,7 +623,7 @@ class TestApiAuthHelpers:
 
     def test_require_token_accepts_bearer_or_header(self, monkeypatch):
         from starlette.requests import Request
-        from rlm.server.auth_helpers import require_token
+        from rlm.gateway.auth_helpers import require_token
 
         monkeypatch.setenv("RLM_ADMIN_TOKEN", "admin-secret")
 
@@ -656,7 +656,7 @@ class TestApiAuthHelpers:
     def test_require_token_rejects_missing_token(self, monkeypatch):
         from fastapi import HTTPException
         from starlette.requests import Request
-        from rlm.server.auth_helpers import require_token
+        from rlm.gateway.auth_helpers import require_token
 
         monkeypatch.setenv("RLM_ADMIN_TOKEN", "admin-secret")
         request = Request({
@@ -679,7 +679,7 @@ class TestApiAuthHelpers:
     def test_require_token_returns_503_when_unconfigured(self, monkeypatch):
         from fastapi import HTTPException
         from starlette.requests import Request
-        from rlm.server.auth_helpers import require_token
+        from rlm.gateway.auth_helpers import require_token
 
         monkeypatch.delenv("RLM_ADMIN_TOKEN", raising=False)
         request = Request({
@@ -714,7 +714,7 @@ class TestApiIntegration:
     def test_webhook_dispatch_imported_in_api(self):
         api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
         text = api_src.read_text(encoding="utf-8")
-        assert "from rlm.server.webhook_dispatch import create_webhook_router" in text
+        assert "from rlm.gateway.webhook_dispatch import create_webhook_router" in text
 
     def test_openai_compat_imported_in_api(self):
         api_src = pathlib.Path(__file__).parent.parent / "rlm" / "server" / "api.py"
@@ -760,7 +760,7 @@ class TestApiIntegration:
 
     def test_all_three_modules_importable(self):
         from rlm.core.security.exec_approval import ExecApprovalGate, ApprovalRecord
-        from rlm.server.webhook_dispatch import create_webhook_router, HookDispatchBody
+        from rlm.gateway.webhook_dispatch import create_webhook_router, HookDispatchBody
         from rlm.server.openai_compat import create_openai_compat_router, ChatCompletionRequest
         assert all([ExecApprovalGate, ApprovalRecord, create_webhook_router,
                     HookDispatchBody, create_openai_compat_router, ChatCompletionRequest])

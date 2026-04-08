@@ -13,7 +13,7 @@ sessões persistentes SQLite) fica no api.py. Este módulo só faz:
 
 Pode rodar:
     - Embutido no api.py (thread daemon no lifespan) — modo padrão
-    - Standalone: python -m rlm.server.telegram_gateway
+    - Standalone: python -m rlm.gateway.telegram_gateway
 
 Segurança:
     - ALLOWED_CHAT_IDS: lista de chat_ids autorizados (vazio = todos)
@@ -35,8 +35,8 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from rlm.logging import get_runtime_logger
-from rlm.server.backoff import GATEWAY_RECONNECT, compute_backoff, sleep_sync
-from rlm.server.heartbeat import SyncHeartbeat
+from rlm.gateway.backoff import GATEWAY_RECONNECT, compute_backoff, sleep_sync
+from rlm.gateway.heartbeat import SyncHeartbeat
 
 logger = get_runtime_logger("telegram_gateway")
 
@@ -177,7 +177,7 @@ class RateLimiter:
 
 def _build_auth_headers() -> dict[str, str]:
     """Constrói headers de autenticação para o POST interno."""
-    from rlm.server.auth_helpers import build_internal_auth_headers
+    from rlm.gateway.auth_helpers import build_internal_auth_headers
     return build_internal_auth_headers()
 
 
@@ -543,7 +543,7 @@ class TelegramGateway:
 
 
 # ---------------------------------------------------------------------------
-# CLI entrypoint: python -m rlm.server.telegram_gateway
+# CLI entrypoint: python -m rlm.gateway.telegram_gateway
 # ---------------------------------------------------------------------------
 
 def main():

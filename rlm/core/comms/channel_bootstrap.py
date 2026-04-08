@@ -11,7 +11,7 @@ api.py.  O resultado: qualquer runtime que NÃO passasse pelo lifespan
 ``build_local_workbench_runtime()`` chamam a mesma função.
 
 Para adicionar um canal futuro:
-  1. Crie um ChannelAdapter em rlm/server/ ou rlm/plugins/
+    1. Crie um ChannelAdapter em rlm/gateway/ ou rlm/plugins/
   2. Adicione uma entrada em ``_CHANNEL_DESCRIPTORS``
   3. Pronto — bootstrap detecta env vars e auto-registra
 """
@@ -59,34 +59,34 @@ _CHANNEL_DESCRIPTORS: tuple[ChannelDescriptor, ...] = (
         env_keys=("TELEGRAM_BOT_TOKEN",),
         adapter_factory="rlm.plugins.telegram:TelegramAdapter",
         prober_factory="rlm.core.comms.channel_probe:TelegramProber",
-        gateway_module="rlm.server.telegram_gateway",
+        gateway_module="rlm.gateway.telegram_gateway",
     ),
     ChannelDescriptor(
         channel_id="discord",
         env_keys=("DISCORD_APP_PUBLIC_KEY", "RLM_DISCORD_SKIP_VERIFY"),
         prober_factory="rlm.core.comms.channel_probe:DiscordProber",
-        gateway_module="rlm.server.discord_gateway",
+        gateway_module="rlm.gateway.discord_gateway",
     ),
     ChannelDescriptor(
         channel_id="whatsapp",
         env_keys=("WHATSAPP_VERIFY_TOKEN",),
-        gateway_module="rlm.server.whatsapp_gateway",
+        gateway_module="rlm.gateway.whatsapp_gateway",
     ),
     ChannelDescriptor(
         channel_id="slack",
         env_keys=("SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"),
-        gateway_module="rlm.server.slack_gateway",
+        gateway_module="rlm.gateway.slack_gateway",
     ),
     ChannelDescriptor(
         channel_id="webchat",
         env_keys=(),
-        adapter_factory="rlm.server.webchat:WebChatAdapter",
-        gateway_module="rlm.server.webchat",
+        adapter_factory="rlm.gateway.webchat:WebChatAdapter",
+        gateway_module="rlm.gateway.webchat",
     ),
     ChannelDescriptor(
         channel_id="tui",
         env_keys=(),
-        adapter_factory="rlm.server.operator_bridge:TuiAdapter",
+        adapter_factory="rlm.gateway.operator_bridge:TuiAdapter",
         always_registered=True,
     ),
 )

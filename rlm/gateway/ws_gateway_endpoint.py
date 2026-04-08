@@ -35,7 +35,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 
 from rlm.server.brain_api import BrainAPI, RuntimePipelineBrainAPI
-from rlm.server.envelope import Envelope
+from rlm.gateway.envelope import Envelope
 
 logger = logging.getLogger("rlm.ws_gateway")
 

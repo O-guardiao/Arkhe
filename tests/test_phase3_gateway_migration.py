@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from rlm.server.message_envelope import InboundMessage
+from rlm.gateway.message_envelope import InboundMessage
 from rlm.core.comms.envelope import Direction, Envelope, MessageType
 from rlm.core.comms.routing_policy import RoutingPolicy
 from rlm.core.comms.outbox import OutboxStore
@@ -347,7 +347,7 @@ class TestWebChatAdapter:
 
     def test_send_message_logs_to_session(self):
         """send_message() registra evento na sessão via SessionManager."""
-        from rlm.server.webchat import WebChatAdapter
+        from rlm.gateway.webchat import WebChatAdapter
 
         mock_session = SimpleNamespace(session_id="sess-wc-001")
         mock_sm = MagicMock()
@@ -366,7 +366,7 @@ class TestWebChatAdapter:
 
     def test_send_message_returns_false_on_error(self):
         """send_message() retorna False se SessionManager falhar."""
-        from rlm.server.webchat import WebChatAdapter
+        from rlm.gateway.webchat import WebChatAdapter
 
         mock_sm = MagicMock()
         mock_sm.get_or_create.side_effect = RuntimeError("DB error")
@@ -378,7 +378,7 @@ class TestWebChatAdapter:
 
     def test_send_media_delegates_to_send_message(self):
         """send_media() converte para descrição textual e delega."""
-        from rlm.server.webchat import WebChatAdapter
+        from rlm.gateway.webchat import WebChatAdapter
 
         mock_session = SimpleNamespace(session_id="sess-wc-002")
         mock_sm = MagicMock()
@@ -392,7 +392,7 @@ class TestWebChatAdapter:
 
     def test_adapter_implements_channel_adapter(self):
         """WebChatAdapter é uma instância de ChannelAdapter."""
-        from rlm.server.webchat import WebChatAdapter
+        from rlm.gateway.webchat import WebChatAdapter
         from rlm.plugins.channel_registry import ChannelAdapter
 
         adapter = WebChatAdapter(session_manager=MagicMock())

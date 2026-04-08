@@ -102,8 +102,8 @@ class MessageBus:
         para que o MessageBus conheça o envelope e possa correlacionar
         a resposta depois.
         """
-        # Import tardio para evitar circular (message_envelope em server/)
-        from rlm.server.message_envelope import InboundMessage
+        # Import tardio para evitar circular (message_envelope em gateway/)
+        from rlm.gateway.message_envelope import InboundMessage
 
         if isinstance(inbound_msg, InboundMessage):
             envelope = Envelope.from_inbound_message(inbound_msg)

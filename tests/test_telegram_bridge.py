@@ -25,23 +25,23 @@ import pytest
 
 class TestBridgeConfig:
     def test_default_api_base_url(self):
-        from rlm.server.telegram_gateway import GatewayConfig
+        from rlm.gateway.telegram_gateway import GatewayConfig
         cfg = GatewayConfig()
         assert cfg.api_base_url == "http://127.0.0.1:8000"
 
     def test_custom_api_base_url(self):
-        from rlm.server.telegram_gateway import GatewayConfig
+        from rlm.gateway.telegram_gateway import GatewayConfig
         cfg = GatewayConfig(api_base_url="http://10.0.0.5:9000")
         assert cfg.api_base_url == "http://10.0.0.5:9000"
 
     def test_api_timeout_default(self):
-        from rlm.server.telegram_gateway import GatewayConfig
+        from rlm.gateway.telegram_gateway import GatewayConfig
         cfg = GatewayConfig()
         assert cfg.api_timeout_s == 120
 
     def test_no_rlm_fields(self):
         """GatewayConfig não deve ter campos RLM (max_depth, persistent_per_chat)."""
-        from rlm.server.telegram_gateway import GatewayConfig
+        from rlm.gateway.telegram_gateway import GatewayConfig
         cfg = GatewayConfig()
         assert not hasattr(cfg, "max_depth")
         assert not hasattr(cfg, "persistent_per_chat")
@@ -54,37 +54,37 @@ class TestBridgeConfig:
 
 class TestGatewayInit:
     def test_init_with_config_token(self):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         cfg = GatewayConfig(bot_token="fake:TOKEN123")
         gw = TelegramGateway(config=cfg)
         assert gw.token == "fake:TOKEN123"
 
     def test_init_with_bot_token_override(self):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         cfg = GatewayConfig(bot_token="config:TOKEN")
         gw = TelegramGateway(config=cfg, bot_token="override:TOKEN")
         assert gw.token == "override:TOKEN"
 
     def test_init_from_env(self, monkeypatch):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "env:TOKEN")
         gw = TelegramGateway(config=GatewayConfig())
         assert gw.token == "env:TOKEN"
 
     def test_init_no_token_raises(self, monkeypatch):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
         with pytest.raises(ValueError, match="Token do Telegram"):
             TelegramGateway(config=GatewayConfig())
 
     def test_no_session_manager(self):
         """Gateway bridge não deve ter SessionManager local."""
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         gw = TelegramGateway(config=GatewayConfig(bot_token="fake:T"))
         assert not hasattr(gw, "_sessions")
 
     def test_stats_include_bridge_errors(self):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         gw = TelegramGateway(config=GatewayConfig(bot_token="fake:T"))
         assert "bridge_errors" in gw._stats
 
@@ -95,22 +95,22 @@ class TestGatewayInit:
 
 class TestBridgePost:
     def test_bridge_post_success(self):
-        from rlm.server.telegram_gateway import _bridge_post
+        from rlm.gateway.telegram_gateway import _bridge_post
         fake_response = json.dumps({"status": "completed", "response": "Olá!"}).encode()
         mock_resp = MagicMock()
         mock_resp.read.return_value = fake_response
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
 
-        with patch("rlm.server.telegram_gateway.urllib_request.urlopen", return_value=mock_resp):
-            with patch("rlm.server.telegram_gateway._build_auth_headers", return_value={"Content-Type": "application/json"}):
+        with patch("rlm.gateway.telegram_gateway.urllib_request.urlopen", return_value=mock_resp):
+            with patch("rlm.gateway.telegram_gateway._build_auth_headers", return_value={"Content-Type": "application/json"}):
                 result = _bridge_post("http://127.0.0.1:8000", "telegram:123", {"text": "oi"})
 
         assert result["status"] == "completed"
         assert result["response"] == "Olá!"
 
     def test_bridge_post_http_error(self):
-        from rlm.server.telegram_gateway import _bridge_post
+        from rlm.gateway.telegram_gateway import _bridge_post
         from urllib.error import HTTPError
         from io import BytesIO
 
@@ -118,17 +118,17 @@ class TestBridgePost:
             url="http://x", code=503, msg="Unavailable",
             hdrs=None, fp=BytesIO(b'{"detail":"draining"}')
         )
-        with patch("rlm.server.telegram_gateway.urllib_request.urlopen", side_effect=err):
-            with patch("rlm.server.telegram_gateway._build_auth_headers", return_value={}):
+        with patch("rlm.gateway.telegram_gateway.urllib_request.urlopen", side_effect=err):
+            with patch("rlm.gateway.telegram_gateway._build_auth_headers", return_value={}):
                 result = _bridge_post("http://127.0.0.1:8000", "telegram:123", {"text": "oi"})
 
         assert "error" in result
         assert "503" in result["error"]
 
     def test_bridge_post_connection_refused(self):
-        from rlm.server.telegram_gateway import _bridge_post
-        with patch("rlm.server.telegram_gateway.urllib_request.urlopen", side_effect=ConnectionRefusedError("refused")):
-            with patch("rlm.server.telegram_gateway._build_auth_headers", return_value={}):
+        from rlm.gateway.telegram_gateway import _bridge_post
+        with patch("rlm.gateway.telegram_gateway.urllib_request.urlopen", side_effect=ConnectionRefusedError("refused")):
+            with patch("rlm.gateway.telegram_gateway._build_auth_headers", return_value={}):
                 result = _bridge_post("http://127.0.0.1:8000", "telegram:123", {"text": "oi"})
 
         assert "error" in result
@@ -140,19 +140,19 @@ class TestBridgePost:
 
 class TestProcessViaBridge:
     def _make_gw(self):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         return TelegramGateway(config=GatewayConfig(bot_token="fake:T"))
 
     def test_extracts_response(self):
         gw = self._make_gw()
-        with patch("rlm.server.telegram_gateway._bridge_post", return_value={"status": "completed", "response": "Resposta OK"}):
+        with patch("rlm.gateway.telegram_gateway._bridge_post", return_value={"status": "completed", "response": "Resposta OK"}):
             result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
         assert result == "Resposta OK"
         assert already_replied is False
 
     def test_returns_error_on_bridge_failure(self):
         gw = self._make_gw()
-        with patch("rlm.server.telegram_gateway._bridge_post", return_value={"error": "timeout"}):
+        with patch("rlm.gateway.telegram_gateway._bridge_post", return_value={"error": "timeout"}):
             result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
         assert "Erro" in result or "erro" in result.lower()
         assert already_replied is False
@@ -167,14 +167,14 @@ class TestProcessViaBridge:
             captured_payload.update(payload)
             return {"status": "completed", "response": "ok"}
 
-        with patch("rlm.server.telegram_gateway._bridge_post", side_effect=capture_post):
+        with patch("rlm.gateway.telegram_gateway._bridge_post", side_effect=capture_post):
             gw._process_via_bridge(chat_id=123, text=long_text, username="user")
 
         assert len(captured_payload["text"]) <= 4000 + 50  # margem para sufixo
 
     def test_fallback_to_json_dumps_when_no_response_key(self):
         gw = self._make_gw()
-        with patch("rlm.server.telegram_gateway._bridge_post", return_value={"status": "completed", "unusual_key": "data"}):
+        with patch("rlm.gateway.telegram_gateway._bridge_post", return_value={"status": "completed", "unusual_key": "data"}):
             result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
         # Deve fazer json.dumps do resultado
         assert "unusual_key" in result
@@ -187,14 +187,14 @@ class TestProcessViaBridge:
             captured_client_id["id"] = client_id
             return {"status": "completed", "response": "ok"}
 
-        with patch("rlm.server.telegram_gateway._bridge_post", side_effect=capture_post):
+        with patch("rlm.gateway.telegram_gateway._bridge_post", side_effect=capture_post):
             gw._process_via_bridge(chat_id=1968290446, text="oi", username="user")
 
         assert captured_client_id["id"] == "telegram:1968290446"
 
     def test_already_replied_flag_propagated(self):
         gw = self._make_gw()
-        with patch("rlm.server.telegram_gateway._bridge_post", return_value={
+        with patch("rlm.gateway.telegram_gateway._bridge_post", return_value={
             "status": "completed", "response": "answer", "already_replied": True,
         }):
             result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
@@ -203,7 +203,7 @@ class TestProcessViaBridge:
 
     def test_already_replied_defaults_false(self):
         gw = self._make_gw()
-        with patch("rlm.server.telegram_gateway._bridge_post", return_value={
+        with patch("rlm.gateway.telegram_gateway._bridge_post", return_value={
             "status": "completed", "response": "answer",
         }):
             result, already_replied = gw._process_via_bridge(chat_id=123, text="oi", username="user")
@@ -215,7 +215,7 @@ class TestProcessViaBridge:
 
 class TestHandleUpdate:
     def _make_gw(self, allowed=None):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         cfg = GatewayConfig(bot_token="fake:T", typing_feedback=False)
         if allowed:
             cfg.allowed_chat_ids = allowed
@@ -235,7 +235,7 @@ class TestHandleUpdate:
     def test_blocks_unauthorized_chat(self):
         gw = self._make_gw(allowed=[999])
         sent = []
-        with patch("rlm.server.telegram_gateway._send_message", side_effect=lambda *a, **kw: sent.append(a)):
+        with patch("rlm.gateway.telegram_gateway._send_message", side_effect=lambda *a, **kw: sent.append(a)):
             update = {"message": {"chat": {"id": 123}, "from": {"username": "u"}, "text": "hi"}}
             gw._handle_update(update)
         assert any("não autorizado" in str(s) for s in sent)
@@ -245,8 +245,8 @@ class TestHandleUpdate:
         gw.config.max_requests_per_min = 1
         gw._rate_limiter._max = 1
         sent = []
-        with patch("rlm.server.telegram_gateway._send_message", side_effect=lambda *a, **kw: sent.append(a)):
-            with patch("rlm.server.telegram_gateway._bridge_post", return_value={"response": "ok"}):
+        with patch("rlm.gateway.telegram_gateway._send_message", side_effect=lambda *a, **kw: sent.append(a)):
+            with patch("rlm.gateway.telegram_gateway._bridge_post", return_value={"response": "ok"}):
                 update = {"message": {"chat": {"id": 1}, "from": {"username": "u"}, "text": "msg1"}}
                 gw._handle_update(update)
                 time.sleep(0.05)  # espera thread iniciar
@@ -258,7 +258,7 @@ class TestHandleUpdate:
     def test_command_handled_locally(self):
         gw = self._make_gw()
         sent = []
-        with patch("rlm.server.telegram_gateway._send_message", side_effect=lambda *a, **kw: sent.append(a)):
+        with patch("rlm.gateway.telegram_gateway._send_message", side_effect=lambda *a, **kw: sent.append(a)):
             update = {"message": {"chat": {"id": 1}, "from": {"username": "u"}, "text": "/help"}}
             gw._handle_update(update)
         assert any("Arkhe" in str(s) or "help" in str(s).lower() for s in sent)
@@ -266,8 +266,8 @@ class TestHandleUpdate:
     def test_regular_message_calls_bridge(self):
         gw = self._make_gw()
         sent_msgs = []
-        with patch("rlm.server.telegram_gateway._send_message", side_effect=lambda *a, **kw: sent_msgs.append(a)):
-            with patch("rlm.server.telegram_gateway._bridge_post", return_value={"status": "completed", "response": "Bridge OK"}) as mock_bridge:
+        with patch("rlm.gateway.telegram_gateway._send_message", side_effect=lambda *a, **kw: sent_msgs.append(a)):
+            with patch("rlm.gateway.telegram_gateway._bridge_post", return_value={"status": "completed", "response": "Bridge OK"}) as mock_bridge:
                 update = {"message": {"chat": {"id": 42}, "from": {"username": "demetrius"}, "text": "hello"}}
                 gw._handle_update(update)
                 time.sleep(0.3)  # espera thread daemon
@@ -281,23 +281,23 @@ class TestHandleUpdate:
 
 class TestPollOnce:
     def test_poll_once_processes_updates(self):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         gw = TelegramGateway(config=GatewayConfig(bot_token="fake:T", typing_feedback=False))
 
         updates = [
             {"update_id": 100, "message": {"chat": {"id": 1}, "from": {"username": "u"}, "text": "hi"}}
         ]
-        with patch("rlm.server.telegram_gateway._get_updates", return_value=updates):
-            with patch("rlm.server.telegram_gateway._bridge_post", return_value={"response": "ok"}):
-                with patch("rlm.server.telegram_gateway._send_message"):
+        with patch("rlm.gateway.telegram_gateway._get_updates", return_value=updates):
+            with patch("rlm.gateway.telegram_gateway._bridge_post", return_value={"response": "ok"}):
+                with patch("rlm.gateway.telegram_gateway._send_message"):
                     count = gw.poll_once()
         assert count == 1
         assert gw._offset == 101
 
     def test_poll_once_empty(self):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         gw = TelegramGateway(config=GatewayConfig(bot_token="fake:T"))
-        with patch("rlm.server.telegram_gateway._get_updates", return_value=[]):
+        with patch("rlm.gateway.telegram_gateway._get_updates", return_value=[]):
             count = gw.poll_once()
         assert count == 0
 
@@ -308,12 +308,12 @@ class TestPollOnce:
 
 class TestRunInThread:
     def test_run_in_thread_returns_daemon_thread(self):
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
         gw = TelegramGateway(config=GatewayConfig(bot_token="fake:T"))
 
         # Simula getMe ok e depois para imediatamente
-        with patch("rlm.server.telegram_gateway._tg_request", return_value={"ok": True, "result": {"username": "bot"}}):
-            with patch("rlm.server.telegram_gateway._get_updates", side_effect=lambda *a, **kw: (gw.stop(), [])[1]):
+        with patch("rlm.gateway.telegram_gateway._tg_request", return_value={"ok": True, "result": {"username": "bot"}}):
+            with patch("rlm.gateway.telegram_gateway._get_updates", side_effect=lambda *a, **kw: (gw.stop(), [])[1]):
                 t = gw.run_in_thread()
                 t.join(timeout=3)
         assert t.daemon is True
@@ -326,7 +326,7 @@ class TestRunInThread:
 
 class TestSendMessageFallback:
     def test_markdown_failure_retries_plaintext(self):
-        from rlm.server.telegram_gateway import _send_message
+        from rlm.gateway.telegram_gateway import _send_message
         calls = []
 
         def fake_tg_request(token, method, data=None, timeout=35):
@@ -335,7 +335,7 @@ class TestSendMessageFallback:
                 return {"ok": False, "description": "bad markdown"}
             return {"ok": True}
 
-        with patch("rlm.server.telegram_gateway._tg_request", side_effect=fake_tg_request):
+        with patch("rlm.gateway.telegram_gateway._tg_request", side_effect=fake_tg_request):
             result = _send_message("fake:T", 123, "test *broken markdown")
 
         assert len(calls) == 2
@@ -350,7 +350,7 @@ class TestSendMessageFallback:
 class TestEndToEnd:
     def test_full_flow_update_to_reply(self):
         """Simula update do Telegram passando pelo bridge e recebendo resposta."""
-        from rlm.server.telegram_gateway import TelegramGateway, GatewayConfig
+        from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig
 
         gw = TelegramGateway(config=GatewayConfig(bot_token="fake:T", typing_feedback=False))
 
@@ -361,8 +361,8 @@ class TestEndToEnd:
             sent_replies.append({"chat_id": chat_id, "text": text})
             return {"ok": True}
 
-        with patch("rlm.server.telegram_gateway._bridge_post", return_value=bridge_response) as mock_bridge:
-            with patch("rlm.server.telegram_gateway._send_message", side_effect=capture_send):
+        with patch("rlm.gateway.telegram_gateway._bridge_post", return_value=bridge_response) as mock_bridge:
+            with patch("rlm.gateway.telegram_gateway._send_message", side_effect=capture_send):
                 update = {
                     "update_id": 200,
                     "message": {
