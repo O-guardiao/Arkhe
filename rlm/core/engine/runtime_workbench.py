@@ -683,6 +683,10 @@ class BranchTaskBinding:
     title: str
     parent_task_id: int | None = None
     status: str = "not-started"
+    process_depth: int = 0
+    parent_branch_id: int | None = None
+    role: str = "root"
+    duration_s: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
@@ -777,6 +781,10 @@ class CoordinationDigest:
         title: str,
         parent_task_id: int | None = None,
         status: str = "not-started",
+        process_depth: int = 0,
+        parent_branch_id: int | None = None,
+        role: str = "root",
+        duration_s: float = 0.0,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with self._lock:
@@ -789,6 +797,10 @@ class CoordinationDigest:
                     title=str(title).strip() or f"branch-{branch_id}",
                     parent_task_id=parent_task_id,
                     status=status,
+                    process_depth=int(process_depth),
+                    parent_branch_id=parent_branch_id,
+                    role=str(role),
+                    duration_s=float(duration_s),
                     metadata=dict(metadata or {}),
                 )
                 self._branch_bindings[binding.branch_id] = binding
@@ -798,6 +810,13 @@ class CoordinationDigest:
                 binding.title = str(title).strip() or binding.title
                 binding.parent_task_id = parent_task_id
                 binding.status = str(status).strip() or binding.status
+                binding.process_depth = int(process_depth)
+                if parent_branch_id is not None:
+                    binding.parent_branch_id = parent_branch_id
+                if role != "root":
+                    binding.role = str(role)
+                if duration_s > 0:
+                    binding.duration_s = float(duration_s)
                 if metadata:
                     binding.metadata.update(dict(metadata))
                 binding.updated_at = _now_iso()
@@ -808,6 +827,7 @@ class CoordinationDigest:
         branch_id: int,
         *,
         status: str | None = None,
+        duration_s: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         with self._lock:
@@ -816,6 +836,8 @@ class CoordinationDigest:
                 return None
             if status is not None:
                 binding.status = str(status).strip() or binding.status
+            if duration_s is not None:
+                binding.duration_s = float(duration_s)
             if metadata:
                 binding.metadata.update(dict(metadata))
             binding.updated_at = _now_iso()

@@ -275,18 +275,13 @@ async def lifespan(app: FastAPI):
         gateway_log.info("✓ External webhook receiver: POST /api/hooks/{token}")
     if os.environ.get("RLM_API_TOKEN"):
         gateway_log.info("✓ OpenAI-compat API: POST /v1/chat/completions")
-    # Channel gateways — só logados se modo Python ativo
-    _gw_mode = os.environ.get("RLM_GATEWAY_MODE", "python").lower()
-    if _gw_mode == "typescript":
-        gateway_log.info("• Canal gateways Python ignorados (RLM_GATEWAY_MODE=typescript — Gateway TS porta 3000)")
-    else:
-        if os.environ.get("DISCORD_APP_PUBLIC_KEY") or os.environ.get("RLM_DISCORD_SKIP_VERIFY", "") == "true":
-            gateway_log.info("✓ Discord gateway: POST /discord/interactions")
-        if os.environ.get("WHATSAPP_VERIFY_TOKEN"):
-            gateway_log.info("✓ WhatsApp gateway: GET+POST /whatsapp/webhook")
-        if os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("SLACK_SIGNING_SECRET"):
-            gateway_log.info("✓ Slack gateway: POST /slack/events")
-        gateway_log.info("✓ WebChat: GET /webchat")
+    if os.environ.get("DISCORD_APP_PUBLIC_KEY") or os.environ.get("RLM_DISCORD_SKIP_VERIFY", "") == "true":
+        gateway_log.info("✓ Discord gateway: POST /discord/interactions")
+    if os.environ.get("WHATSAPP_VERIFY_TOKEN"):
+        gateway_log.info("✓ WhatsApp gateway: GET+POST /whatsapp/webhook")
+    if os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("SLACK_SIGNING_SECRET"):
+        gateway_log.info("✓ Slack gateway: POST /slack/events")
+    gateway_log.info("✓ WebChat: GET /webchat")
     if ws_disabled:
         gateway_log.info("• WebSocket: desabilitado via RLM_WS_DISABLED=true")
     elif app.state.ws_thread is not None:
