@@ -1,14 +1,7 @@
 """
-transport_router.py — Phase 0.3 da migração Python → TypeScript.
+transport_router.py — Gateway Mount.
 
-Encapsula a montagem condicional dos roteadores de canal Python (Discord,
-WhatsApp, Slack, Webchat, OperatorBridge) em uma única função chamada por
-api.py.
-
-Quando ``RLM_GATEWAY_MODE=typescript`` os gateways de canal Python são
-pulados; o Gateway TypeScript (porta 3000) assume todos os canais via
-WsBridge. A bridge do operador continua no brain Python para o workbench
-TUI consumir o payload nativo de runtime.
+Encapsula a montagem dos roteadores de canal Python (Discord, WhatsApp, Slack, Webchat, OperatorBridge) em uma única função chamada por api.py.
 
 Uso em api.py::
 
@@ -77,33 +70,7 @@ except ImportError:
 def mount_channel_routers(app: "FastAPI") -> bool:
     """Monta os roteadores de canal Python na ``app`` FastAPI.
 
-    Retorna ``True`` se os gateways Python foram montados, ``False`` se o
-    modo TypeScript estiver ativo (``RLM_GATEWAY_MODE=typescript``).
-
-    Controle via variável de ambiente:
-
-    .. code-block:: bash
-
-        # Python lida com todos os canais (padrão histórico)
-        RLM_GATEWAY_MODE=python   # ou omitir a var
-
-        # Gateway TypeScript assume todos os canais
-        RLM_GATEWAY_MODE=typescript
-    """
-    gateway_mode = os.environ.get("RLM_GATEWAY_MODE", "python").lower()
-
-    if gateway_mode == "typescript":
-        _log.info(
-            "RLM_GATEWAY_MODE=typescript — gateways de canal Python ignorados; "
-            "Gateway TS (porta 3000) gerencia os canais via WsBridge."
-        )
-        if _has_operator_bridge:
-            assert _operator_router is not None
-            app.include_router(_operator_router)
-            _log.info(
-                "✓ OperatorBridge montado no brain Python para o workbench TUI"
-            )
-        return False
+    # Modo de transporte unificado. Os canais são gerenciados via Python.
 
     # Discord
     if _has_discord_gw and (
