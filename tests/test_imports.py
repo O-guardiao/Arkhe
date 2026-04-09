@@ -302,6 +302,88 @@ class TestCoreImports:
         assert integrations.obsidian_bridge.ObsidianBridge is not None
         assert integrations.obsidian_mirror.export_document_to_vault is not None
 
+    def test_core_orchestration_package_import(self):
+        """Test the orchestration package public API and lazy exports."""
+        import rlm.core.orchestration as orchestration
+        from rlm.core.orchestration.handoff import HandoffRecord, VALID_HANDOFF_ROLES, make_handoff_fn
+        from rlm.core.orchestration.mcts import (
+            BranchResult,
+            EvaluationStage,
+            MCTSOrchestrator,
+            ProgramArchive,
+            RecursiveStrategy,
+            SandboxREPL,
+            default_recursive_strategies,
+            default_score_fn,
+            evolutionary_branch_search,
+            generate_recursive_strategies,
+            generate_refined_recursive_strategies,
+        )
+        from rlm.core.orchestration.role_orchestrator import (
+            PENDING_HANDOFFS_KEY,
+            orchestrate_roles,
+            pop_pending_handoffs,
+        )
+        from rlm.core.orchestration.scheduler import (
+            CronJob,
+            RLMScheduler,
+            compute_next_run,
+            parse_at_timestamp,
+            parse_interval_seconds,
+        )
+        from rlm.core.orchestration.sibling_bus import (
+            ControlChannel,
+            SIGNAL_TOPIC_MAP,
+            SiblingBus,
+            SiblingBusError,
+            SiblingMessage,
+            VALID_SIGNAL_TYPES,
+        )
+        from rlm.core.orchestration.supervisor import ExecutionResult, RLMSupervisor, SupervisorConfig
+
+        assert orchestration.VALID_HANDOFF_ROLES is VALID_HANDOFF_ROLES
+        assert orchestration.HandoffRecord is HandoffRecord
+        assert orchestration.make_handoff_fn is make_handoff_fn
+        assert orchestration.BranchResult is BranchResult
+        assert orchestration.EvaluationStage is EvaluationStage
+        assert orchestration.MCTSOrchestrator is MCTSOrchestrator
+        assert orchestration.ProgramArchive is ProgramArchive
+        assert orchestration.RecursiveStrategy is RecursiveStrategy
+        assert orchestration.SandboxREPL is SandboxREPL
+        assert orchestration.default_recursive_strategies is default_recursive_strategies
+        assert orchestration.default_score_fn is default_score_fn
+        assert orchestration.evolutionary_branch_search is evolutionary_branch_search
+        assert orchestration.generate_recursive_strategies is generate_recursive_strategies
+        assert orchestration.generate_refined_recursive_strategies is generate_refined_recursive_strategies
+        assert orchestration.PENDING_HANDOFFS_KEY == PENDING_HANDOFFS_KEY
+        assert orchestration.orchestrate_roles is orchestrate_roles
+        assert orchestration.pop_pending_handoffs is pop_pending_handoffs
+        assert orchestration.CronJob is CronJob
+        assert orchestration.RLMScheduler is RLMScheduler
+        assert orchestration.compute_next_run is compute_next_run
+        assert orchestration.parse_at_timestamp is parse_at_timestamp
+        assert orchestration.parse_interval_seconds is parse_interval_seconds
+        assert orchestration.ControlChannel is ControlChannel
+        assert orchestration.SIGNAL_TOPIC_MAP is SIGNAL_TOPIC_MAP
+        assert orchestration.SiblingBus is SiblingBus
+        assert orchestration.SiblingBusError is SiblingBusError
+        assert orchestration.SiblingMessage is SiblingMessage
+        assert orchestration.VALID_SIGNAL_TYPES is VALID_SIGNAL_TYPES
+        assert orchestration.ExecutionResult is ExecutionResult
+        assert orchestration.RLMSupervisor is RLMSupervisor
+        assert orchestration.SupervisorConfig is SupervisorConfig
+
+    def test_core_orchestration_lazy_submodule_access(self):
+        """Test lazy submodule access on the orchestration package."""
+        import rlm.core.orchestration as orchestration
+
+        assert orchestration.handoff.HandoffRecord is not None
+        assert orchestration.mcts.MCTSOrchestrator is not None
+        assert orchestration.role_orchestrator.orchestrate_roles is not None
+        assert orchestration.scheduler.RLMScheduler is not None
+        assert orchestration.sibling_bus.SiblingBus is not None
+        assert orchestration.supervisor.RLMSupervisor is not None
+
     def test_core_optimized_package_import(self):
         """Test the optimized package public API and lazy exports."""
         import rlm.core.optimized as optimized
@@ -581,6 +663,16 @@ class TestImportConflicts:
                 f"Duplicate items in rlm.core.integrations.__all__: {all_items}"
             )
 
+    def test_no_duplicate_names_in_orchestration_all(self):
+        """Test that __all__ in rlm.core.orchestration.__init__ has no duplicates."""
+        import rlm.core.orchestration as orchestration
+
+        if hasattr(orchestration, "__all__"):
+            all_items = orchestration.__all__
+            assert len(all_items) == len(set(all_items)), (
+                f"Duplicate items in rlm.core.orchestration.__all__: {all_items}"
+            )
+
     def test_no_duplicate_names_in_observability_all(self):
         """Test that __all__ in rlm.core.observability.__init__ has no duplicates."""
         import rlm.core.observability as observability
@@ -607,6 +699,7 @@ class TestImportConflicts:
         import rlm.core.engine as engine
         import rlm.core.integrations as integrations
         import rlm.core.memory as memory
+        import rlm.core.orchestration as orchestration
         import rlm.core.observability as observability
         import rlm.core.optimized as optimized
         import rlm.logger
@@ -641,6 +734,12 @@ class TestImportConflicts:
                     f"rlm.core.integrations.__all__ declares '{name}' but it's not exported"
                 )
 
+        if hasattr(orchestration, "__all__"):
+            for name in orchestration.__all__:
+                assert hasattr(orchestration, name), (
+                    f"rlm.core.orchestration.__all__ declares '{name}' but it's not exported"
+                )
+
         if hasattr(observability, "__all__"):
             for name in observability.__all__:
                 assert hasattr(observability, name), (
@@ -664,6 +763,7 @@ class TestImportConflicts:
             "rlm.core.engine",
             "rlm.core.integrations",
             "rlm.core.memory",
+            "rlm.core.orchestration",
             "rlm.core.observability",
             "rlm.core.optimized",
             "rlm.core.types",
@@ -671,6 +771,7 @@ class TestImportConflicts:
             "rlm.core.engine.lm_handler",
             "rlm.core.memory.memory_manager",
             "rlm.core.memory.knowledge_base",
+            "rlm.core.orchestration.supervisor",
             "rlm.core.observability.turn_telemetry",
             "rlm.core.optimized.fast",
             "rlm.core.comms.comms_utils",
