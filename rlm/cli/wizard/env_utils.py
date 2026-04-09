@@ -72,9 +72,29 @@ _SECURITY_SECTION_KEYS = [
     "RLM_API_TOKEN",
 ]
 
+_CHANNEL_SECTION_KEYS = [
+    # Telegram
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_OWNER_CHAT_ID",
+    # Discord
+    "DISCORD_BOT_TOKEN",
+    "DISCORD_APP_PUBLIC_KEY",
+    "DISCORD_APP_ID",
+    # WhatsApp
+    "WHATSAPP_TOKEN",
+    "WHATSAPP_PHONE_ID",
+    "WHATSAPP_VERIFY_TOKEN",
+    # Slack
+    "SLACK_BOT_TOKEN",
+    "SLACK_SIGNING_SECRET",
+    # Allowed chats (controle de acesso Telegram)
+    "RLM_ALLOWED_CHATS",
+]
+
 _MANAGED_ENV_SECTIONS = [
     ("# --- LLM ---", _LLM_SECTION_KEYS),
     ("# --- Servidor ---", _SERVER_SECTION_KEYS),
+    ("# --- Canais ---", _CHANNEL_SECTION_KEYS),
     ("# --- Segurança ---", _SECURITY_SECTION_KEYS),
 ]
 
