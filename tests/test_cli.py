@@ -61,6 +61,7 @@ class _WizardTestPrompter:
         self._texts = iter(texts or [])
         self._confirms = iter(confirms or [])
         self.notes: list[tuple[str, str]] = []
+        self.text_calls: list[dict[str, object]] = []
 
     def intro(self, title: str) -> None:
         _ = title
@@ -83,6 +84,13 @@ class _WizardTestPrompter:
         password: bool = False,
         validate: object = None,
     ) -> str:
+        self.text_calls.append({
+            "message": message,
+            "default": default,
+            "placeholder": placeholder,
+            "password": password,
+            "validate": validate,
+        })
         _ = (message, default, placeholder, password, validate)
         return next(self._texts)
 
@@ -1560,6 +1568,36 @@ class TestStepChannels:
             assert "vars" in spec
             assert "hint" in spec
             assert len(spec["vars"]) > 0
+            if spec["id"] in {"telegram", "discord"}:
+                assert callable(spec["test_fn"])
+                assert isinstance(spec["test_env_var"], str)
+            else:
+                assert spec["test_fn"] is None
+                assert spec["test_env_var"] is None
+
+    def test_sensitive_channel_values_do_not_echo_existing_secret(self) -> None:
+        """Secrets existentes não devem reaparecer como default visível no prompt."""
+        from rlm.cli.wizard import _step_channels
+
+        existing = {
+            "SLACK_BOT_TOKEN": "xoxb-1234567890",
+            "SLACK_SIGNING_SECRET": "signing-secret-abc",
+        }
+        p = _WizardTestPrompter(
+            confirms=[False, False, False, True],
+            texts=["", ""],
+        )
+
+        result = _step_channels(p, existing, "advanced")
+
+        slack_bot_call = next(call for call in p.text_calls if call["message"].startswith("SLACK_BOT_TOKEN"))
+        slack_secret_call = next(call for call in p.text_calls if call["message"].startswith("SLACK_SIGNING_SECRET"))
+        assert slack_bot_call["password"] is True
+        assert slack_secret_call["password"] is True
+        assert slack_bot_call["default"] == ""
+        assert slack_secret_call["default"] == ""
+        assert result["SLACK_BOT_TOKEN"] == existing["SLACK_BOT_TOKEN"]
+        assert result["SLACK_SIGNING_SECRET"] == existing["SLACK_SIGNING_SECRET"]
 
     def test_test_telegram_token_bad_token(self) -> None:
         """_test_telegram_token com token inválido retorna False."""

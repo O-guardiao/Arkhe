@@ -112,6 +112,72 @@ class TestCoreImports:
 
         assert RLM is not None
 
+    def test_core_engine_package_import(self):
+        """Test the engine package public API and lazy exports."""
+        import rlm.core.engine as engine
+        from rlm.core.engine.comms_utils import LMRequest, LMResponse
+        from rlm.core.engine.enums import PermissionMode
+        from rlm.core.engine.hooks import HookEvent, HookSystem
+        from rlm.core.engine.lm_handler import LMHandler
+        from rlm.core.engine.permission_policy import PermissionPolicy, PolicyAction, PolicyRule
+        from rlm.core.engine.rlm import RLM
+        from rlm.core.engine.runtime_workbench import AgentContext, TaskEntry, TaskLedger
+        from rlm.core.engine.session_journal import JournalEntry, Role, SessionJournal
+        from rlm.core.engine.sub_rlm import (
+            AsyncHandle,
+            SubRLMArtifactResult,
+            SubRLMCallable,
+            SubRLMDepthError,
+            SubRLMError,
+            SubRLMParallelCallable,
+            SubRLMParallelDetailedResults,
+            SubRLMParallelTaskResult,
+            SubRLMResult,
+            SubRLMTimeoutError,
+            make_sub_rlm_async_fn,
+            make_sub_rlm_fn,
+            make_sub_rlm_parallel_fn,
+        )
+
+        assert engine.RLM is RLM
+        assert engine.LMHandler is LMHandler
+        assert engine.LMRequest is LMRequest
+        assert engine.LMResponse is LMResponse
+        assert engine.HookEvent is HookEvent
+        assert engine.HookSystem is HookSystem
+        assert engine.PermissionMode is PermissionMode
+        assert engine.PermissionPolicy is PermissionPolicy
+        assert engine.PolicyAction is PolicyAction
+        assert engine.PolicyRule is PolicyRule
+        assert engine.SessionJournal is SessionJournal
+        assert engine.JournalEntry is JournalEntry
+        assert engine.Role is Role
+        assert engine.AgentContext is AgentContext
+        assert engine.TaskEntry is TaskEntry
+        assert engine.TaskLedger is TaskLedger
+        assert engine.AsyncHandle is AsyncHandle
+        assert engine.SubRLMArtifactResult is SubRLMArtifactResult
+        assert engine.SubRLMCallable is SubRLMCallable
+        assert engine.SubRLMDepthError is SubRLMDepthError
+        assert engine.SubRLMError is SubRLMError
+        assert engine.SubRLMParallelCallable is SubRLMParallelCallable
+        assert engine.SubRLMParallelDetailedResults is SubRLMParallelDetailedResults
+        assert engine.SubRLMParallelTaskResult is SubRLMParallelTaskResult
+        assert engine.SubRLMResult is SubRLMResult
+        assert engine.SubRLMTimeoutError is SubRLMTimeoutError
+        assert engine.make_sub_rlm_fn is make_sub_rlm_fn
+        assert engine.make_sub_rlm_async_fn is make_sub_rlm_async_fn
+        assert engine.make_sub_rlm_parallel_fn is make_sub_rlm_parallel_fn
+
+    def test_core_engine_lazy_submodule_access(self):
+        """Test lazy submodule access on the engine package."""
+        import rlm.core.engine as engine
+
+        assert engine.hooks.HookSystem is not None
+        assert engine.comms_utils.socket_send is not None
+        assert engine.runtime_workbench.AgentContext is not None
+        assert engine.sub_rlm.make_sub_rlm_fn is not None
+
     def test_core_lm_handler_import(self):
         """Test LMHandler import."""
         from rlm.core.engine.lm_handler import LMHandler
@@ -285,9 +351,20 @@ class TestImportConflicts:
                 f"Duplicate items in rlm.logger.__all__: {all_items}"
             )
 
+    def test_no_duplicate_names_in_engine_all(self):
+        """Test that __all__ in rlm.core.engine.__init__ has no duplicates."""
+        import rlm.core.engine as engine
+
+        if hasattr(engine, "__all__"):
+            all_items = engine.__all__
+            assert len(all_items) == len(set(all_items)), (
+                f"Duplicate items in rlm.core.engine.__all__: {all_items}"
+            )
+
     def test_all_declarations_match_exports(self):
         """Test that __all__ declarations match actual exports."""
         import rlm
+        import rlm.core.engine as engine
         import rlm.logger
 
         # Test rlm.__all__
@@ -302,6 +379,12 @@ class TestImportConflicts:
                     f"rlm.logger.__all__ declares '{name}' but it's not exported"
                 )
 
+        if hasattr(engine, "__all__"):
+            for name in engine.__all__:
+                assert hasattr(engine, name), (
+                    f"rlm.core.engine.__all__ declares '{name}' but it's not exported"
+                )
+
     def test_no_circular_imports(self):
         """Test that modules can be imported without circular import errors."""
         # Core modules that should always be importable
@@ -310,6 +393,7 @@ class TestImportConflicts:
             "rlm.clients",
             "rlm.clients.base_lm",
             "rlm.core",
+            "rlm.core.engine",
             "rlm.core.types",
             "rlm.core.engine.rlm",
             "rlm.core.engine.lm_handler",

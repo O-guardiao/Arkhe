@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import secrets
-from typing import Any
-
 from rlm.cli.wizard.channels import (
-    _CHANNEL_SPECS,
-    _test_discord_token,
-    _test_telegram_token,
+    CHANNEL_SPECS,
+    is_sensitive_channel_var,
 )
 from rlm.cli.wizard.env_utils import (
     _LLM_SECTION_KEYS,
@@ -187,6 +184,9 @@ def _step_server_config(
             return "Deve ser um número inteiro"
         return None
 
+    def _validate_non_empty(v: str) -> str | None:
+        return None if v else "IP não pode ser vazio"
+
     bind_choice = p.select(
         "Bind do servidor (quem pode acessar?)",
         options=[
@@ -205,7 +205,7 @@ def _step_server_config(
         host = p.text(
             "Endereço IP para bind",
             default=defaults["RLM_API_HOST"],
-            validate=lambda v: None if v else "IP não pode ser vazio",
+            validate=_validate_non_empty,
         )
 
     config["RLM_API_HOST"] = host
@@ -239,8 +239,8 @@ def _step_channels(
     config: dict[str, str] = {}
 
     # Detecta quais canais já têm alguma variável configurada
-    pre_configured = []
-    for spec in _CHANNEL_SPECS:
+    pre_configured: list[str] = []
+    for spec in CHANNEL_SPECS:
         has_any = any(existing.get(var_name) for var_name, _label, _req in spec["vars"])
         if has_any:
             pre_configured.append(spec["name"])
@@ -252,7 +252,7 @@ def _step_channels(
                 f"Canais já configurados: {', '.join(pre_configured)}",
                 title="Canais (QuickStart)",
             )
-            for spec in _CHANNEL_SPECS:
+            for spec in CHANNEL_SPECS:
                 for var_name, _label, _req in spec["vars"]:
                     if existing.get(var_name):
                         config[var_name] = existing[var_name]
@@ -271,13 +271,7 @@ def _step_channels(
             title="Canais de comunicação",
         )
 
-    # Para cada canal: perguntar se quer habilitar → coletar tokens
-    _test_fns = {
-        "_test_telegram_token": _test_telegram_token,
-        "_test_discord_token": _test_discord_token,
-    }
-
-    for spec in _CHANNEL_SPECS:
+    for spec in CHANNEL_SPECS:
         channel_name = spec["name"]
         has_existing = any(existing.get(v) for v, _l, _r in spec["vars"])
 
@@ -303,7 +297,10 @@ def _step_channels(
         test_token_value = ""
         for var_name, label, required in spec["vars"]:
             existing_val = existing.get(var_name, "")
-            masked = f"…{existing_val[-6:]}" if len(existing_val) > 8 else ""
+            sensitive = is_sensitive_channel_var(var_name)
+            masked = ""
+            if existing_val and sensitive:
+                masked = f"…{existing_val[-6:]}" if len(existing_val) > 8 else "configurado"
 
             prompt_msg = f"{var_name}"
             if masked:
@@ -313,23 +310,21 @@ def _step_channels(
 
             val = p.text(
                 prompt_msg,
-                default=existing_val,
-                password=not bool(masked) and "TOKEN" in var_name.upper(),
+                default="" if sensitive else existing_val,
+                password=sensitive,
             )
 
             if val:
                 config[var_name] = val
-                # Salva token principal para teste
-                if var_name.endswith("_BOT_TOKEN"):
-                    test_token_value = val
             elif existing_val:
                 config[var_name] = existing_val
 
         # Teste de conectividade (se há fn de teste e token)
-        test_fn_name = spec.get("test_fn")
-        test_fn = _test_fns.get(test_fn_name) if test_fn_name else None
+        test_fn = spec.get("test_fn")
+        test_env_var = spec.get("test_env_var")
+        test_token_value = config.get(test_env_var, "").strip() if test_env_var else ""
 
-        if test_fn and test_token_value:
+        if callable(test_fn) and test_token_value:
             if p.confirm(f"Testar token do {channel_name} agora?", default=True):
                 spinner = p.progress(f"Conectando ao {channel_name}…")
                 ok, msg = test_fn(test_token_value)
@@ -377,7 +372,7 @@ def _step_security_tokens(
                 config[env_name] = secrets.token_hex(32)
                 generated += 1
 
-        parts = []
+        parts: list[str] = []
         if generated:
             parts.append(f"{generated} gerados")
         if kept:
