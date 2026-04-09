@@ -48,6 +48,26 @@ class TestBridgeConfig:
         assert not hasattr(cfg, "max_iterations")
 
 
+class TestResolveInternalApiBaseUrl:
+    def test_prefers_rlm_internal_host(self, monkeypatch: pytest.MonkeyPatch):
+        from rlm.core.comms.internal_api import resolve_internal_api_base_url
+
+        monkeypatch.setenv("RLM_INTERNAL_HOST", "http://brain.internal:7777/")
+        monkeypatch.setenv("RLM_API_HOST", "127.0.0.1")
+        monkeypatch.setenv("RLM_API_PORT", "1")
+
+        assert resolve_internal_api_base_url() == "http://brain.internal:7777"
+
+    def test_falls_back_to_api_host_and_port(self, monkeypatch: pytest.MonkeyPatch):
+        from rlm.core.comms.internal_api import resolve_internal_api_base_url
+
+        monkeypatch.delenv("RLM_INTERNAL_HOST", raising=False)
+        monkeypatch.setenv("RLM_API_HOST", "0.0.0.0")
+        monkeypatch.setenv("RLM_API_PORT", "5001")
+
+        assert resolve_internal_api_base_url() == "http://127.0.0.1:5001"
+
+
 # ---------------------------------------------------------------------------
 # Gateway Init (thin client — sem RLM)
 # ---------------------------------------------------------------------------

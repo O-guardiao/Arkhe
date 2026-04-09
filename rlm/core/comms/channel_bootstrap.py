@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from rlm.core.comms.channel_probe import NullProber
+from rlm.core.comms.internal_api import resolve_internal_api_base_url
 from rlm.core.comms.channel_status import (
     ChannelStatusRegistry,
     init_channel_status_registry,
@@ -259,8 +260,7 @@ def bootstrap_channel_infrastructure(
 
         meta: dict[str, Any] = {}
         if desc.channel_id == "telegram" and configured:
-            api_port = os.environ.get("RLM_API_PORT", "5000")
-            meta["api_base_url"] = f"http://127.0.0.1:{api_port}"
+            meta["api_base_url"] = resolve_internal_api_base_url()
 
         csr.register(
             desc.channel_id,

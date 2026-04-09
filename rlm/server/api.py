@@ -51,6 +51,7 @@ from rlm.server.health_monitor import HealthMonitor
 from rlm.plugins.channel_registry import ChannelRegistry, sanitize_text_payload
 from rlm.plugins import PluginLoader
 from rlm.core.comms.message_bus import get_message_bus
+from rlm.core.comms.internal_api import resolve_internal_api_base_url
 from rlm.core.comms.channel_status import ChannelStatusRegistry
 from rlm.gateway.message_envelope import InboundMessage
 from rlm.runtime import build_runtime_guard_from_env
@@ -331,7 +332,7 @@ async def lifespan(app: FastAPI):
     if _tg_token:
         try:
             from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig as TGConfig
-            _tg_api_url = f"http://127.0.0.1:{os.environ.get('RLM_API_PORT', '5000')}"
+            _tg_api_url = resolve_internal_api_base_url()
             _tg_config = TGConfig(
                 bot_token=_tg_token,
                 api_base_url=_tg_api_url,

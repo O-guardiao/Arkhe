@@ -243,6 +243,21 @@ class TestBootstrapChannelInfrastructure:
         assert snap is not None
         assert snap.configured is True
 
+    def test_telegram_meta_prefers_internal_host(self, clean_env, tmp_path):
+        clean_env.setenv("TELEGRAM_BOT_TOKEN", "fake:token")
+        clean_env.setenv("RLM_INTERNAL_HOST", "http://brain.internal:9000")
+        clean_env.setenv("RLM_API_PORT", "1")
+        db = str(tmp_path / "test.db")
+        infra = bootstrap_channel_infrastructure(
+            session_manager=_mock_session_manager(),
+            event_bus=_mock_event_bus(),
+            db_path=db,
+            start_gateways=False,
+        )
+        snap = infra.csr.get("telegram")
+        assert snap is not None
+        assert snap.meta["api_base_url"] == "http://brain.internal:9000"
+
     def test_message_bus_off_by_default(self, clean_env, tmp_path):
         db = str(tmp_path / "test.db")
         infra = bootstrap_channel_infrastructure(
