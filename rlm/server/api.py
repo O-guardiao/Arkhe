@@ -1048,8 +1048,12 @@ async def channels_send(request: Request):
 
 @app.get("/health")
 async def health_check(request: Request):
-    """Health check with system status and component health."""
-    _require_admin_api_auth(request)
+    """Health check with system status and component health.
+
+    Endpoint publico (sem autenticação) — necessário para probes do TUI e
+    de orquestradores externos. Não expõe dados sensíveis; o servidor já
+    escuta apenas em loopback por padrão.
+    """
     sm: SessionManager = request.app.state.session_manager
     supervisor: RLMSupervisor = request.app.state.supervisor
     loader: PluginLoader = request.app.state.plugin_loader

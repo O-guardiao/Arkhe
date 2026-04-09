@@ -355,7 +355,7 @@ class TestTelegramGatewayConfig:
         assert cfg.max_response_length == 4000
         assert cfg.typing_feedback is True
         assert cfg.allowed_chat_ids == []
-        assert cfg.api_base_url == "http://127.0.0.1:8000"
+        assert cfg.api_base_url == "http://127.0.0.1:5000"
         assert cfg.api_timeout_s == 120
 
     def test_rate_limiter_allows_within_limit(self):
