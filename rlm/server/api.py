@@ -347,7 +347,7 @@ async def lifespan(app: FastAPI):
             gateway_log.info(f"✓ Telegram Gateway started (bridge → {_tg_api_url})")
         except Exception as e:
             gateway_log.error(f"Telegram Gateway failed to start: {e}")
-            _channel_infra.csr.mark_error("telegram", error=str(e))
+            _channel_infra.csr.mark_stopped("telegram", error=str(e))
 
     gateway_log.info("Ready to receive events.")
 

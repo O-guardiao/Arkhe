@@ -53,7 +53,7 @@ class GatewayConfig:
     bot_token: str = ""                      # TELEGRAM_BOT_TOKEN
 
     # Bridge — API endpoint
-    api_base_url: str = "http://127.0.0.1:8000"  # RLM API Server
+    api_base_url: str = "http://127.0.0.1:5000"  # RLM API Server
     api_timeout_s: int = 120                      # timeout do POST (LLM pode demorar)
 
     # Segurança

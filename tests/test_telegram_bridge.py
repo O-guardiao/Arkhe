@@ -27,7 +27,7 @@ class TestBridgeConfig:
     def test_default_api_base_url(self):
         from rlm.gateway.telegram_gateway import GatewayConfig
         cfg = GatewayConfig()
-        assert cfg.api_base_url == "http://127.0.0.1:8000"
+        assert cfg.api_base_url == "http://127.0.0.1:5000"
 
     def test_custom_api_base_url(self):
         from rlm.gateway.telegram_gateway import GatewayConfig
