@@ -178,6 +178,130 @@ class TestCoreImports:
         assert engine.runtime_workbench.AgentContext is not None
         assert engine.sub_rlm.make_sub_rlm_fn is not None
 
+    def test_core_memory_package_import(self):
+        """Test the memory package public API and lazy exports."""
+        import rlm.core.memory as memory
+        from rlm.core.memory.embedding_backend import EmbeddingBackend, MockEmbeddingBackend
+        from rlm.core.memory.hybrid_search import HybridSearcher, keyword_score, rrf
+        from rlm.core.memory.knowledge_base import GlobalKnowledgeBase
+        from rlm.core.memory.memory_budget import (
+            IMPORTANCE_WEIGHT,
+            MEMORY_BUDGET_PCT,
+            RECENCY_HALF_LIFE_DAYS,
+            RECENCY_WEIGHT,
+            RELEVANCE_WEIGHT,
+            RETRIEVAL_LIMIT,
+            SCORE_THRESHOLD,
+            TOKENS_PER_CHAR,
+            estimate_tokens_from_text,
+            format_memory_block,
+            inject_memory_with_budget,
+            score_tripartite,
+        )
+        from rlm.core.memory.memory_hot_cache import (
+            MemorySessionCache,
+            evict_cache,
+            get_or_create_cache,
+            registry_size,
+        )
+        from rlm.core.memory.memory_manager import MultiVectorMemory, cosine_similarity
+        from rlm.core.memory.memory_types import (
+            EmbeddingModel,
+            EmbeddingProvider,
+            EmbeddingRequest,
+            EmbeddingResult,
+            MemoryEntry,
+            MemoryManagerConfig,
+            SearchQuery,
+            SearchResult,
+            Vector,
+        )
+        from rlm.core.memory.mmr import mmr_rerank
+        from rlm.core.memory.temporal_decay import age_in_days, apply_temporal_decay
+        from rlm.core.memory.vector_utils import cosine_similarity_dense, dot_product, normalize_vector
+
+        assert memory.Vector is Vector
+        assert memory.EmbeddingProvider is EmbeddingProvider
+        assert memory.EmbeddingModel is EmbeddingModel
+        assert memory.EmbeddingRequest is EmbeddingRequest
+        assert memory.EmbeddingResult is EmbeddingResult
+        assert memory.MemoryEntry is MemoryEntry
+        assert memory.SearchQuery is SearchQuery
+        assert memory.SearchResult is SearchResult
+        assert memory.MemoryManagerConfig is MemoryManagerConfig
+        assert memory.cosine_similarity_dense is cosine_similarity_dense
+        assert memory.normalize_vector is normalize_vector
+        assert memory.dot_product is dot_product
+        assert memory.mmr_rerank is mmr_rerank
+        assert memory.age_in_days is age_in_days
+        assert memory.apply_temporal_decay is apply_temporal_decay
+        assert memory.EmbeddingBackend is EmbeddingBackend
+        assert memory.MockEmbeddingBackend is MockEmbeddingBackend
+        assert memory.keyword_score is keyword_score
+        assert memory.rrf is rrf
+        assert memory.HybridSearcher is HybridSearcher
+        assert memory.MultiVectorMemory is MultiVectorMemory
+        assert memory.cosine_similarity is cosine_similarity
+        assert memory.GlobalKnowledgeBase is GlobalKnowledgeBase
+        assert memory.MEMORY_BUDGET_PCT == MEMORY_BUDGET_PCT
+        assert memory.SCORE_THRESHOLD == SCORE_THRESHOLD
+        assert memory.IMPORTANCE_WEIGHT == IMPORTANCE_WEIGHT
+        assert memory.RECENCY_WEIGHT == RECENCY_WEIGHT
+        assert memory.RELEVANCE_WEIGHT == RELEVANCE_WEIGHT
+        assert memory.RETRIEVAL_LIMIT == RETRIEVAL_LIMIT
+        assert memory.TOKENS_PER_CHAR == TOKENS_PER_CHAR
+        assert memory.RECENCY_HALF_LIFE_DAYS == RECENCY_HALF_LIFE_DAYS
+        assert memory.score_tripartite is score_tripartite
+        assert memory.inject_memory_with_budget is inject_memory_with_budget
+        assert memory.estimate_tokens_from_text is estimate_tokens_from_text
+        assert memory.format_memory_block is format_memory_block
+        assert memory.MemorySessionCache is MemorySessionCache
+        assert memory.get_or_create_cache is get_or_create_cache
+        assert memory.evict_cache is evict_cache
+        assert memory.registry_size is registry_size
+
+    def test_core_memory_lazy_submodule_access(self):
+        """Test lazy submodule access on the memory package."""
+        import rlm.core.memory as memory
+
+        assert memory.memory_manager.MultiVectorMemory is not None
+        assert memory.knowledge_base.GlobalKnowledgeBase is not None
+        assert memory.knowledge_consolidator.consolidate_session is not None
+        assert memory.memory_budget.inject_memory_with_budget is not None
+        assert memory.memory_hot_cache.get_or_create_cache is not None
+        assert memory.semantic_retrieval.SemanticTextIndex is not None
+
+    def test_core_integrations_package_import(self):
+        """Test the integrations package public API and lazy exports."""
+        import rlm.core.integrations as integrations
+        from rlm.core.integrations.mcp_client import (
+            BaseSyncMCPClient,
+            SyncMCPClient,
+            SyncMCPHttpClient,
+        )
+        from rlm.core.integrations.obsidian_bridge import ObsidianBridge
+        from rlm.core.integrations.obsidian_mirror import (
+            export_all_to_vault,
+            export_document_to_vault,
+            import_conceitos_from_vault,
+        )
+
+        assert integrations.BaseSyncMCPClient is BaseSyncMCPClient
+        assert integrations.SyncMCPClient is SyncMCPClient
+        assert integrations.SyncMCPHttpClient is SyncMCPHttpClient
+        assert integrations.ObsidianBridge is ObsidianBridge
+        assert integrations.export_document_to_vault is export_document_to_vault
+        assert integrations.export_all_to_vault is export_all_to_vault
+        assert integrations.import_conceitos_from_vault is import_conceitos_from_vault
+
+    def test_core_integrations_lazy_submodule_access(self):
+        """Test lazy submodule access on the integrations package."""
+        import rlm.core.integrations as integrations
+
+        assert integrations.mcp_client.SyncMCPClient is not None
+        assert integrations.obsidian_bridge.ObsidianBridge is not None
+        assert integrations.obsidian_mirror.export_document_to_vault is not None
+
     def test_core_lm_handler_import(self):
         """Test LMHandler import."""
         from rlm.core.engine.lm_handler import LMHandler
@@ -361,10 +485,32 @@ class TestImportConflicts:
                 f"Duplicate items in rlm.core.engine.__all__: {all_items}"
             )
 
+    def test_no_duplicate_names_in_memory_all(self):
+        """Test that __all__ in rlm.core.memory.__init__ has no duplicates."""
+        import rlm.core.memory as memory
+
+        if hasattr(memory, "__all__"):
+            all_items = memory.__all__
+            assert len(all_items) == len(set(all_items)), (
+                f"Duplicate items in rlm.core.memory.__all__: {all_items}"
+            )
+
+    def test_no_duplicate_names_in_integrations_all(self):
+        """Test that __all__ in rlm.core.integrations.__init__ has no duplicates."""
+        import rlm.core.integrations as integrations
+
+        if hasattr(integrations, "__all__"):
+            all_items = integrations.__all__
+            assert len(all_items) == len(set(all_items)), (
+                f"Duplicate items in rlm.core.integrations.__all__: {all_items}"
+            )
+
     def test_all_declarations_match_exports(self):
         """Test that __all__ declarations match actual exports."""
         import rlm
         import rlm.core.engine as engine
+        import rlm.core.integrations as integrations
+        import rlm.core.memory as memory
         import rlm.logger
 
         # Test rlm.__all__
@@ -385,6 +531,18 @@ class TestImportConflicts:
                     f"rlm.core.engine.__all__ declares '{name}' but it's not exported"
                 )
 
+        if hasattr(memory, "__all__"):
+            for name in memory.__all__:
+                assert hasattr(memory, name), (
+                    f"rlm.core.memory.__all__ declares '{name}' but it's not exported"
+                )
+
+        if hasattr(integrations, "__all__"):
+            for name in integrations.__all__:
+                assert hasattr(integrations, name), (
+                    f"rlm.core.integrations.__all__ declares '{name}' but it's not exported"
+                )
+
     def test_no_circular_imports(self):
         """Test that modules can be imported without circular import errors."""
         # Core modules that should always be importable
@@ -394,9 +552,13 @@ class TestImportConflicts:
             "rlm.clients.base_lm",
             "rlm.core",
             "rlm.core.engine",
+            "rlm.core.integrations",
+            "rlm.core.memory",
             "rlm.core.types",
             "rlm.core.engine.rlm",
             "rlm.core.engine.lm_handler",
+            "rlm.core.memory.memory_manager",
+            "rlm.core.memory.knowledge_base",
             "rlm.core.comms.comms_utils",
             "rlm.environments",
             "rlm.environments.base_env",
