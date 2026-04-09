@@ -17,10 +17,14 @@ def _lazy(module: str, attr: str) -> Callable[..., int]:
     return _wrapper
 
 
+def _empty_kwargs() -> dict[str, Any]:
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class ArgumentSpec:
     flags: tuple[str, ...]
-    kwargs: dict[str, Any] = field(default_factory=dict)
+    kwargs: dict[str, Any] = field(default_factory=_empty_kwargs)
 
 
 @dataclass(frozen=True, slots=True)

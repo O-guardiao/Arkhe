@@ -1446,6 +1446,28 @@ class TestImports:
     def test_import_service(self) -> None:
         import rlm.cli.service  # noqa: F401
 
+    def test_commands_package_exports_public_api(self) -> None:
+        import rlm.cli.commands as commands
+
+        assert callable(commands.cmd_start)
+        assert callable(commands.cmd_doctor)
+        assert callable(commands.cmd_token_rotate)
+        assert callable(commands.run_workbench)
+        assert commands.RuntimeWorkbench is not None
+        assert commands.LiveSession is not None
+        assert commands.ops.__name__ == "rlm.cli.commands.ops"
+        assert commands.service.__name__ == "rlm.cli.commands.ops"
+
+    def test_package_root_exports_public_api_and_lazy_submodules(self) -> None:
+        import rlm.cli as cli
+
+        assert cli.CliContext.__name__ == "CliContext"
+        assert cli.CliPaths.__name__ == "CliPaths"
+        assert callable(cli.build_parser)
+        assert callable(cli.get_command_specs)
+        assert cli.service.__name__ == "rlm.cli.service"
+        assert cli.tui.__name__ == "rlm.cli.tui"
+
 
 # =========================================================================== #
 # 5. _step_channels — coleta de tokens de canais no wizard                     #

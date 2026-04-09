@@ -27,6 +27,8 @@ def print_success(msg: str) -> None:
 # Helpers de console usados pelo service facade e demais módulos              #
 # --------------------------------------------------------------------------- #
 
+_has_rich = False
+
 try:
     from rich.console import Console
     from rich.table import Table
@@ -39,14 +41,36 @@ try:
     def _err(msg: str) -> None:  _e.print(f"[bold red]✗[/] {msg}")
     def _info(msg: str) -> None: _c.print(f"[dim]→[/] {msg}")
 
-    HAS_RICH = True
+    _has_rich = True
 
 except ImportError:
     Console = None  # type: ignore[assignment,misc]
     Table = None  # type: ignore[assignment,misc]
-    HAS_RICH = False
 
     def _ok(msg: str) -> None:   print(f"✓ {msg}")
     def _warn(msg: str) -> None: print(f"⚠  {msg}", file=sys.stderr)
     def _err(msg: str) -> None:  print(f"✗ {msg}", file=sys.stderr)
     def _info(msg: str) -> None: print(f"→ {msg}")
+
+
+HAS_RICH = _has_rich
+
+
+# Public aliases used by facade modules. Keep the underscore variants for
+# backward compatibility with older internal imports.
+ok = _ok
+warn = _warn
+err = _err
+info = _info
+
+__all__ = [
+    "Console",
+    "Table",
+    "HAS_RICH",
+    "err",
+    "info",
+    "ok",
+    "print_error",
+    "print_success",
+    "warn",
+]

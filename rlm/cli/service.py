@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any, Callable, cast
 
 from rlm.cli.context import CliContext
 from rlm.cli.json_output import build_cli_json_envelope
-from rlm.cli.output import HAS_RICH, _err, _info, _ok, _warn
+from rlm.cli.output import HAS_RICH, err as _err, info as _info, ok as _ok, warn as _warn
 from rlm.cli.state.diagnosis import build_launcher_state_diagnosis
 from rlm.cli.state.launcher import (
     mark_bootstrap_success,
@@ -81,11 +80,6 @@ try:
     from rich.table import Table
 except ImportError:
     Table = None
-
-
-def _load_env_settings() -> dict[str, str]:
-    context = CliContext.from_environment(load_env=True)
-    return dict(context.env)
 
 
 def _service_context(context: CliContext | None = None, *, load_env: bool = True) -> CliContext:
