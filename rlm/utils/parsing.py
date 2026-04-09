@@ -1,5 +1,5 @@
 """
-Parsing utilities for RLM trjaectories.
+Parsing utilities for RLM trajectories.
 """
 
 import re

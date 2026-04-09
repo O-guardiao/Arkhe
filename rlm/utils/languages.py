@@ -238,8 +238,14 @@ def get_gitignore_patterns(directory: str) -> list[str]:
     return patterns
 
 
-def should_ignore(path: str, name: str) -> bool:
-    """Check if a file/directory should be ignored based on default rules."""
+def should_ignore(_path: str, name: str) -> bool:
+    """Check if a file/directory should be ignored based on default rules.
+
+    Args:
+        _path: Full path to the entry (unused — reserved for future gitignore
+               path-anchored pattern matching).
+        name:  Entry basename to check against ignore sets.
+    """
     if name in DEFAULT_IGNORE_DIRS:
         return True
     ext = Path(name).suffix.lower()

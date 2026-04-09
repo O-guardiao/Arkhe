@@ -28,9 +28,17 @@ if TYPE_CHECKING:
     from rlm.core.skill_loader import SkillDef
 
 from rlm.core.structured_log import get_logger
-from rlm.core.skill_telemetry import get_skill_telemetry
+
+# Import lazy — skill_telemetry cria _STORE no nível de módulo (I/O de disco).
+# Resolve sob demanda para não penalizar imports de sif em testes/ferramentas.
 
 sif_log = get_logger("sif")
+
+
+def _get_telemetry():
+    """Retorna o singleton de telemetria (lazy — evita I/O de disco no import)."""
+    from rlm.core.skill_telemetry import get_skill_telemetry  # noqa: PLC0415
+    return get_skill_telemetry()
 
 
 _SAFE_IMPORT_MODULES = {
@@ -243,7 +251,7 @@ class SIFFactory:
                 "last_compiled_at": None,
                 "last_called_at": None,
             })
-            telemetry = get_skill_telemetry()
+            telemetry = _get_telemetry()
             started = time.perf_counter()
             stats["call_count"] += 1
             stats["last_called_at"] = time.time()
@@ -285,8 +293,12 @@ class SIFFactory:
             if entry.has_codex:
                 try:
                     codex_src = entry.codex.strip()
-                    ast.parse(codex_src, mode="eval")
-                    fn = eval(codex_src, {"__builtins__": _SAFE_BUILTINS}, {})  # noqa: S307
+                    _codex_code = compile(
+                        ast.parse(codex_src, mode="eval"),
+                        "<sif-codex>",
+                        "eval",
+                    )
+                    fn = eval(_codex_code, {"__builtins__": _SAFE_BUILTINS}, {})  # noqa: S307
                     if callable(fn):
                         wrapped = cls._wrap_callable(entry, fn, "codex")
                         cls._compiled[entry.name] = wrapped
@@ -555,7 +567,7 @@ class SIFCompositionGraph:
 
     @classmethod
     def _ordered_targets(cls, source_skill: str, targets: list[str]) -> list[str]:
-        telemetry = get_skill_telemetry()
+        telemetry = _get_telemetry()
         weighted_targets = telemetry.get_weighted_transition_targets(source_skill)
         return sorted(
             targets,
@@ -615,7 +627,7 @@ class SIFCompositionGraph:
         limit: int = 4,
     ) -> str:
         graph = cls.build(skill_defs)
-        telemetry = get_skill_telemetry()
+        telemetry = _get_telemetry()
         focus = SIFHintBuilder.select_focus_skills(skill_defs, query=query, max_skills=max(limit, 4))
         focus_names = {skill.name for skill in focus}
         recipes: list[str] = []
