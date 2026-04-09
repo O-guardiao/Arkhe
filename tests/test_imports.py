@@ -302,6 +302,82 @@ class TestCoreImports:
         assert integrations.obsidian_bridge.ObsidianBridge is not None
         assert integrations.obsidian_mirror.export_document_to_vault is not None
 
+    def test_core_optimized_package_import(self):
+        """Test the optimized package public API and lazy exports."""
+        import rlm.core.optimized as optimized
+        from rlm.core.optimized.benchmark import benchmark
+        from rlm.core.optimized.opt_types import LMRequest, LMResponse
+        from rlm.core.optimized.parsing import (
+            compute_hash,
+            find_code_blocks,
+            find_final_answer,
+            format_iteration_rs,
+        )
+        from rlm.core.optimized.wire import (
+            JSON_BACKEND,
+            MAX_FRAME_SIZE,
+            json_dumps,
+            json_loads,
+            send_lm_request,
+            send_lm_request_batched,
+            socket_recv,
+            socket_request,
+            socket_send,
+        )
+
+        assert optimized.JSON_BACKEND == JSON_BACKEND
+        assert optimized.MAX_FRAME_SIZE == MAX_FRAME_SIZE
+        assert optimized.LMRequest is LMRequest
+        assert optimized.LMResponse is LMResponse
+        assert callable(benchmark)
+        assert "benchmark" not in optimized.__all__
+        assert optimized.compute_hash is compute_hash
+        assert optimized.find_code_blocks is find_code_blocks
+        assert optimized.find_final_answer is find_final_answer
+        assert optimized.format_iteration_rs is format_iteration_rs
+        assert optimized.json_dumps is json_dumps
+        assert optimized.json_loads is json_loads
+        assert optimized.send_lm_request is send_lm_request
+        assert optimized.send_lm_request_batched is send_lm_request_batched
+        assert optimized.socket_recv is socket_recv
+        assert optimized.socket_request is socket_request
+        assert optimized.socket_send is socket_send
+
+    def test_core_optimized_lazy_submodule_access(self):
+        """Test lazy submodule access on the optimized package."""
+        import rlm.core.optimized as optimized
+
+        assert optimized.benchmark.benchmark is not None
+        assert optimized.fast.find_code_blocks is not None
+        assert optimized.opt_types.LMRequest is not None
+        assert optimized.parsing.find_final_answer is not None
+        assert optimized.wire.socket_send is not None
+
+    def test_core_observability_package_import(self):
+        """Test the observability package public API and lazy exports."""
+        import rlm.core.observability as observability
+        from rlm.core.observability.operator_surface import (
+            apply_operator_command,
+            build_activity_payload,
+            build_runtime_snapshot,
+            dispatch_operator_prompt,
+        )
+        from rlm.core.observability.turn_telemetry import TurnTelemetry, TurnTelemetryStore
+
+        assert observability.TurnTelemetry is TurnTelemetry
+        assert observability.TurnTelemetryStore is TurnTelemetryStore
+        assert observability.build_runtime_snapshot is build_runtime_snapshot
+        assert observability.build_activity_payload is build_activity_payload
+        assert observability.apply_operator_command is apply_operator_command
+        assert observability.dispatch_operator_prompt is dispatch_operator_prompt
+
+    def test_core_observability_lazy_submodule_access(self):
+        """Test lazy submodule access on the observability package."""
+        import rlm.core.observability as observability
+
+        assert observability.turn_telemetry.TurnTelemetryStore is not None
+        assert observability.operator_surface.build_runtime_snapshot is not None
+
     def test_core_lm_handler_import(self):
         """Test LMHandler import."""
         from rlm.core.engine.lm_handler import LMHandler
@@ -505,12 +581,34 @@ class TestImportConflicts:
                 f"Duplicate items in rlm.core.integrations.__all__: {all_items}"
             )
 
+    def test_no_duplicate_names_in_observability_all(self):
+        """Test that __all__ in rlm.core.observability.__init__ has no duplicates."""
+        import rlm.core.observability as observability
+
+        if hasattr(observability, "__all__"):
+            all_items = observability.__all__
+            assert len(all_items) == len(set(all_items)), (
+                f"Duplicate items in rlm.core.observability.__all__: {all_items}"
+            )
+
+    def test_no_duplicate_names_in_optimized_all(self):
+        """Test that __all__ in rlm.core.optimized.__init__ has no duplicates."""
+        import rlm.core.optimized as optimized
+
+        if hasattr(optimized, "__all__"):
+            all_items = optimized.__all__
+            assert len(all_items) == len(set(all_items)), (
+                f"Duplicate items in rlm.core.optimized.__all__: {all_items}"
+            )
+
     def test_all_declarations_match_exports(self):
         """Test that __all__ declarations match actual exports."""
         import rlm
         import rlm.core.engine as engine
         import rlm.core.integrations as integrations
         import rlm.core.memory as memory
+        import rlm.core.observability as observability
+        import rlm.core.optimized as optimized
         import rlm.logger
 
         # Test rlm.__all__
@@ -543,6 +641,18 @@ class TestImportConflicts:
                     f"rlm.core.integrations.__all__ declares '{name}' but it's not exported"
                 )
 
+        if hasattr(observability, "__all__"):
+            for name in observability.__all__:
+                assert hasattr(observability, name), (
+                    f"rlm.core.observability.__all__ declares '{name}' but it's not exported"
+                )
+
+        if hasattr(optimized, "__all__"):
+            for name in optimized.__all__:
+                assert hasattr(optimized, name), (
+                    f"rlm.core.optimized.__all__ declares '{name}' but it's not exported"
+                )
+
     def test_no_circular_imports(self):
         """Test that modules can be imported without circular import errors."""
         # Core modules that should always be importable
@@ -554,11 +664,15 @@ class TestImportConflicts:
             "rlm.core.engine",
             "rlm.core.integrations",
             "rlm.core.memory",
+            "rlm.core.observability",
+            "rlm.core.optimized",
             "rlm.core.types",
             "rlm.core.engine.rlm",
             "rlm.core.engine.lm_handler",
             "rlm.core.memory.memory_manager",
             "rlm.core.memory.knowledge_base",
+            "rlm.core.observability.turn_telemetry",
+            "rlm.core.optimized.fast",
             "rlm.core.comms.comms_utils",
             "rlm.environments",
             "rlm.environments.base_env",
