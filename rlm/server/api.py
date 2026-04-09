@@ -344,6 +344,7 @@ async def lifespan(app: FastAPI):
             _tg_gw = TelegramGateway(config=_tg_config)
             _tg_gw.run_in_thread()
             app.state.telegram_gateway = _tg_gw
+            _channel_infra.csr.mark_running("telegram")
             gateway_log.info(f"✓ Telegram Gateway started (bridge → {_tg_api_url})")
         except Exception as e:
             gateway_log.error(f"Telegram Gateway failed to start: {e}")

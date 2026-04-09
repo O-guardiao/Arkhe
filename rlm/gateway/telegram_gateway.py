@@ -554,13 +554,13 @@ def main():
         TELEGRAM_BOT_TOKEN       — token do bot
 
     Variáveis opcionais:
-        RLM_API_URL              — URL do api.py (padrão: http://127.0.0.1:8000)
+        RLM_API_URL              — URL do api.py (padrão: http://127.0.0.1:5000)
         RLM_INTERNAL_TOKEN       — token auth para POST /webhook (ou RLM_WS_TOKEN/RLM_API_TOKEN)
         RLM_ALLOWED_CHATS        — lista CSV de chat_ids permitidos (vazio = todos)
         RLM_RATE_LIMIT           — máx requisições/min por chat (padrão: 10)
         RLM_TG_API_TIMEOUT       — timeout do POST para api.py em segundos (padrão: 120)
     """
-    api_url = os.environ.get("RLM_API_URL", "http://127.0.0.1:8000")
+    api_url = os.environ.get("RLM_API_URL", "http://127.0.0.1:5000")
     rate_limit = int(os.environ.get("RLM_RATE_LIMIT", "10"))
     api_timeout = int(os.environ.get("RLM_TG_API_TIMEOUT", "120"))
 

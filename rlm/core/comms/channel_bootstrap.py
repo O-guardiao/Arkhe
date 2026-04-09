@@ -262,7 +262,13 @@ def bootstrap_channel_infrastructure(
         )
 
         if configured and gw_available:
-            csr.mark_running(desc.channel_id)
+            # Canais com gateway em thread daemon (ex: Telegram long-poll) são
+            # marcados como running por quem inicia a thread (api.py), não aqui.
+            # Isso evita que o CSR mostre running=True antes da thread existir
+            # e corrige o estado em modo TUI (start_gateways=False).
+            _THREAD_GATEWAY_CHANNELS = frozenset({"telegram"})
+            if desc.channel_id not in _THREAD_GATEWAY_CHANNELS:
+                csr.mark_running(desc.channel_id)
             registered.append(desc.channel_id)
         else:
             _log.info(
