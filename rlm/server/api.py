@@ -331,7 +331,7 @@ async def lifespan(app: FastAPI):
     if _tg_token:
         try:
             from rlm.gateway.telegram_gateway import TelegramGateway, GatewayConfig as TGConfig
-            _tg_api_url = f"http://127.0.0.1:{os.environ.get('RLM_API_PORT', os.environ.get('PORT', '5000'))}"
+            _tg_api_url = f"http://127.0.0.1:{os.environ.get('RLM_API_PORT', '5000')}"
             _tg_config = TGConfig(
                 bot_token=_tg_token,
                 api_base_url=_tg_api_url,
