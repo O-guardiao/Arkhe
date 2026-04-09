@@ -34,6 +34,13 @@ MODEL_CONTEXT_LIMITS: dict[str, int] = {
     "o1-preview": 128_000,
     "o1": 200_000,
     # Anthropic
+    "claude-opus-4-5": 200_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-haiku-4-5": 200_000,
+    "claude-opus-4": 200_000,
+    "claude-sonnet-4": 200_000,
+    "claude-haiku-4": 200_000,
+    "claude-3-7-sonnet": 200_000,
     "claude-3-5-sonnet": 200_000,
     "claude-3-5-haiku": 200_000,
     "claude-3-opus": 200_000,

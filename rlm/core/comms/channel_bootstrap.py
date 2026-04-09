@@ -28,6 +28,10 @@ from rlm.core.comms.channel_status import (
     ChannelStatusRegistry,
     init_channel_status_registry,
 )
+from rlm.core.comms.crosschannel_identity import (
+    CrossChannelIdentityStore,
+    init_crosschannel_identity,
+)
 from rlm.core.comms.delivery_worker import DeliveryWorker
 from rlm.core.comms.message_bus import MessageBus, init_message_bus
 from rlm.core.comms.outbox import OutboxStore
@@ -103,6 +107,8 @@ class ChannelInfrastructure:
     delivery_worker: DeliveryWorker
     registered_channels: list[str] = field(default_factory=list)
     use_message_bus: bool = False
+    # Identidade cross-channel: mesmo indivíduo em múltiplos canais
+    cross_identity: CrossChannelIdentityStore | None = None
 
     def close(self) -> None:
         """Encerra DeliveryWorker. Chamado no shutdown."""
@@ -185,7 +191,10 @@ def bootstrap_channel_infrastructure(
     # 1. ChannelStatusRegistry (singleton)
     csr = init_channel_status_registry()
 
-    # 2. Outbox + MessageBus (singleton)
+    # 2. CrossChannelIdentityStore (singleton) — identidade unificada por usuário
+    cross_identity = init_crosschannel_identity(db_path=db_path)
+
+    # 3. Outbox + MessageBus (singleton)
     outbox = OutboxStore(db_path=db_path)
     bus = init_message_bus(
         outbox=outbox,
@@ -193,14 +202,14 @@ def bootstrap_channel_infrastructure(
         event_bus=event_bus,
     )
 
-    # 3. DeliveryWorker
+    # 4. DeliveryWorker
     delivery_worker = DeliveryWorker(
         outbox=outbox,
         channel_registry=ChannelRegistry,
         event_bus=event_bus,
     )
 
-    # 4. Feature flag: MessageBus routing
+    # 5. Feature flag: MessageBus routing
     use_bus = (
         os.environ.get("RLM_USE_MESSAGE_BUS", "").lower() in ("true", "1", "yes")
     )
@@ -209,7 +218,7 @@ def bootstrap_channel_infrastructure(
         if mb_cfg is not None and getattr(mb_cfg, "enabled", False):
             use_bus = True
 
-    # 5. Registra canais declarativamente
+    # 6. Registra canais declarativamente
     registered: list[str] = []
 
     for desc in _CHANNEL_DESCRIPTORS:
@@ -289,4 +298,5 @@ def bootstrap_channel_infrastructure(
         delivery_worker=delivery_worker,
         registered_channels=registered,
         use_message_bus=use_bus,
+        cross_identity=cross_identity,
     )

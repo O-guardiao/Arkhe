@@ -32,8 +32,6 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Any, Callable
 
-from dotenv import load_dotenv
-
 
 @dataclass
 class RLMEvent:
@@ -117,7 +115,7 @@ def start_ws_server(
     host: str = "127.0.0.1",   # Phase 9.3: default local-only (era 0.0.0.0)
     port: int = 8765,
     ws_token: str | None = None,
-) -> threading.Thread:
+) -> threading.Thread | None:
     """Start a WebSocket server in a background thread.
 
     Each connected client receives all RLM events in real-time.
@@ -158,6 +156,12 @@ def start_ws_server(
         else _os.environ.get("RLM_WS_TOKEN", "").strip()
     )
 
+    if not _expected_token:
+        print(
+            "[RLM WS] WARNING: No auth token configured (RLM_WS_TOKEN unset). "
+            "Authentication is DISABLED. Only bind to 127.0.0.1 in this mode."
+        )
+
     try:
         import websockets
         from websockets.server import serve
@@ -169,6 +173,7 @@ def start_ws_server(
         return None
 
     connected_clients: set = set()
+    _loop_ready = threading.Event()
 
     # -----------------------------------------------------------------------
     # Phase 9.3: token handshake gate
@@ -245,7 +250,8 @@ def start_ws_server(
 
     def broadcast(event: RLMEvent):
         """Broadcast an event to all connected WebSocket clients."""
-        if not connected_clients:
+        if not connected_clients or loop is None:
+            # Guard against calls before the server thread has set loop
             return
         msg = event.to_json()
         # Use thread-safe approach to schedule sends
@@ -256,7 +262,8 @@ def start_ws_server(
                     loop
                 )
             except Exception:
-                connected_clients.discard(client)
+                # Schedule discard on the event-loop thread to avoid races
+                loop.call_soon_threadsafe(connected_clients.discard, client)
 
     # Register broadcaster as event listener
     event_bus.add_listener(broadcast)
@@ -269,7 +276,11 @@ def start_ws_server(
         asyncio.set_event_loop(loop)
 
         async def serve_forever():
-            async with serve(handler, host, port):
+            # process_request hooks the auth gate before handshake completes.
+            # Pass it as kwarg so older websockets versions degrade gracefully.
+            serve_kwargs: dict[str, Any] = {"process_request": _process_request}
+            async with serve(handler, host, port, **serve_kwargs):
+                _loop_ready.set()  # signal that the server is listening
                 print(f"[RLM WS] Streaming server started on ws://{host}:{port}")
                 await asyncio.Future()  # Run forever
 
@@ -278,8 +289,9 @@ def start_ws_server(
     thread = threading.Thread(target=run_server, daemon=True, name="rlm-ws-server")
     thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.3)
+    # Wait until the server is actually listening (replaces unreliable sleep)
+    if not _loop_ready.wait(timeout=5.0):
+        print("[RLM WS] WARNING: server did not signal ready within 5 s.")
 
     return thread
 
@@ -320,6 +332,7 @@ def main() -> int:
     Intended for ws-only debugging. The default production path embeds the
     WebSocket server inside the API process so they share the same event bus.
     """
+    from dotenv import load_dotenv  # optional dependency; only needed in standalone mode
     load_dotenv()
     bus = RLMEventBus()
     thread = start_ws_server(

@@ -68,9 +68,11 @@ def get_vault_tools(rlm_session: Any) -> dict[str, Any]:
 
     def vault_read(note_path: str) -> dict[str, Any]:
         """Read a specific vault note. Path relative to vault root, e.g. 'conhecimento/my_note.md'."""
-        # Sanitize: prevent path traversal
+        # Sanitize: prevent path traversal and absolute path injection.
+        # os.path.isabs() catches both Unix ("/etc/passwd") and Windows
+        # drive-letter paths ("C:\\Windows\\...") that normpath leaves intact.
         clean = os.path.normpath(note_path).replace("\\", "/")
-        if ".." in clean or clean.startswith("/"):
+        if ".." in clean or clean.startswith("/") or os.path.isabs(clean):
             return {"error": "Invalid path"}
         filepath = os.path.join(vault_path, clean)
         if not os.path.isfile(filepath):

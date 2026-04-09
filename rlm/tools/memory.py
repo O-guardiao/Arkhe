@@ -382,8 +382,13 @@ class RLMMemory:
         return formatted
 
     def semantic_search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
-        """Pure semantic search using vector embeddings (Legacy bridge to hybrid search)."""
-        # We just route directly to our far superior Hybrid Search
+        """Hybrid search alias kept for backward compatibility.
+
+        NOTE: This does NOT use file-based vector embeddings (EmbeddingIndex).
+        It delegates to the SQLite FTS5 + RRF hybrid search, which is
+        semantically superior for this workload. Calling semantic_search()
+        and search() produces identical results — prefer search() directly.
+        """
         return self.search(keyword=query)[:top_k]
 
     def status(self) -> str:

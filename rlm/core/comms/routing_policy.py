@@ -7,12 +7,14 @@ outbound que o Outbox deve entregar.
 Regras em ordem de prioridade (primeira que produz envelopes vence):
   1. AgentDirectiveRule — agente mandou @@route:canal:id@@ explicitamente
   2. BroadcastRule      — sessão tem broadcast_channels configurado
-  3. UserPreferenceRule — usuário tem preferred_channel definido
+  3. UserPreferenceRule — canal preferido do indivíduo (cross-channel identity)
   4. EchoBackRule       — fallback: responde no canal de origem
 
-Fase 1: somente EchoBackRule ativo. As demais regras ficam prontas mas
-não serão exercitadas até que os campos de metadata estejam populados
-(Phase 3+ quando gateways migrarem).
+Regra 3 consulta em cascata:
+  a. CrossChannelIdentityStore.get_preferred() — preferência persistida
+     via unificação de identidade cross-channel (mesmo indivíduo em vários canais).
+  b. session.metadata["preferred_channel"] — fallback legacy (string
+     no formato "canal:user_id").
 """
 from __future__ import annotations
 
@@ -122,8 +124,18 @@ class BroadcastRule:
 
 class UserPreferenceRule:
     """
-    Se o usuário configurou ``session.metadata["preferred_channel"]``,
-    redireciona para lá. Formato: ``"telegram:12345"``.
+    Redireciona a resposta para o canal preferido do indivíduo.
+
+    Consulta em cascata:
+      1. ``CrossChannelIdentityStore.get_preferred()`` — preferência persistida
+         via unificação de identidade cross-channel.  Retorna None se o store
+         não estiver inicializado (ex: testes de unidade) ou se não houver
+         preferência configurada para este usuário.
+      2. ``session.metadata["preferred_channel"]`` — fallback legacy.
+         Formato: ``"canal:user_id"`` (ex: ``"slack:T01:C02"``).
+
+    Se nenhuma fonte retornar preferência, retorna lista vazia →
+    RoutingPolicy avança para EchoBackRule.
     """
 
     def evaluate(
@@ -132,13 +144,37 @@ class UserPreferenceRule:
         response_text: str,
         session: Any,
     ) -> list[Envelope]:
+        # ── 1. CrossChannelIdentityStore (fonte canônica) ─────────────────
+        from rlm.core.comms.crosschannel_identity import get_crosschannel_identity
+
+        store = get_crosschannel_identity()
+        if store is not None:
+            pref = store.get_preferred(inbound.source_channel, inbound.source_id)
+            if pref and ":" in pref:
+                ch, tid = pref.split(":", 1)
+                return [
+                    Envelope(
+                        correlation_id=inbound.id,
+                        source_channel="rlm",
+                        source_id="system",
+                        source_client_id="rlm:system",
+                        target_channel=ch,
+                        target_id=tid,
+                        target_client_id=pref,
+                        direction=Direction.OUTBOUND,
+                        message_type=MessageType.TEXT,
+                        text=response_text,
+                    )
+                ]
+
+        # ── 2. Fallback: session.metadata["preferred_channel"] ────────────
         meta = getattr(session, "metadata", None)
         if not meta or not isinstance(meta, dict):
             return []
-        pref: str | None = meta.get("preferred_channel")
-        if not pref or ":" not in pref:
+        pref_meta: str | None = meta.get("preferred_channel")
+        if not pref_meta or ":" not in pref_meta:
             return []
-        ch, tid = pref.split(":", 1)
+        ch, tid = pref_meta.split(":", 1)
         return [
             Envelope(
                 correlation_id=inbound.id,
@@ -147,7 +183,7 @@ class UserPreferenceRule:
                 source_client_id="rlm:system",
                 target_channel=ch,
                 target_id=tid,
-                target_client_id=pref,
+                target_client_id=pref_meta,
                 direction=Direction.OUTBOUND,
                 message_type=MessageType.TEXT,
                 text=response_text,

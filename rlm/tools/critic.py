@@ -223,3 +223,66 @@ def _indent(code: str, spaces: int = 4) -> str:
     """Indent all non-empty lines of code."""
     prefix = " " * spaces
     return "\n".join(prefix + line if line.strip() else line for line in code.splitlines())
+
+
+def get_critic_tools(
+    llm_query_fn: Callable[[str], str],
+    execute_fn: Callable[[str], Any],
+    max_rounds: int = 3,
+    memory_analyze_fn: Callable[[str, str], str] | None = None,
+) -> dict[str, Any]:
+    """
+    Return a REPL-injectable dict containing the critic fuzzer as a callable tool.
+
+    The returned tool accepts (candidate_code, context) and returns a plain-text
+    summary of the fuzzing session rather than the full CriticReport object, so
+    it stays readable inside an LLM REPL namespace.
+
+    Args:
+        llm_query_fn: Callable wrapping the sub-LM for adversary/engineer turns.
+        execute_fn: Callable wrapping REPL code execution; must return an object
+                    with .stdout and .stderr string attributes.
+        max_rounds: Maximum Engineer vs. Adversary rounds per invocation.
+        memory_analyze_fn: Optional callable to persist discovered rules to memory.
+
+    Returns:
+        Dict with key ``"critic_fuzz"`` → callable.
+    """
+
+    def critic_fuzz(candidate_code: str, context: str) -> str:
+        """Adversarially fuzz candidate_code.
+
+        Runs up to ``max_rounds`` rounds of Engineer vs. Adversary.
+        Returns a structured plain-text report with the final (fixed) code and
+        any bugs discovered.
+
+        Args:
+            candidate_code: Python code string to test.
+            context: Natural-language description of what the code should do.
+
+        Returns:
+            Plain-text report (winner, bugs found, final code).
+        """
+        report = run_critic_fuzzer(
+            candidate_code=candidate_code,
+            context=context,
+            llm_query_fn=llm_query_fn,
+            execute_fn=execute_fn,
+            max_rounds=max_rounds,
+            memory_analyze_fn=memory_analyze_fn,
+        )
+
+        lines = [
+            f"=== Critic Fuzz Report ({len(report.rounds)} rounds) ===",
+            f"Overall winner : {report.winner}",
+            f"Rules discovered: {len(report.discovered_rules)}",
+        ]
+        for i, rule in enumerate(report.discovered_rules, 1):
+            lines.append(f"  [{i}] {rule}")
+
+        lines.append("\n--- Final code ---")
+        lines.append(report.final_code)
+        return "\n".join(lines)
+
+    return {"critic_fuzz": critic_fuzz}
+

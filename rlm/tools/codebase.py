@@ -47,9 +47,12 @@ def get_codebase_tools(base_path: str) -> dict[str, Any]:
             auditor.check_path_access(resolved)
         except SecurityViolation as e:
             raise PermissionError(str(e))
-            
-        # Security: ensure we stay within base_path
-        if not resolved.startswith(base_path):
+
+        # Security: ensure we stay within base_path.
+        # NOTE: startswith(base_path) alone is unsafe — "/project_evil" would
+        # pass a check against "/project". We require an os.sep boundary or
+        # exact equality so prefix-matching cannot be abused.
+        if resolved != base_path and not resolved.startswith(base_path + os.sep):
             raise PermissionError(
                 f"Access denied: '{relative}' resolves outside project root."
             )
