@@ -14,7 +14,7 @@ from rlm.core.observability.operator_surface import (
 from rlm.logging import get_runtime_logger
 from rlm.plugins.channel_registry import ChannelAdapter
 from rlm.gateway.auth_helpers import require_token
-from rlm.server.runtime_pipeline import RuntimeDispatchServices
+from rlm.server.runtime_pipeline import RuntimeDispatchServices, build_runtime_dispatch_services
 
 
 log = get_runtime_logger("operator_bridge")
@@ -84,19 +84,7 @@ def _get_session_manager(request: Request) -> Any:
 
 
 def _get_runtime_services(request: Request) -> RuntimeDispatchServices:
-    return RuntimeDispatchServices(
-        session_manager=request.app.state.session_manager,
-        supervisor=request.app.state.supervisor,
-        plugin_loader=request.app.state.plugin_loader,
-        event_router=request.app.state.event_router,
-        hooks=request.app.state.hooks,
-        skill_loader=request.app.state.skill_loader,
-        runtime_guard=request.app.state.runtime_guard,
-        eligible_skills=request.app.state.skills_eligible,
-        skill_context=request.app.state.skill_context,
-        exec_approval=request.app.state.exec_approval,
-        exec_approval_required=request.app.state.exec_approval_required,
-    )
+    return build_runtime_dispatch_services(request.app.state)
 
 
 def _get_runtime_session(request: Request, session_id: str) -> tuple[Any, Any]:

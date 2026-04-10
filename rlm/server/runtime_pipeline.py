@@ -4,7 +4,7 @@ import json
 from contextlib import contextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from rlm.core.security.execution_policy import RuntimeExecutionPolicy, infer_runtime_execution_policy
 from rlm.core.orchestration.handoff import VALID_HANDOFF_ROLES, make_handoff_fn
@@ -18,6 +18,9 @@ from rlm.plugins.channel_registry import sanitize_text_payload
 from rlm.runtime import RuntimeGuard
 from rlm.runtime.contracts import RuntimeApprovalPort
 from rlm.server.event_router import EventRouter
+
+if TYPE_CHECKING:
+    from rlm.daemon import RecursionDaemon
 
 
 @dataclass(slots=True)
@@ -33,6 +36,137 @@ class RuntimeDispatchServices:
     skill_context: str = ""
     exec_approval: RuntimeApprovalPort | None = None
     exec_approval_required: bool = False
+    recursion_daemon: RecursionDaemon | None = None
+
+
+def build_runtime_dispatch_services(app_state: Any) -> RuntimeDispatchServices:
+    return RuntimeDispatchServices(
+        session_manager=app_state.session_manager,
+        supervisor=app_state.supervisor,
+        plugin_loader=app_state.plugin_loader,
+        event_router=app_state.event_router,
+        hooks=getattr(app_state, "hooks", None),
+        skill_loader=app_state.skill_loader,
+        runtime_guard=getattr(app_state, "runtime_guard", None),
+        eligible_skills=list(getattr(app_state, "skills_eligible", []) or []),
+        skill_context=str(getattr(app_state, "skill_context", "") or ""),
+        exec_approval=getattr(app_state, "exec_approval", None),
+        exec_approval_required=bool(getattr(app_state, "exec_approval_required", False)),
+        recursion_daemon=getattr(app_state, "recursion_daemon", None),
+    )
+
+
+def _payload_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_metadata = payload.get("metadata")
+    if isinstance(raw_metadata, Mapping):
+        return dict(raw_metadata)
+    return {}
+
+
+def _merge_session_channel_context(
+    services: RuntimeDispatchServices,
+    session: Any | None,
+    *,
+    client_id: str,
+    payload: dict[str, Any],
+    source_name: str,
+) -> None:
+    if session is None:
+        return
+
+    payload_metadata = _payload_metadata(payload)
+    session_metadata = dict(getattr(session, "metadata", {}) or {})
+    actor = str(payload_metadata.get("actor") or payload.get("from_user") or "").strip()
+    channel = str(
+        payload.get("channel")
+        or payload_metadata.get("channel")
+        or str(client_id).partition(":")[0]
+        or source_name
+        or "runtime"
+    ).strip().lower()
+    requested_session_id = str(
+        payload_metadata.get("requested_session_id") or payload.get("session_id") or ""
+    ).strip()
+    origin_session_id = str(
+        payload_metadata.get("origin_session_id") or requested_session_id or getattr(session, "session_id", "")
+    ).strip()
+    message_type = str(payload.get("content_type") or payload.get("message_type") or payload_metadata.get("message_type") or "text").strip()
+    thread_id = str(payload.get("thread_id") or payload_metadata.get("thread_id") or "").strip()
+    channel_context = {
+        "channel": channel or source_name or "runtime",
+        "client_id": str(client_id or ""),
+        "transport": str(payload_metadata.get("transport") or source_name or channel or "runtime").strip().lower(),
+        "source_name": str(source_name or "runtime").strip().lower(),
+        "origin_session_id": origin_session_id,
+        "resolved_session_id": str(getattr(session, "session_id", "") or ""),
+        "message_type": message_type or "text",
+    }
+    if actor:
+        channel_context["actor"] = actor
+    if requested_session_id:
+        channel_context["requested_session_id"] = requested_session_id
+    if thread_id:
+        channel_context["thread_id"] = thread_id
+    session_origin = str(payload_metadata.get("session_origin") or source_name or "").strip()
+    if session_origin:
+        channel_context["session_origin"] = session_origin
+
+    changed = False
+    if session_metadata.get("_channel_context") != channel_context:
+        session_metadata["_channel_context"] = channel_context
+        changed = True
+
+    raw_context_refs = session_metadata.get("_context_refs")
+    context_refs: list[dict[str, Any]] = []
+    if isinstance(raw_context_refs, list):
+        for item in raw_context_refs:
+            if isinstance(item, dict) and item.get("kind") != "channel_context":
+                context_refs.append(dict(item))
+    context_refs.append({"kind": "channel_context", **channel_context})
+    if session_metadata.get("_context_refs") != context_refs:
+        session_metadata["_context_refs"] = context_refs
+        changed = True
+
+    raw_agent_state = session_metadata.get("_agent_state")
+    agent_state = dict(raw_agent_state) if isinstance(raw_agent_state, Mapping) else {}
+    if actor and agent_state.get("actor") != actor:
+        agent_state["actor"] = actor
+        changed = True
+    if agent_state.get("transport") != channel_context["transport"]:
+        agent_state["transport"] = channel_context["transport"]
+        changed = True
+    if session_metadata.get("_agent_state") != agent_state:
+        session_metadata["_agent_state"] = agent_state
+
+    delivery_context = dict(getattr(session, "delivery_context", {}) or {})
+    if delivery_context:
+        delivery_metadata = dict(delivery_context.get("metadata") or {})
+        merged_delivery_metadata = dict(delivery_metadata)
+        for key in (
+            "actor",
+            "origin_session_id",
+            "requested_session_id",
+            "resolved_session_id",
+            "session_origin",
+            "source_name",
+            "message_type",
+            "thread_id",
+        ):
+            value = channel_context.get(key)
+            if value not in (None, ""):
+                merged_delivery_metadata[key] = value
+        if merged_delivery_metadata != delivery_metadata:
+            delivery_context["metadata"] = merged_delivery_metadata
+            setattr(session, "delivery_context", delivery_context)
+            changed = True
+
+    if not changed:
+        return
+
+    setattr(session, "metadata", session_metadata)
+    update_session = getattr(services.session_manager, "update_session", None)
+    if callable(update_session):
+        update_session(session)
 
 
 class RuntimeDispatchRejected(RuntimeError):
@@ -56,7 +190,13 @@ class RuntimeDispatchRejected(RuntimeError):
 import threading as _threading
 
 
-def _prepend_memory_block(rlm_session: Any, query_text: str, prompt: Any) -> Any:
+def _prepend_memory_block(
+    rlm_session: Any,
+    query_text: str,
+    prompt: Any,
+    *,
+    session: Any | None = None,
+) -> Any:
     """
     Injeta memórias relevantes de longo prazo no prompt via budget gate tripartito.
 
@@ -71,6 +211,12 @@ def _prepend_memory_block(rlm_session: Any, query_text: str, prompt: Any) -> Any
     if rlm_session is None or not query_text:
         return prompt
     try:
+        rlm_core = vars(rlm_session).get("_rlm") if hasattr(rlm_session, "__dict__") else None
+        daemon = vars(rlm_core).get("_recursion_daemon") if hasattr(rlm_core, "__dict__") else None
+        daemon_inject = getattr(daemon, "inject_memory_prompt", None)
+        if callable(daemon_inject):
+            return daemon_inject(rlm_session, query_text, prompt, session=session)
+
         inject_prompt = getattr(rlm_session, "inject_memory_prompt", None)
         if callable(inject_prompt):
             return inject_prompt(prompt, query_text, available_tokens=2500)
@@ -117,7 +263,13 @@ def _prepend_memory_block(rlm_session: Any, query_text: str, prompt: Any) -> Any
         return prompt
 
 
-def _fire_post_turn_memory(rlm_session: Any, query_text: str, response_text: str) -> None:
+def _fire_post_turn_memory(
+    rlm_session: Any,
+    query_text: str,
+    response_text: str,
+    *,
+    session: Any | None = None,
+) -> None:
     """
     Dispara o mini agent de memória em daemon thread após o turno.
 
@@ -126,6 +278,12 @@ def _fire_post_turn_memory(rlm_session: Any, query_text: str, response_text: str
     Falha silenciosa — nunca propaga exceção nem bloqueia o chamador.
     """
     if rlm_session is None or not query_text or not response_text:
+        return
+    rlm_core = vars(rlm_session).get("_rlm") if hasattr(rlm_session, "__dict__") else None
+    daemon = vars(rlm_core).get("_recursion_daemon") if hasattr(rlm_core, "__dict__") else None
+    daemon_record = getattr(daemon, "record_post_turn_memory", None)
+    if callable(daemon_record):
+        daemon_record(rlm_session, query_text, response_text, session=session)
         return
     schedule_post_turn = getattr(rlm_session, "schedule_post_turn_memory", None)
     if callable(schedule_post_turn):
@@ -681,7 +839,7 @@ def _temporary_root_model_override(rlm_session: Any, model_name: str | None):
         rlm_core._persistent_lm_handler = previous_handler
 
 
-def dispatch_runtime_prompt_sync(
+def _dispatch_runtime_prompt_sync_impl(
     services: RuntimeDispatchServices,
     client_id: str,
     payload: dict[str, Any],
@@ -835,7 +993,7 @@ def dispatch_runtime_prompt_sync(
     # replicamos apenas a injeção, mantendo o Supervisor intacto.
     _rlm_session = getattr(session_obj, "rlm_instance", None)
     if query_text:
-        prompt = _prepend_memory_block(_rlm_session, query_text, prompt)
+        prompt = _prepend_memory_block(_rlm_session, query_text, prompt, session=session_obj)
     # -----------------------------------------------------------------------
 
     if record_conversation and query_text:
@@ -864,6 +1022,7 @@ def dispatch_runtime_prompt_sync(
     rlm_core = getattr(getattr(session_obj, "rlm_instance", None), "_rlm", None)
     if rlm_core is not None:
         rlm_core._runtime_execution_policy = execution_policy
+        setattr(rlm_core, "_recursion_daemon", services.recursion_daemon)
         # Multichannel: inject originating channel into env kwargs and live env
         _ekw = getattr(rlm_core, "environment_kwargs", None)
         if _ekw is None:
@@ -988,7 +1147,7 @@ def dispatch_runtime_prompt_sync(
     # Roda após role_orchestrator para capturar a resposta final (pode ter
     # sido modificada por handoff/escalation). Daemon thread — nunca bloqueia.
     if result.status == "completed" and query_text and result.response:
-        _fire_post_turn_memory(_rlm_session, query_text, result.response)
+        _fire_post_turn_memory(_rlm_session, query_text, result.response, session=session_obj)
     # -----------------------------------------------------------------------
 
     services.session_manager.update_session(session_obj)
@@ -1039,3 +1198,55 @@ def dispatch_runtime_prompt_sync(
     if on_complete is not None:
         on_complete(payload_result, session_obj)
     return payload_result
+
+
+def dispatch_runtime_prompt_sync(
+    services: RuntimeDispatchServices,
+    client_id: str,
+    payload: dict[str, Any],
+    *,
+    session: Any | None = None,
+    record_conversation: bool = False,
+    source_name: str = "runtime",
+    on_complete: Callable[[dict[str, Any], Any], None] | None = None,
+) -> dict[str, Any]:
+    session_obj = session or services.session_manager.get_or_create(client_id)
+    _merge_session_channel_context(
+        services,
+        session_obj,
+        client_id=client_id,
+        payload=payload,
+        source_name=source_name,
+    )
+    daemon = services.recursion_daemon
+    if daemon is None:
+        return _dispatch_runtime_prompt_sync_impl(
+            services,
+            client_id,
+            payload,
+            session=session_obj,
+            record_conversation=record_conversation,
+            source_name=source_name,
+            on_complete=on_complete,
+        )
+
+    daemon.warm_session(session_obj)
+    get_channel_subagent = getattr(daemon, "get_channel_subagent", None)
+    if callable(get_channel_subagent):
+        channel_agent = get_channel_subagent(client_id=client_id, source_name=source_name)
+        channel_agent.attach_session(session_obj)
+        event = channel_agent.build_event(client_id=client_id, payload=payload, session=session_obj)
+    else:
+        event = daemon.build_event(client_id=client_id, payload=payload, session=session_obj)
+    return daemon.dispatch_sync(
+        event,
+        fallback=lambda daemon_event: _dispatch_runtime_prompt_sync_impl(
+            services,
+            client_id,
+            daemon_event.payload,
+            session=session_obj,
+            record_conversation=record_conversation,
+            source_name=source_name,
+            on_complete=on_complete,
+        ),
+    )

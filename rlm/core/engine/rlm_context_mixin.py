@@ -49,38 +49,74 @@ class RLMContextMixin:
         Fase 12: Quando persistent=True, o lm_handler também é preservado
         entre turnos, eliminando a "zona morta" onde o sistema fica sem cérebro.
         """
-        # Fase 12: Reusar lm_handler existente quando persistent=True
-        if self.persistent and self._persistent_lm_handler is not None:
-            lm_handler = self._persistent_lm_handler
-            reused_handler = True
+        self_any = cast(Any, self)
+        if self_any.persistent:
+            lm_handler, environment = self.ensure_warm_runtime()
+            environment_any = environment
+            repl_context = (
+                self._extract_text_from_multimodal(prompt)
+                if self._is_multimodal_content_list(prompt)
+                else prompt
+            )
+            reset_turn_state = getattr(environment_any, "reset_turn_state", None)
+            if callable(reset_turn_state):
+                reset_turn_state()
+            environment_any.add_context(repl_context)
+
+            _outcome = getattr(self, "_last_turn_outcome", None)
+            if _outcome and hasattr(environment_any, "locals"):
+                environment_any.locals["_last_turn_outcome"] = _outcome
         else:
-            # Create client and wrap in handler
-            client: BaseLM = get_client(self.backend, self.backend_kwargs or {})
+            lm_handler = self._build_lm_handler()
+            environment = self._build_environment(
+                lm_handler,
+                prompt=prompt,
+                persist_environment=False,
+            )
 
-            # Create other_backend_client if provided (for depth=1 routing)
-            other_backend_client: BaseLM | None = None
-            if self.other_backends and self.other_backend_kwargs:
-                other_backend_client = get_client(self.other_backends[0], self.other_backend_kwargs[0])
+        try:
+            yield lm_handler, environment
+        finally:
+            # Fase 12: Quando persistent=True, NÃO mata o lm_handler.
+            # Ele sobrevive entre turnos, eliminando a "zona morta".
+            if not self_any.persistent:
+                lm_handler.stop()
+            if not self_any.persistent and hasattr(environment, "cleanup"):
+                environment.cleanup()
 
-            lm_handler = LMHandler(client, other_backend_client=other_backend_client)
+    def ensure_warm_runtime(self) -> tuple[LMHandler, Any]:
+        """Materializa lm_handler + environment persistentes sem depender de um prompt.
 
-            # Register other clients to be available as sub-call options (by model name)
-            if self.other_backends and self.other_backend_kwargs:
-                for backend, kwargs in zip(self.other_backends, self.other_backend_kwargs, strict=True):
-                    other_client: BaseLM = get_client(backend, kwargs)
-                    lm_handler.register_client(other_client.model_name, other_client)
+        Rastreia estado quente explicitamente:
+        - _warm_turn_count: quantos turnos reutilizaram o runtime quente
+        - _warm_since_ts: timestamp de quando o runtime foi aquecido pela primeira vez
+        - _last_warm_access_ts: timestamp do último acesso ao runtime quente
+        """
+        import time as _time
+        self_any = cast(Any, self)
+        if not self_any.persistent:
+            raise RuntimeError("ensure_warm_runtime() requires persistent=True.")
 
-            lm_handler.start()
+        existing_handler = getattr(self_any, "_persistent_lm_handler", None)
+        lm_handler = cast(LMHandler, existing_handler or self._build_lm_handler())
+        if existing_handler is None:
+            self_any._persistent_lm_handler = lm_handler
 
-            if self.persistent:
-                self._persistent_lm_handler = lm_handler
-
-            reused_handler = False
-
-        # Environment: reuse if persistent, otherwise create fresh
-        if self.persistent and self._persistent_env is not None:
-            environment = self._persistent_env
-            # Defensive check: ensure environment supports persistence methods
+        existing_env = getattr(self_any, "_persistent_env", None)
+        if existing_env is None:
+            environment = self._build_environment(
+                lm_handler,
+                prompt=None,
+                persist_environment=True,
+            )
+            if not isinstance(environment, SupportsPersistence):
+                raise RuntimeError(
+                    f"Environment '{self_any.environment_type}' does not support persistent mode. "
+                    f"Use environment='local' for persistent=True."
+                )
+            self_any._persistent_env = cast(SupportsPersistence, environment)
+        else:
+            environment = existing_env
             if not self._env_supports_persistence(environment):
                 raise RuntimeError(
                     f"Persistent environment of type '{type(environment).__name__}' does not "
@@ -88,75 +124,95 @@ class RLMContextMixin:
                     f"This should have been caught at initialization."
                 )
             environment.update_handler_address((lm_handler.host, lm_handler.port))
-            # Phase 11.2: Para prompts multimodais, usa texto extraído como REPL context
-            # (a imagem/áudio vai direto no message history, não no contexto REPL)
-            repl_context = (
-                self._extract_text_from_multimodal(prompt)
-                if self._is_multimodal_content_list(prompt)
-                else prompt
-            )
-            reset_turn_state = getattr(environment, "reset_turn_state", None)
-            if callable(reset_turn_state):
-                reset_turn_state()
-            environment.add_context(repl_context)
 
-            # Cross-turn outcome: injeta resumo conciso do turno anterior
-            # para que o LLM tenha visibilidade imediata de erros/resultados
-            # sem precisar mergulhar na variável `history` (grande e opaca).
-            _outcome = getattr(self, "_last_turn_outcome", None)
-            if _outcome and hasattr(environment, "locals"):
-                environment.locals["_last_turn_outcome"] = _outcome
-        else:
-            env_kwargs = self.environment_kwargs.copy()
-            env_kwargs["lm_handler_address"] = (lm_handler.host, lm_handler.port)
-            env_kwargs["event_bus"] = self.event_bus
-            # Phase 11.2: Para prompts multimodais, usa texto extraído como REPL context
+        self._inject_repl_globals(lm_handler, environment)
+
+        now = _time.time()
+        warm_turn_count = getattr(self_any, "_warm_turn_count", 0) + 1
+        self_any._warm_turn_count = warm_turn_count
+        self_any._last_warm_access_ts = now
+        if not hasattr(self_any, "_warm_since_ts") or self_any._warm_since_ts is None:
+            self_any._warm_since_ts = now
+
+        return lm_handler, environment
+
+    def warm_runtime_snapshot(self) -> dict[str, Any]:
+        """Retorna métricas explícitas do estado quente do runtime."""
+        import time as _time
+        self_any = cast(Any, self)
+        warm_since = getattr(self_any, "_warm_since_ts", None)
+        return {
+            "persistent": bool(getattr(self_any, "persistent", False)),
+            "warm": getattr(self_any, "_persistent_env", None) is not None,
+            "warm_turn_count": int(getattr(self_any, "_warm_turn_count", 0)),
+            "warm_since_ts": warm_since,
+            "last_warm_access_ts": getattr(self_any, "_last_warm_access_ts", None),
+            "warm_uptime_s": round(_time.time() - warm_since, 2) if warm_since else 0.0,
+            "has_persistent_env": getattr(self_any, "_persistent_env", None) is not None,
+            "has_persistent_lm_handler": getattr(self_any, "_persistent_lm_handler", None) is not None,
+        }
+
+    def _build_lm_handler(self) -> LMHandler:
+        self_any = cast(Any, self)
+        client: BaseLM = get_client(self_any.backend, self_any.backend_kwargs or {})
+
+        other_backend_client: BaseLM | None = None
+        if self_any.other_backends and self_any.other_backend_kwargs:
+            other_backend_client = get_client(self_any.other_backends[0], self_any.other_backend_kwargs[0])
+
+        lm_handler = LMHandler(client, other_backend_client=other_backend_client)
+
+        if self_any.other_backends and self_any.other_backend_kwargs:
+            for backend, kwargs in zip(self_any.other_backends, self_any.other_backend_kwargs, strict=True):
+                other_client: BaseLM = get_client(backend, kwargs)
+                lm_handler.register_client(other_client.model_name, other_client)
+
+        lm_handler.start()
+        return lm_handler
+
+    def _build_environment(
+        self,
+        lm_handler: LMHandler,
+        *,
+        prompt: PromptInput | None,
+        persist_environment: bool,
+    ) -> Any:
+        self_any = cast(Any, self)
+        env_kwargs = self_any.environment_kwargs.copy()
+        env_kwargs["lm_handler_address"] = (lm_handler.host, lm_handler.port)
+        env_kwargs["event_bus"] = self_any.event_bus
+        if prompt is not None:
             env_kwargs["context_payload"] = (
                 self._extract_text_from_multimodal(prompt)
                 if self._is_multimodal_content_list(prompt)
                 else prompt
             )
-            env_kwargs["depth"] = self.depth + 1  # Environment depth is RLM depth + 1
-            # Pass custom tools to the environment
-            if self.custom_tools is not None:
-                env_kwargs["custom_tools"] = self.custom_tools
-            if self.custom_sub_tools is not None:
-                env_kwargs["custom_sub_tools"] = self.custom_sub_tools
-            environment = get_environment(self.environment_type, env_kwargs)
+        env_kwargs["depth"] = self_any.depth + 1
+        if self_any.custom_tools is not None:
+            env_kwargs["custom_tools"] = self_any.custom_tools
+        if self_any.custom_sub_tools is not None:
+            env_kwargs["custom_sub_tools"] = self_any.custom_sub_tools
+        environment = get_environment(self_any.environment_type, env_kwargs)
 
-            # Lacuna 1: Expor memória do environment para que filhos a herdem
-            _mem = getattr(environment, "_memory", None)
-            if _mem is not None:
-                self._shared_memory = _mem
+        _mem = getattr(environment, "_memory", None)
+        if _mem is not None:
+            self_any._shared_memory = _mem
 
-            if self.persistent:
-                if not isinstance(environment, SupportsPersistence):
-                    raise RuntimeError(
-                        f"Environment '{self.environment_type}' does not support persistent mode. "
-                        f"Use environment='local' for persistent=True."
-                    )
-                self._persistent_env = cast(SupportsPersistence, environment)
+        if persist_environment and not isinstance(environment, SupportsPersistence):
+            raise RuntimeError(
+                f"Environment '{self_any.environment_type}' does not support persistent mode. "
+                f"Use environment='local' for persistent=True."
+            )
 
-            # Apply deferred REPL injections from the server pipeline (first turn).
-            # On the first turn, _prepare_repl_locals() runs before the env exists,
-            # so it stores a closure here for us to apply now.
-            _inject_fn = getattr(self, '_pending_repl_injection', None)
-            if _inject_fn is not None and hasattr(environment, 'locals'):
-                try:
-                    _inject_fn(environment.locals)
-                except Exception:
-                    pass
-                self._pending_repl_injection = None
-
-        try:
-            yield lm_handler, environment
-        finally:
-            # Fase 12: Quando persistent=True, NÃO mata o lm_handler.
-            # Ele sobrevive entre turnos, eliminando a "zona morta".
-            if not self.persistent:
-                lm_handler.stop()
-            if not self.persistent and hasattr(environment, "cleanup"):
-                environment.cleanup()
+        environment_any = cast(Any, environment)
+        _inject_fn = getattr(self, "_pending_repl_injection", None)
+        if _inject_fn is not None and hasattr(environment_any, "locals"):
+            try:
+                _inject_fn(environment_any.locals)
+            except Exception:
+                pass
+            self._pending_repl_injection = None
+        return environment
 
     def _setup_prompt(self, prompt: PromptInput) -> list[dict[str, Any]]:
         """
@@ -215,7 +271,7 @@ class RLMContextMixin:
         return "type" in first and "role" not in first
 
     @staticmethod
-    def _extract_text_from_multimodal(parts: list[dict]) -> str:
+    def _extract_text_from_multimodal(parts: list[dict[str, Any]]) -> str:
         """
         Extrai representação textual de uma lista de content parts multimodais.
         Usado para popular o REPL `context` com uma descrição legível.
@@ -293,7 +349,11 @@ class RLMContextMixin:
 
         _sub_rlm_fn = make_sub_rlm_fn(self)
         environment.globals["sub_rlm"] = _sub_rlm_fn
-        _rlm_query_fn = lambda prompt, model=None: _sub_rlm_fn(prompt, model=model)
+        _rlm_query_fn = lambda prompt, model=None: _sub_rlm_fn(
+            prompt,
+            model=model,
+            interaction_mode="text",
+        )
         environment.globals["rlm_query"] = _rlm_query_fn
         _par, _par_det = make_sub_rlm_parallel_fn(self)
         environment.globals["sub_rlm_parallel"] = _par

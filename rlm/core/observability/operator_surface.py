@@ -222,14 +222,110 @@ def _build_recursion_projection(runtime: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_runtime_snapshot(session: Any) -> dict[str, Any] | None:
+def _build_daemon_projection(session: Any, session_manager: Any | None = None) -> dict[str, Any]:
+    daemon = getattr(session_manager, "_recursion_daemon", None)
+    if daemon is None:
+        rlm_core = getattr(getattr(session, "rlm_instance", None), "_rlm", None)
+        daemon = getattr(rlm_core, "_recursion_daemon", None)
+    snapshot = getattr(daemon, "snapshot", None)
+    if not callable(snapshot):
+        return {}
+
+    raw_snapshot = snapshot()
+    if not isinstance(raw_snapshot, dict):
+        return {}
+
+    attached_channels = {
+        str(key): int(value)
+        for key, value in _as_dict(raw_snapshot.get("attached_channels")).items()
+        if _as_int(value) is not None
+        for value in [_as_int(value)]
+    }
+    stats = {
+        str(key): int(value)
+        for key, value in _as_dict(raw_snapshot.get("stats")).items()
+        if _as_int(value) is not None
+        for value in [_as_int(value)]
+    }
+    warm_runtime = {
+        str(key): int(value)
+        for key, value in _as_dict(raw_snapshot.get("warm_runtime")).items()
+        if _as_int(value) is not None
+        for value in [_as_int(value)]
+    }
+    raw_outbox = _as_dict(raw_snapshot.get("outbox"))
+    outbox = {
+        str(key): int(value)
+        for key, value in raw_outbox.items()
+        if key != "worker_alive"
+        if _as_int(value) is not None
+        for value in [_as_int(value)]
+    }
+    outbox["worker_alive"] = bool(raw_outbox.get("worker_alive", False))
+    raw_channel_runtime = _as_dict(raw_snapshot.get("channel_runtime"))
+    channel_runtime = {
+        "total": int(_as_int(raw_channel_runtime.get("total")) or 0),
+        "running": int(_as_int(raw_channel_runtime.get("running")) or 0),
+        "healthy": int(_as_int(raw_channel_runtime.get("healthy")) or 0),
+        "registered_channels": [
+            str(item)
+            for item in _as_list(raw_channel_runtime.get("registered_channels"))
+            if str(item).strip()
+        ],
+    }
+    raw_memory_access = _as_dict(raw_snapshot.get("memory_access"))
+    memory_access = {
+        str(key): int(value)
+        for key, value in raw_memory_access.items()
+        if key != "last_scope"
+        if _as_int(value) is not None
+        for value in [_as_int(value)]
+    }
+    raw_last_scope = _as_dict(raw_memory_access.get("last_scope"))
+    memory_access["last_scope"] = {
+        "session_id": str(raw_last_scope.get("session_id") or ""),
+        "channel": str(raw_last_scope.get("channel") or ""),
+        "actor": str(raw_last_scope.get("actor") or ""),
+        "active_channels": [
+            str(item)
+            for item in _as_list(raw_last_scope.get("active_channels"))
+            if str(item).strip()
+        ],
+        "workspace_scope": str(raw_last_scope.get("workspace_scope") or ""),
+        "agent_depth": _as_int(raw_last_scope.get("agent_depth")),
+        "branch_id": _as_int(raw_last_scope.get("branch_id")),
+        "agent_role": str(raw_last_scope.get("agent_role") or ""),
+        "parent_session_id": str(raw_last_scope.get("parent_session_id") or ""),
+    }
+    return {
+        "name": str(raw_snapshot.get("name") or "main"),
+        "running": bool(raw_snapshot.get("running", False)),
+        "ready": bool(raw_snapshot.get("ready", False)),
+        "draining": bool(raw_snapshot.get("draining", False)),
+        "inflight_dispatches": int(_as_int(raw_snapshot.get("inflight_dispatches")) or 0),
+        "active_sessions": int(_as_int(raw_snapshot.get("active_sessions")) or 0),
+        "attached_channels": attached_channels,
+        "stats": stats,
+        "warm_runtime": warm_runtime,
+        "outbox": outbox,
+        "channel_runtime": channel_runtime,
+        "memory_access": memory_access,
+    }
+
+
+def build_runtime_snapshot(session: Any, session_manager: Any | None = None) -> dict[str, Any] | None:
+    daemon_projection = _build_daemon_projection(session, session_manager)
     env = get_runtime_environment(session)
     snapshot = getattr(env, "get_runtime_state_snapshot", None)
     if not callable(snapshot):
+        if daemon_projection:
+            return {"daemon": daemon_projection}
         return None
 
     runtime_raw = snapshot()
     if not isinstance(runtime_raw, dict):
+        if daemon_projection:
+            return {"daemon": daemon_projection}
         return None
 
     runtime = dict(runtime_raw)
@@ -255,6 +351,8 @@ def build_runtime_snapshot(session: Any) -> dict[str, Any] | None:
     runtime["coordination"] = coordination
     runtime["controls"] = controls
     runtime["recursion"] = _build_recursion_projection(runtime)
+    if daemon_projection:
+        runtime["daemon"] = daemon_projection
     return runtime
 
 
@@ -268,7 +366,7 @@ def build_activity_payload(session_manager: Any, session: Any, *, event_limit: i
         "session": session_manager.session_to_dict(session),
         "event_log": list(reversed(session_manager.get_events(session.session_id, limit=event_limit))),
         "operation_log": operation_log,
-        "runtime": build_runtime_snapshot(session),
+        "runtime": build_runtime_snapshot(session, session_manager=session_manager),
     }
 
 

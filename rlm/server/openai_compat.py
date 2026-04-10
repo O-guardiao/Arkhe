@@ -60,6 +60,7 @@ from pydantic import BaseModel, Field
 
 from rlm.core.structured_log import get_logger
 from rlm.gateway.auth_helpers import token_matches, authenticate_request
+from rlm.server.runtime_pipeline import build_runtime_dispatch_services, dispatch_runtime_prompt_sync
 
 compat_log = get_logger("openai_compat")
 
@@ -267,10 +268,11 @@ def create_openai_compat_router(expected_token: str) -> APIRouter:
             f"stream={body.stream} prompt={prompt[:60]!r}"
         )
 
-        # --- Executar via supervisor ---
+        # --- Executar via supervisor ou runtime pipeline do daemon ---
         sm = request.app.state.session_manager
         supervisor = request.app.state.supervisor
         hooks = getattr(request.app.state, "hooks", None)
+        recursion_daemon = getattr(request.app.state, "recursion_daemon", None)
 
         session = sm.get_or_create(client_id)
 
@@ -295,18 +297,40 @@ def create_openai_compat_router(expected_token: str) -> APIRouter:
         import asyncio
         loop = asyncio.get_event_loop()
         try:
-            result = await loop.run_in_executor(
-                None,
-                lambda: supervisor.execute(session, prompt),
-            )
+            if recursion_daemon is not None:
+                services = build_runtime_dispatch_services(request.app.state)
+                dispatch_result = await loop.run_in_executor(
+                    None,
+                    lambda: dispatch_runtime_prompt_sync(
+                        services,
+                        client_id,
+                        {
+                            "text": prompt,
+                            "content_type": "text",
+                            "metadata": {
+                                "model": model,
+                                "transport": "openai_compat",
+                                "run_id": run_id,
+                            },
+                        },
+                        session=session,
+                        source_name="api",
+                    ),
+                )
+                content = str(dispatch_result.get("response", "") or "")
+                finish_reason = "stop" if dispatch_result.get("status") != "error" else "error"
+            else:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: supervisor.execute(session, prompt),
+                )
+                content = result.response or ""
+                finish_reason = "stop" if result.status != "error" else "error"
         except Exception as e:
             compat_log.warn(f"[openai_compat] Execution failed: {e}")
             raise HTTPException(500, f"Agent execution failed: {e}")
 
         sm.update_session(session)
-
-        content = result.response or ""
-        finish_reason = "stop" if result.status != "error" else "error"
 
         if body.stream:
             return StreamingResponse(

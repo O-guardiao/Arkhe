@@ -45,6 +45,8 @@ import threading
 import time
 from typing import Any, TYPE_CHECKING, cast
 
+from rlm.daemon import DaemonTaskRequest, DaemonTaskResult
+from rlm.daemon.task_agents import _AUTO_DIVERT_TEXT_ROLES
 from rlm.core.security.execution_policy import build_backend_kwargs, resolve_subagent_model
 from rlm.core.types import ClientBackend, EnvironmentType
 
@@ -186,6 +188,184 @@ def _propagate_cancel_token(
 # Core function factory — sub_rlm (serial)
 # ---------------------------------------------------------------------------
 
+
+def _run_child_subrlm_sync(
+    *,
+    parent: "RLM",
+    _rlm_cls: "type[RLM] | None",
+    task: str,
+    full_prompt: str,
+    child_depth: int,
+    max_iterations: int,
+    timeout_s: float,
+    return_artifacts: bool,
+    system_prompt: str | None,
+    model: str | None,
+    model_role: str,
+    interaction_mode: str,
+    env_kwargs: dict[str, Any],
+    strategy_context: dict[str, Any],
+    runtime_task_id: int | None,
+    task_preview: str,
+    _cancel_event: "threading.Event | None",
+    _sibling_branch_id: int | None,
+) -> "str | SubRLMArtifactResult":
+    child_model = resolve_subagent_model(
+        parent,
+        requested_model=model,
+        model_role=model_role,
+        child_depth=child_depth,
+    )
+
+    child = _spawn_child_rlm(
+        parent,
+        _rlm_cls=_rlm_cls,
+        child_depth=child_depth,
+        max_iterations=max_iterations,
+        env_kwargs=env_kwargs,
+        child_model=child_model,
+        system_prompt=system_prompt,
+        interaction_mode=interaction_mode,
+        strategy_context=strategy_context,
+    )
+
+    _propagate_cancel_token(parent, child, _cancel_event)
+
+    result_holder: list[Any] = []
+    error_holder: list[BaseException] = []
+    t_start = time.perf_counter()
+
+    def _run() -> None:
+        try:
+            if return_artifacts:
+                completion = child.completion(
+                    full_prompt, root_prompt=task, capture_artifacts=True,
+                )
+                result_holder.append((completion.response, completion.artifacts or {}))
+            else:
+                completion = child.completion(full_prompt, root_prompt=task)
+                result_holder.append(completion.response)
+        except Exception as exc:  # noqa: BLE001
+            error_holder.append(exc)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_s)
+    elapsed = time.perf_counter() - t_start
+
+    if thread.is_alive():
+        _record_parent_runtime_event(
+            parent,
+            "subagent.finished",
+            {
+                "mode": "serial",
+                "task_preview": task_preview,
+                "child_depth": child_depth,
+                "branch_id": _sibling_branch_id,
+                "task_id": runtime_task_id,
+                "ok": False,
+                "timed_out": True,
+                "elapsed_s": elapsed,
+            },
+        )
+        _update_parent_subagent_task(
+            parent,
+            task_id=runtime_task_id,
+            branch_id=_sibling_branch_id,
+            status="blocked",
+            note=f"timeout after {elapsed:.2f}s",
+            metadata={"timed_out": True, "elapsed_s": elapsed},
+        )
+        raise SubRLMTimeoutError(
+            f"sub_rlm: filho não terminou em {timeout_s:.0f}s "
+            f"(depth={child_depth}). "
+            f"Aumente timeout_s ou reduza max_iterations."
+        )
+
+    if error_holder:
+        exc = error_holder[0]
+        _record_parent_runtime_event(
+            parent,
+            "subagent.finished",
+            {
+                "mode": "serial",
+                "task_preview": task_preview,
+                "child_depth": child_depth,
+                "branch_id": _sibling_branch_id,
+                "task_id": runtime_task_id,
+                "ok": False,
+                "timed_out": False,
+                "elapsed_s": elapsed,
+                "error": str(exc),
+            },
+        )
+        _update_parent_subagent_task(
+            parent,
+            task_id=runtime_task_id,
+            branch_id=_sibling_branch_id,
+            status="blocked",
+            note=str(exc),
+            metadata={"timed_out": False, "elapsed_s": elapsed, "error": str(exc)},
+        )
+        raise SubRLMError(
+            f"sub_rlm: filho falhou (depth={child_depth}): {exc}"
+        ) from exc
+
+    if not result_holder:
+        _record_parent_runtime_event(
+            parent,
+            "subagent.finished",
+            {
+                "mode": "serial",
+                "task_preview": task_preview,
+                "child_depth": child_depth,
+                "branch_id": _sibling_branch_id,
+                "task_id": runtime_task_id,
+                "ok": False,
+                "timed_out": False,
+                "elapsed_s": elapsed,
+                "error": "child returned no result",
+            },
+        )
+        _update_parent_subagent_task(
+            parent,
+            task_id=runtime_task_id,
+            branch_id=_sibling_branch_id,
+            status="blocked",
+            note="child returned no result",
+            metadata={"timed_out": False, "elapsed_s": elapsed, "error": "empty_result"},
+        )
+        raise SubRLMError("sub_rlm: filho terminou sem retornar resultado.")
+
+    result = result_holder[0]
+    _record_parent_runtime_event(
+        parent,
+        "subagent.finished",
+        {
+            "mode": "serial",
+            "task_preview": task_preview,
+            "child_depth": child_depth,
+            "branch_id": _sibling_branch_id,
+            "task_id": runtime_task_id,
+            "ok": True,
+            "timed_out": False,
+            "elapsed_s": elapsed,
+        },
+    )
+    _update_parent_subagent_task(
+        parent,
+        task_id=runtime_task_id,
+        branch_id=_sibling_branch_id,
+        status="completed",
+        note=str(result[0] if return_artifacts else result)[:200],
+        metadata={"timed_out": False, "elapsed_s": elapsed},
+    )
+
+    if return_artifacts:
+        answer, artifacts = result
+        return SubRLMArtifactResult(answer=answer, artifacts=artifacts, depth=child_depth)
+    return cast(str, result)
+
 def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubRLMCallable":
     """
     Retorna a função `sub_rlm(task, ...)` vinculada ao RLM pai.
@@ -313,168 +493,108 @@ def make_sub_rlm_fn(parent: "RLM", _rlm_cls: "type[RLM] | None" = None) -> "SubR
             cancel_event=_cancel_event,
         )
 
-        child_model = resolve_subagent_model(
-            parent,
-            requested_model=model,
-            model_role=model_role,
-            child_depth=child_depth,
+        daemon = vars(parent).get("_recursion_daemon") if hasattr(parent, "__dict__") else None
+        _no_parallel_context = _sibling_bus is None and _cancel_event is None
+        _role_normalized = model_role.strip().lower()
+        text_only_request = (
+            not return_artifacts
+            and _no_parallel_context
+            and (
+                interaction_mode == "text"
+                or _role_normalized in _AUTO_DIVERT_TEXT_ROLES
+            )
         )
-
-        child = _spawn_child_rlm(
-            parent,
+        if daemon is not None and hasattr(daemon, "dispatch_task_sync") and text_only_request:
+            task_result = daemon.dispatch_task_sync(
+                parent,
+                DaemonTaskRequest(
+                    session_id=str(getattr(getattr(parent, "_memory", None), "_session_id", "") or ""),
+                    client_id=str(getattr(getattr(getattr(parent, "_memory", None), "_agent_context", None), "channel", "") or ""),
+                    task=task,
+                    context=_merge_context_fragments(context, recursive_guidance),
+                    model=model,
+                    model_role=model_role,
+                    max_iterations=max_iterations,
+                    timeout_s=timeout_s,
+                    interaction_mode=interaction_mode,
+                    metadata={
+                        "text_only": True,
+                        "return_artifacts": False,
+                        "task_id": _task_id,
+                        "branch_id": _sibling_branch_id,
+                    },
+                ),
+                fallback=lambda request: DaemonTaskResult(
+                    route="spawn_child_rlm",
+                    response=cast(
+                        str,
+                        _run_child_subrlm_sync(
+                        parent=parent,
+                        _rlm_cls=_rlm_cls,
+                        task=task,
+                        full_prompt=full_prompt,
+                        child_depth=child_depth,
+                        max_iterations=max_iterations,
+                        timeout_s=timeout_s,
+                        return_artifacts=return_artifacts,
+                        system_prompt=system_prompt,
+                        model=model,
+                        model_role=model_role,
+                        interaction_mode=interaction_mode,
+                        env_kwargs=env_kwargs,
+                        strategy_context=strategy_context,
+                        runtime_task_id=runtime_task_id,
+                        task_preview=task_preview,
+                        _cancel_event=_cancel_event,
+                        _sibling_branch_id=_sibling_branch_id,
+                        ),
+                    ),
+                ),
+            )
+            _update_parent_subagent_task(
+                parent,
+                task_id=runtime_task_id,
+                branch_id=_sibling_branch_id,
+                status="completed",
+                note=str(task_result.response)[:200],
+                metadata={"route": task_result.route, "text_only": True},
+            )
+            _record_parent_runtime_event(
+                parent,
+                "subagent.finished",
+                {
+                    "mode": subagent_mode,
+                    "task_preview": task_preview,
+                    "child_depth": child_depth,
+                    "branch_id": _sibling_branch_id,
+                    "task_id": runtime_task_id,
+                    "ok": True,
+                    "timed_out": False,
+                    "elapsed_s": 0.0,
+                    "route": task_result.route,
+                },
+            )
+            return task_result.response
+        return _run_child_subrlm_sync(
+            parent=parent,
             _rlm_cls=_rlm_cls,
+            task=task,
+            full_prompt=full_prompt,
             child_depth=child_depth,
             max_iterations=max_iterations,
-            env_kwargs=env_kwargs,
-            child_model=child_model,
+            timeout_s=timeout_s,
+            return_artifacts=return_artifacts,
             system_prompt=system_prompt,
+            model=model,
+            model_role=model_role,
             interaction_mode=interaction_mode,
+            env_kwargs=env_kwargs,
             strategy_context=strategy_context,
+            runtime_task_id=runtime_task_id,
+            task_preview=task_preview,
+            _cancel_event=_cancel_event,
+            _sibling_branch_id=_sibling_branch_id,
         )
-
-        # Lacuna 2: Propagar CancelToken do pai para filho serial
-        _propagate_cancel_token(parent, child, _cancel_event)
-
-        # ── Execute com timeout ───────────────────────────────────────────────
-        result_holder: list[Any] = []
-        error_holder: list[BaseException] = []
-        t_start = time.perf_counter()
-
-        def _run():
-            try:
-                if return_artifacts:
-                    completion = child.completion(
-                        full_prompt, root_prompt=task, capture_artifacts=True,
-                    )
-                    result_holder.append((completion.response, completion.artifacts or {}))
-                else:
-                    completion = child.completion(full_prompt, root_prompt=task)
-                    result_holder.append(completion.response)
-            except Exception as exc:  # noqa: BLE001
-                error_holder.append(exc)
-
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout_s)
-        elapsed = time.perf_counter() - t_start
-
-        if thread.is_alive():
-            _record_parent_runtime_event(
-                parent,
-                "subagent.finished",
-                {
-                    "mode": "serial",
-                    "task_preview": task_preview,
-                    "child_depth": child_depth,
-                    "branch_id": _sibling_branch_id,
-                    "task_id": runtime_task_id,
-                    "ok": False,
-                    "timed_out": True,
-                    "elapsed_s": elapsed,
-                },
-            )
-            _update_parent_subagent_task(
-                parent,
-                task_id=runtime_task_id,
-                branch_id=_sibling_branch_id,
-                status="blocked",
-                note=f"timeout after {elapsed:.2f}s",
-                metadata={"timed_out": True, "elapsed_s": elapsed},
-            )
-            raise SubRLMTimeoutError(
-                f"sub_rlm: filho não terminou em {timeout_s:.0f}s "
-                f"(depth={child_depth}). "
-                f"Aumente timeout_s ou reduza max_iterations."
-            )
-
-        if error_holder:
-            exc = error_holder[0]
-            _record_parent_runtime_event(
-                parent,
-                "subagent.finished",
-                {
-                    "mode": "serial",
-                    "task_preview": task_preview,
-                    "child_depth": child_depth,
-                    "branch_id": _sibling_branch_id,
-                    "task_id": runtime_task_id,
-                    "ok": False,
-                    "timed_out": False,
-                    "elapsed_s": elapsed,
-                    "error": str(exc),
-                },
-            )
-            _update_parent_subagent_task(
-                parent,
-                task_id=runtime_task_id,
-                branch_id=_sibling_branch_id,
-                status="blocked",
-                note=str(exc),
-                metadata={"timed_out": False, "elapsed_s": elapsed, "error": str(exc)},
-            )
-            raise SubRLMError(
-                f"sub_rlm: filho falhou (depth={child_depth}): {exc}"
-            ) from exc
-
-        if not result_holder:
-            _record_parent_runtime_event(
-                parent,
-                "subagent.finished",
-                {
-                    "mode": "serial",
-                    "task_preview": task_preview,
-                    "child_depth": child_depth,
-                    "branch_id": _sibling_branch_id,
-                    "task_id": runtime_task_id,
-                    "ok": False,
-                    "timed_out": False,
-                    "elapsed_s": elapsed,
-                    "error": "empty result",
-                },
-            )
-            _update_parent_subagent_task(
-                parent,
-                task_id=runtime_task_id,
-                branch_id=_sibling_branch_id,
-                status="blocked",
-                note="empty result",
-                metadata={"timed_out": False, "elapsed_s": elapsed, "error": "empty result"},
-            )
-            raise SubRLMError(
-                f"sub_rlm: filho não retornou resposta (depth={child_depth})."
-            )
-
-        _record_parent_runtime_event(
-            parent,
-            "subagent.finished",
-            {
-                "mode": "serial",
-                "task_preview": task_preview,
-                "child_depth": child_depth,
-                "branch_id": _sibling_branch_id,
-                "task_id": runtime_task_id,
-                "ok": True,
-                "timed_out": False,
-                "elapsed_s": elapsed,
-            },
-        )
-
-        result_preview = result_holder[0][0] if return_artifacts else result_holder[0]
-        result_text = str(result_preview)
-        final_status = "cancelled" if result_text.startswith("[CANCELLED]") else "completed"
-        _update_parent_subagent_task(
-            parent,
-            task_id=runtime_task_id,
-            branch_id=_sibling_branch_id,
-            status=final_status,
-            note=result_text[:200],
-            metadata={"timed_out": False, "elapsed_s": elapsed},
-        )
-
-        if return_artifacts:
-            answer, arts = result_holder[0]
-            return SubRLMArtifactResult(answer=answer, artifacts=arts, depth=child_depth)
-        return result_holder[0]
 
     # Preservar metadados úteis para inspeção no REPL
     sub_rlm.__name__ = "sub_rlm"

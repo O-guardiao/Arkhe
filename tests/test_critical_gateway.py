@@ -309,7 +309,7 @@ class TestRateLimiter:
 
 class TestWebhookDispatch:
 
-    def _make_app(self, token="test_token_abc"):
+    def _make_app(self, token="test_token_abc", recursion_daemon=None):
         """Cria app mínimo com webhook router e supervisor mockado."""
         from fastapi import FastAPI
         from contextlib import asynccontextmanager
@@ -337,6 +337,15 @@ class TestWebhookDispatch:
             app.state.session_manager = mock_sm
             app.state.supervisor = mock_supervisor
             app.state.hooks = MagicMock()
+            app.state.plugin_loader = MagicMock()
+            app.state.event_router = MagicMock()
+            app.state.skill_loader = MagicMock()
+            app.state.runtime_guard = None
+            app.state.skills_eligible = []
+            app.state.skill_context = ""
+            app.state.exec_approval = None
+            app.state.exec_approval_required = False
+            app.state.recursion_daemon = recursion_daemon
             yield
 
         app = FastAPI(lifespan=lifespan)
@@ -442,6 +451,31 @@ class TestWebhookDispatch:
         assert r2.status_code == 200
         assert r3.status_code == 429
 
+    def test_prefers_daemon_runtime_path_when_available(self):
+        from fastapi.testclient import TestClient
+
+        daemon = MagicMock()
+        app = self._make_app("tok", recursion_daemon=daemon)
+
+        with patch(
+            "rlm.gateway.webhook_dispatch.dispatch_runtime_prompt_sync",
+            return_value={"status": "completed", "response": "via-daemon", "execution_time": 0.25},
+        ) as fake_dispatch:
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/api/hooks/tok",
+                    json={"text": "go", "channel": "n8n", "metadata": {"job": "sales"}},
+                )
+
+        assert resp.status_code == 200
+        assert resp.json()["response"] == "via-daemon"
+        assert fake_dispatch.called is True
+        assert fake_dispatch.call_args.kwargs["source_name"] == "webhook_dispatch"
+        assert fake_dispatch.call_args.kwargs["session"].session_id == "sess_test"
+        assert fake_dispatch.call_args.args[2]["channel"] == "n8n"
+        assert fake_dispatch.call_args.args[2]["metadata"]["job"] == "sales"
+        app.state.supervisor.execute.assert_not_called()
+
 
 # ===========================================================================
 # openai_compat
@@ -449,7 +483,7 @@ class TestWebhookDispatch:
 
 class TestOpenAICompat:
 
-    def _make_app(self, api_token=""):
+    def _make_app(self, api_token="", recursion_daemon=None):
         from fastapi import FastAPI
         from contextlib import asynccontextmanager
         from rlm.server.openai_compat import create_openai_compat_router
@@ -475,6 +509,15 @@ class TestOpenAICompat:
             app.state.session_manager = sm
             app.state.supervisor = sv
             app.state.hooks = None
+            app.state.plugin_loader = MagicMock()
+            app.state.event_router = MagicMock()
+            app.state.skill_loader = MagicMock()
+            app.state.runtime_guard = None
+            app.state.skills_eligible = []
+            app.state.skill_context = ""
+            app.state.exec_approval = None
+            app.state.exec_approval_required = False
+            app.state.recursion_daemon = recursion_daemon
             yield
 
         app = FastAPI(lifespan=lifespan)
@@ -606,6 +649,97 @@ class TestOpenAICompat:
         data = resp.json()
         assert data["object"] == "list"
         assert any(m["id"] == "rlm" for m in data["data"])
+
+    def test_prefers_daemon_runtime_path_when_available(self):
+        from fastapi.testclient import TestClient
+
+        daemon = MagicMock()
+        app = self._make_app(api_token="secret123", recursion_daemon=daemon)
+
+        with patch(
+            "rlm.server.openai_compat.dispatch_runtime_prompt_sync",
+            return_value={"status": "completed", "response": "via-daemon"},
+        ) as fake_dispatch:
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "rlm",
+                        "messages": [{"role": "user", "content": "ok"}],
+                    },
+                    headers={"Authorization": "Bearer secret123"},
+                )
+
+        assert resp.status_code == 200
+        assert resp.json()["choices"][0]["message"]["content"] == "via-daemon"
+        assert fake_dispatch.called is True
+        assert fake_dispatch.call_args.kwargs["source_name"] == "api"
+        assert fake_dispatch.call_args.kwargs["session"].session_id == "sess_oa"
+        assert fake_dispatch.call_args.args[2]["metadata"]["transport"] == "openai_compat"
+        app.state.supervisor.execute.assert_not_called()
+
+
+class TestBrainRouter:
+
+    def _make_app(self, recursion_daemon=None):
+        from fastapi import FastAPI
+        from contextlib import asynccontextmanager
+        from rlm.server.brain_router import router as brain_router
+
+        @asynccontextmanager
+        async def lifespan(app):
+            mock_session = MagicMock()
+            mock_session.session_id = "sess_brain"
+            mock_session.client_id = "cli_main"
+            mock_session.metadata = {}
+
+            sm = MagicMock()
+            sm.get_or_create.return_value = mock_session
+
+            app.state.session_manager = sm
+            app.state.supervisor = MagicMock()
+            app.state.plugin_loader = MagicMock()
+            app.state.event_router = MagicMock()
+            app.state.hooks = MagicMock()
+            app.state.skill_loader = MagicMock()
+            app.state.runtime_guard = None
+            app.state.skills_eligible = []
+            app.state.skill_context = ""
+            app.state.exec_approval = None
+            app.state.exec_approval_required = False
+            app.state.recursion_daemon = recursion_daemon
+            yield
+
+        app = FastAPI(lifespan=lifespan)
+        app.include_router(brain_router)
+        return app
+
+    def test_prompt_uses_runtime_pipeline_with_valid_token(self):
+        from fastapi.testclient import TestClient
+
+        daemon = MagicMock()
+        app = self._make_app(recursion_daemon=daemon)
+
+        with patch.dict("os.environ", {"RLM_API_TOKEN": "secret123"}, clear=False):
+            with patch(
+                "rlm.server.brain_router.dispatch_runtime_prompt_sync",
+                return_value={"status": "completed", "response": "brain-via-daemon", "session_id": "sess_brain"},
+            ) as fake_dispatch:
+                with TestClient(app) as client:
+                    resp = client.post(
+                        "/brain/prompt",
+                        json={"session_id": "cli_main", "content": "hello", "actor": "cli"},
+                        headers={"Authorization": "Bearer secret123"},
+                    )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["response"] == "brain-via-daemon"
+        assert body["session_id"] == "sess_brain"
+        assert fake_dispatch.called is True
+        assert fake_dispatch.call_args.kwargs["source_name"] == "brain_router"
+        assert fake_dispatch.call_args.args[1] == "cli_main"
+        assert fake_dispatch.call_args.args[2]["metadata"]["transport"] == "brain_router"
 
 
 class TestApiAuthHelpers:

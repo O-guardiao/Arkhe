@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from rlm.daemon import DaemonTaskRequest, DaemonTaskResult
 from rlm.core.orchestration.handoff import HandoffRecord
 from rlm.core.engine.sub_rlm import make_sub_rlm_fn
 
@@ -84,7 +85,7 @@ def orchestrate_roles(
             outcome.steps.append({"role": handoff.target_role, "action": "executed"})
             continue
         if handoff.target_role == "evaluator":
-            decision = _run_evaluator(sub_rlm, prompt, current_response, skill_snapshot)
+            decision = _run_evaluator(rlm, sub_rlm, prompt, current_response, skill_snapshot)
             current_response, did_retry, escalated = _apply_evaluator_decision(
                 rlm=rlm,
                 handoff=handoff,
@@ -109,7 +110,7 @@ def orchestrate_roles(
             outcome.steps.append({"role": "human", "action": "escalated"})
 
     if auto_eval and not any(step.get("role") == "evaluator" for step in outcome.steps):
-        decision = _run_evaluator(sub_rlm, prompt, current_response, skill_snapshot)
+        decision = _run_evaluator(rlm, sub_rlm, prompt, current_response, skill_snapshot)
         current_response, did_retry, escalated = _apply_evaluator_decision(
             rlm=rlm,
             handoff=None,
@@ -137,6 +138,7 @@ def _run_worker(
     response: str,
     skill_snapshot: str,
 ) -> str:
+    model_role = "micro" if handoff.target_role == "micro" else "worker"
     context = (
         "Atue como worker-agent operacional. Complete o objetivo restante com foco em execução segura.\n\n"
         f"Prompt original:\n{prompt.strip()}\n\n"
@@ -156,7 +158,8 @@ def _run_worker(
         context=context,
         max_iterations=10,
         timeout_s=240,
-        model_role="worker",
+        model_role=model_role,
+        interaction_mode="text",
         _task_id=handoff.task_id,
     )
     _update_handoff_task(rlm, handoff, result)
@@ -186,6 +189,7 @@ def _update_handoff_task(rlm: Any, handoff: HandoffRecord, result: str) -> None:
 
 
 def _run_evaluator(
+    rlm: Any,
     sub_rlm: Callable[..., str],
     prompt: str,
     response: str,
@@ -199,13 +203,43 @@ def _run_evaluator(
         f"Resposta candidata:\n{response.strip()}\n\n"
         f"Skills relevantes:\n{skill_snapshot}\n"
     )
-    raw = sub_rlm(
-        "Valide a resposta candidata e devolva o JSON solicitado.",
-        context=context,
-        max_iterations=6,
-        timeout_s=180,
-        model_role="evaluator",
-    )
+    daemon = vars(rlm).get("_recursion_daemon") if hasattr(rlm, "__dict__") else None
+    if daemon is not None and hasattr(daemon, "dispatch_task_sync"):
+        task_result = daemon.dispatch_task_sync(
+            rlm,
+            DaemonTaskRequest(
+                session_id=str(getattr(getattr(rlm, "_memory", None), "_session_id", "") or ""),
+                client_id=str(getattr(getattr(getattr(rlm, "_memory", None), "_agent_context", None), "channel", "") or ""),
+                task="Valide a resposta candidata e devolva o JSON solicitado.",
+                context=context,
+                max_iterations=6,
+                timeout_s=180,
+                model_role="evaluator",
+                interaction_mode="text",
+                metadata={"text_only": True, "return_artifacts": False},
+            ),
+            fallback=lambda request: DaemonTaskResult(
+                route="spawn_child_rlm",
+                response=sub_rlm(
+                    request.task,
+                    context=request.context,
+                    max_iterations=request.max_iterations,
+                    timeout_s=request.timeout_s,
+                    model_role=request.model_role,
+                    interaction_mode=request.interaction_mode,
+                ),
+            ),
+        )
+        raw = task_result.response
+    else:
+        raw = sub_rlm(
+            "Valide a resposta candidata e devolva o JSON solicitado.",
+            context=context,
+            max_iterations=6,
+            timeout_s=180,
+            model_role="evaluator",
+            interaction_mode="text",
+        )
     return _parse_evaluator_decision(raw)
 
 
@@ -256,6 +290,7 @@ def _apply_evaluator_decision(
             max_iterations=8,
             timeout_s=180,
             model_role="worker",
+            interaction_mode="text",
             _task_id=handoff.task_id if handoff is not None else None,
         )
         return retried, True, False

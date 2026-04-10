@@ -48,6 +48,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from rlm.core.structured_log import get_logger
+from rlm.server.runtime_pipeline import build_runtime_dispatch_services, dispatch_runtime_prompt_sync
 
 hook_log = get_logger("webhook_dispatch")
 
@@ -275,7 +276,8 @@ def create_webhook_router(
         if not text:
             raise HTTPException(422, "Body must contain 'text' or 'metadata'")
 
-        # Enriquecer com metadados do canal
+        # Enriquecer com metadados do canal no caminho legado; no daemon,
+        # o channel event já preserva esse contexto sem mutar o texto.
         prompt = text
         if body.channel and body.channel != "webhook":
             prompt = f"[via {body.channel}] {text}"
@@ -289,6 +291,7 @@ def create_webhook_router(
         sm = request.app.state.session_manager
         supervisor = request.app.state.supervisor
         hooks = getattr(request.app.state, "hooks", None)
+        recursion_daemon = getattr(request.app.state, "recursion_daemon", None)
 
         session = sm.get_or_create(client_id)
 
@@ -336,10 +339,36 @@ def create_webhook_router(
         import asyncio
         loop = asyncio.get_event_loop()
         try:
-            result = await loop.run_in_executor(
-                None,
-                lambda: supervisor.execute(session, prompt),
-            )
+            if recursion_daemon is not None:
+                services = build_runtime_dispatch_services(request.app.state)
+                dispatch_result = await loop.run_in_executor(
+                    None,
+                    lambda: dispatch_runtime_prompt_sync(
+                        services,
+                        client_id,
+                        {
+                            "text": text,
+                            "channel": body.channel,
+                            "content_type": "text",
+                            "metadata": dict(body.metadata or {}),
+                        },
+                        session=session,
+                        source_name="webhook_dispatch",
+                    ),
+                )
+                status = str(dispatch_result.get("status", "completed") or "completed")
+                response_text = str(dispatch_result.get("response", "") or "")
+                execution_time = float(dispatch_result.get("execution_time", 0.0) or 0.0)
+                was_replied = bool(dispatch_result.get("already_replied", False))
+            else:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: supervisor.execute(session, prompt),
+                )
+                status = str(result.status or "completed")
+                response_text = str(result.response or "")
+                execution_time = float(result.execution_time or 0.0)
+                was_replied = bool(getattr(session, "__reply_delivered__", False))
         except Exception as e:
             hook_log.warn(f"[webhook] Execution failed: {e}")
             raise HTTPException(500, f"Agent execution failed: {e}")
@@ -366,9 +395,6 @@ def create_webhook_router(
                 )
                 inbound_envelope = bus.ingest(inbound_msg)
 
-                response_text = result.response if hasattr(result, "response") else ""
-                was_replied = getattr(session, "__reply_delivered__", False)
-
                 if response_text and not was_replied:
                     bus.route_response(
                         inbound_envelope,
@@ -383,11 +409,11 @@ def create_webhook_router(
                 )
 
         return JSONResponse({
-            "status": result.status,
+            "status": status,
             "session_id": session.session_id,
             "client_id": client_id,
-            "response": result.response,
-            "execution_time": round(result.execution_time, 2),
+            "response": response_text,
+            "execution_time": round(execution_time, 2),
         })
 
     # --- Routes ---

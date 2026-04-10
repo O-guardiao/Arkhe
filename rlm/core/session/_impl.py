@@ -139,6 +139,7 @@ class SessionManager:
         state_root: str = "./rlm_states",
         default_rlm_kwargs: dict | None = None,
         hooks: Any | None = None,
+        recursion_daemon: Any | None = None,
     ):
         self.db_path = db_path
         self.state_root = os.path.abspath(state_root)
@@ -155,12 +156,20 @@ class SessionManager:
         self._active_sessions: dict[str, SessionRecord] = {}  # session_id -> session
         self._close_callbacks: list[Callable[[SessionRecord], None]] = []
         self._hooks = hooks
+        self._recursion_daemon = recursion_daemon
 
         os.makedirs(self.state_root, exist_ok=True)
         self._init_db()
 
     def set_hook_system(self, hooks: Any | None) -> None:
         self._hooks = hooks
+
+    def set_recursion_daemon(self, recursion_daemon: Any | None) -> None:
+        self._recursion_daemon = recursion_daemon
+        if recursion_daemon is None:
+            return
+        for session in list(self._active_sessions.values()):
+            recursion_daemon.warm_session(session)
 
     # --- Database Setup ---
 
@@ -503,10 +512,21 @@ class SessionManager:
         Close a session: save RLM state, release resources, mark as completed.
         Returns True if the session was found and closed.
         """
+        should_rebootstrap_runtime = False
+        bootstrap_runtime = None
         with self._lock:
             session = self._active_sessions.get(session_id)
             if not session:
                 return False
+
+            daemon = self._recursion_daemon
+            should_preserve_session = getattr(daemon, "should_preserve_session", None)
+            if callable(should_preserve_session):
+                should_rebootstrap_runtime = bool(should_preserve_session(session))
+            release_session = getattr(daemon, "release_session", None)
+            if callable(release_session):
+                release_session(session)
+            bootstrap_runtime = daemon
 
             # Save RLM state to disk
             if session.rlm_instance is not None:
@@ -551,13 +571,56 @@ class SessionManager:
                 },
             )
             del self._active_sessions[session_id]
-            return True
+        if should_rebootstrap_runtime and bootstrap_runtime is not None:
+            bootstrap_session = getattr(bootstrap_runtime, "bootstrap_session", None)
+            if callable(bootstrap_session):
+                bootstrap_session()
+        return True
 
     def close_all(self):
         """Close all active sessions. Called on server shutdown."""
         session_ids = list(self._active_sessions.keys())
         for sid in session_ids:
             self.close_session(sid)
+
+    def list_active_sessions(self) -> list[SessionRecord]:
+        """Return a shallow snapshot of active in-memory sessions."""
+        with self._lock:
+            return list(self._active_sessions.values())
+
+    def prune_idle_sessions(
+        self,
+        idle_timeout_s: float,
+        *,
+        now_ts: float | None = None,
+        statuses: tuple[str, ...] = ("idle",),
+    ) -> list[str]:
+        """Close active sessions that have been idle longer than ``idle_timeout_s``.
+
+        This only targets in-memory active sessions because they are the ones holding
+        warm runtime state and therefore consuming live resources.
+        """
+        cutoff_ts = (now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp()) - max(0.0, idle_timeout_s)
+        should_preserve_session = getattr(self._recursion_daemon, "should_preserve_session", None)
+        with self._lock:
+            active_sessions = list(self._active_sessions.values())
+
+        candidate_ids: list[str] = []
+        for session in active_sessions:
+            if session.status not in statuses:
+                continue
+            last_active_ts = _parse_iso_timestamp(session.last_active)
+            if last_active_ts is None or last_active_ts > cutoff_ts:
+                continue
+            if callable(should_preserve_session) and should_preserve_session(session):
+                continue
+            candidate_ids.append(session.session_id)
+
+        pruned_ids: list[str] = []
+        for session_id in candidate_ids:
+            if self.close_session(session_id):
+                pruned_ids.append(session_id)
+        return pruned_ids
 
     def add_close_callback(self, callback: Callable[[SessionRecord], None]) -> None:
         """Registra callback executado ao fechar uma sessão ativa."""
@@ -765,6 +828,8 @@ class SessionManager:
         session.rlm_instance = rlm_session
         session.status = "idle"
         self._active_sessions[session.session_id] = session
+        if self._recursion_daemon is not None:
+            self._recursion_daemon.warm_session(session)
 
     def _row_to_session(self, row: tuple) -> SessionRecord:
         meta = _loads_json_object(row[10])
@@ -908,6 +973,18 @@ class SessionManager:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso_timestamp(value: str) -> float | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _loads_json_object(raw: Any) -> dict:

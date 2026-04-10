@@ -235,6 +235,74 @@ class TestTimeoutMechanism:
 
 class TestSuccessfulExecution:
 
+    def test_text_mode_prefers_internal_daemon_route_without_child_spawn(self):
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
+        from rlm.daemon.contracts import DaemonTaskResult
+
+        parent = _make_parent_mock(depth=0, max_depth=2)
+        mock_cls, _ = _make_mock_rlm_cls("child path")
+        captured: dict[str, object] = {}
+
+        def _dispatch_task_sync(owner, request, fallback=None):
+            captured["owner"] = owner
+            captured["request"] = request
+            captured["fallback"] = fallback
+            return DaemonTaskResult(
+                route="internal_text_worker",
+                response="via-daemon",
+            )
+
+        parent._recursion_daemon = MagicMock(dispatch_task_sync=_dispatch_task_sync)
+        fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
+
+        result = fn(
+            "tarefa textual",
+            context="contexto curto",
+            interaction_mode="text",
+        )
+
+        assert result == "via-daemon"
+        assert captured["owner"] is parent
+        assert captured["request"].interaction_mode == "text"
+        assert captured["request"].metadata["text_only"] is True
+        assert callable(captured["fallback"])
+        mock_cls.assert_not_called()
+
+    def test_text_mode_planner_prefers_internal_daemon_route_without_child_spawn(self):
+        from rlm.core.engine.sub_rlm import make_sub_rlm_fn
+        from rlm.daemon.contracts import DaemonTaskResult
+
+        parent = _make_parent_mock(depth=0, max_depth=2)
+        mock_cls, _ = _make_mock_rlm_cls("child path")
+        captured: dict[str, object] = {}
+
+        def _dispatch_task_sync(owner, request, fallback=None):
+            captured["owner"] = owner
+            captured["request"] = request
+            captured["fallback"] = fallback
+            return DaemonTaskResult(
+                route="internal_planner",
+                response="planner-via-daemon",
+            )
+
+        parent._recursion_daemon = MagicMock(dispatch_task_sync=_dispatch_task_sync)
+        fn = make_sub_rlm_fn(parent, _rlm_cls=mock_cls)
+
+        result = fn(
+            "planeje a decomposição",
+            context="estado do pipeline",
+            interaction_mode="text",
+            model_role="planner",
+        )
+
+        assert result == "planner-via-daemon"
+        assert captured["owner"] is parent
+        assert captured["request"].interaction_mode == "text"
+        assert captured["request"].model_role == "planner"
+        assert captured["request"].metadata["text_only"] is True
+        assert callable(captured["fallback"])
+        mock_cls.assert_not_called()
+
     def test_returns_response_string(self):
         from rlm.core.engine.sub_rlm import make_sub_rlm_fn
         parent = _make_parent_mock(depth=0, max_depth=2)

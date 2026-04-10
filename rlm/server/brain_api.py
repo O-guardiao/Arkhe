@@ -29,6 +29,7 @@ def _build_services(app_state: Any) -> Any:
         skill_context=getattr(app_state, "skill_context", ""),
         exec_approval=getattr(app_state, "exec_approval", None),
         exec_approval_required=getattr(app_state, "exec_approval_required", False),
+        recursion_daemon=getattr(app_state, "recursion_daemon", None),
     )
 
 

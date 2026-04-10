@@ -116,6 +116,42 @@ class _DummyEnv:
 
 def _make_session():
     env = _DummyEnv()
+    daemon = SimpleNamespace(
+        snapshot=lambda: {
+            "name": "main",
+            "running": True,
+            "ready": True,
+            "draining": False,
+            "inflight_dispatches": 2,
+            "active_sessions": 2,
+            "attached_channels": {"tui": 1, "telegram": 2},
+            "stats": {"llm_invoked": 4, "deterministic_used": 3, "task_agent_invoked": 1},
+            "warm_runtime": {"requests": 7, "warmed": 2, "already_warm": 5, "failed": 0},
+            "outbox": {"pending": 3, "delivering": 1, "delivered": 5, "failed": 0, "dlq": 1, "backlog": 4, "worker_alive": True},
+            "channel_runtime": {"total": 3, "running": 2, "healthy": 2, "registered_channels": ["telegram", "tui", "webchat"]},
+            "memory_access": {
+                "recall_requests": 8,
+                "recall_hits": 5,
+                "session_blocks": 4,
+                "workspace_blocks": 3,
+                "kb_blocks": 2,
+                "post_turn_requests": 6,
+                "post_turn_delegated": 6,
+                "episodic_writes": 4,
+                "failures": 0,
+                "last_scope": {
+                    "channel": "tui",
+                    "actor": "cli",
+                    "active_channels": ["tui", "telegram"],
+                    "workspace_scope": "workspace::repo-main",
+                    "agent_depth": 2,
+                    "branch_id": 7,
+                    "agent_role": "child_parallel",
+                    "parent_session_id": "sess-root",
+                },
+            },
+        }
+    )
     return SimpleNamespace(
         session_id="runtime-tui-demo",
         client_id="tui:demo",
@@ -126,7 +162,7 @@ def _make_session():
         rlm_instance=SimpleNamespace(
             _persistent_env=env,
             _record_recursive_message=env.record_recursive_message,
-            _rlm=SimpleNamespace(backend_kwargs={"model_name": "gpt-4o-mini"}),
+            _rlm=SimpleNamespace(backend_kwargs={"model_name": "gpt-4o-mini"}, _recursion_daemon=daemon),
             save_state=lambda path: path,
         ),
     )
@@ -175,6 +211,15 @@ def test_build_runtime_snapshot_adds_recursion_projection() -> None:
     assert recursion["branches"][0]["operator_focused"] is True
     assert recursion["branches"][0]["operator_fixed_winner"] is True
     assert recursion["branches"][0]["operator_priority"] == 9
+    assert runtime["daemon"]["ready"] is True
+    assert runtime["daemon"]["inflight_dispatches"] == 2
+    assert runtime["daemon"]["active_sessions"] == 2
+    assert runtime["daemon"]["stats"]["llm_invoked"] == 4
+    assert runtime["daemon"]["warm_runtime"]["already_warm"] == 5
+    assert runtime["daemon"]["outbox"]["backlog"] == 4
+    assert runtime["daemon"]["channel_runtime"]["running"] == 2
+    assert runtime["daemon"]["memory_access"]["episodic_writes"] == 4
+    assert runtime["daemon"]["memory_access"]["last_scope"]["branch_id"] == 7
 
 
 def test_dispatch_operator_prompt_records_response() -> None:

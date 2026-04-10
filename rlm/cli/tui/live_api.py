@@ -15,6 +15,11 @@ class LiveWorkbenchError(RuntimeError):
     """Erro operacional ao conversar com o backend vivo do workbench."""
 
 
+def is_live_session_missing(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "http 404" in message or "session not found" in message or "sessao nao encontrada" in message
+
+
 def _internal_token(env: dict[str, str]) -> str:
     for name in ("RLM_INTERNAL_TOKEN", "RLM_WS_TOKEN", "RLM_API_TOKEN"):
         token = env.get(name, "").strip()

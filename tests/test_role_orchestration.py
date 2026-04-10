@@ -62,6 +62,38 @@ def test_worker_handoff_executa_sub_rlm():
         )
     assert outcome.response == "deploy executado"
     assert outcome.steps[0]["role"] == "worker"
+    assert fake_sub.call_args_list[0].kwargs["model_role"] == "worker"
+    assert fake_sub.call_args_list[0].kwargs["interaction_mode"] == "text"
+
+
+def test_micro_handoff_uses_micro_text_route():
+    plan = _make_plan()
+    repl_locals = {
+        PENDING_HANDOFFS_KEY: [
+            HandoffRecord(
+                target_role="micro",
+                reason="triagem curta",
+                remaining_goal="resumir o próximo passo",
+            ).to_payload()
+        ]
+    }
+    fake_sub = MagicMock(return_value="resumo curto")
+
+    with patch("rlm.core.orchestration.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
+        outcome = orchestrate_roles(
+            rlm=MagicMock(),
+            prompt="resuma o próximo passo",
+            response="",
+            prompt_plan=plan,
+            repl_locals=repl_locals,
+            log_event=lambda *_args, **_kwargs: None,
+            session_id="sess-1",
+        )
+
+    assert outcome.response == "resumo curto"
+    assert outcome.steps[0]["role"] == "micro"
+    assert fake_sub.call_args_list[0].kwargs["model_role"] == "micro"
+    assert fake_sub.call_args_list[0].kwargs["interaction_mode"] == "text"
 
 
 def test_evaluator_retry_refaz_resposta():
@@ -91,6 +123,8 @@ def test_evaluator_retry_refaz_resposta():
         )
     assert outcome.retried is True
     assert outcome.response == "resposta refeita"
+    assert fake_sub.call_args_list[0].kwargs["interaction_mode"] == "text"
+    assert fake_sub.call_args_list[1].kwargs["interaction_mode"] == "text"
 
 
 def test_evaluator_retry_reusa_task_id_do_handoff():
@@ -127,6 +161,8 @@ def test_evaluator_retry_reusa_task_id_do_handoff():
         )
 
     assert outcome.retried is True
+    assert fake_sub.call_args_list[0].kwargs["interaction_mode"] == "text"
+    assert fake_sub.call_args_list[1].kwargs["interaction_mode"] == "text"
     assert fake_sub.call_args_list[1].kwargs["_task_id"] == 77
     assert update_runtime_task.call_args_list[0].args[0] == 77
     assert update_runtime_task.call_args_list[0].kwargs["status"] == "in-progress"
@@ -149,3 +185,29 @@ def test_auto_eval_escalate_sem_handoff():
         )
     assert outcome.escalated is True
     assert any(step["role"] == "evaluator" for step in outcome.steps)
+
+
+def test_evaluator_prefers_internal_daemon_route():
+    plan = _make_plan()
+    fake_sub = MagicMock(return_value='{"action": "accept"}')
+    fake_daemon = SimpleNamespace(
+        dispatch_task_sync=lambda *_args, **_kwargs: SimpleNamespace(
+            route="internal_evaluator",
+            response='{"action": "accept", "improved_response": "ok"}',
+        )
+    )
+    fake_rlm = SimpleNamespace(_recursion_daemon=fake_daemon)
+
+    with patch("rlm.core.orchestration.role_orchestrator.make_sub_rlm_fn", return_value=fake_sub):
+        outcome = orchestrate_roles(
+            rlm=fake_rlm,
+            prompt="executar ação sensível",
+            response="não foi possível concluir",
+            prompt_plan=plan,
+            repl_locals={},
+            log_event=lambda *_args, **_kwargs: None,
+            session_id="sess-1",
+        )
+
+    assert outcome.response == "ok"
+    fake_sub.assert_not_called()

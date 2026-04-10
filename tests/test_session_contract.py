@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from rlm.core.session import SessionManager
+from rlm.core.session import SessionManager, SessionRecord
 from rlm.plugins.channel_registry import ChannelRegistry
 
 
@@ -76,6 +77,136 @@ def test_transition_status_writes_operation_log(tmp_path, monkeypatch) -> None:
         item["operation"] == "session.status" and item["status"] == "running"
         for item in operations
     )
+
+
+def test_activate_session_warms_daemon_immediately(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RLM_SESSION_SCOPE", "main")
+
+    class FakeRLMSession:
+        def __init__(self, **_kwargs):
+            self._rlm = SimpleNamespace()
+
+    import rlm.session as rlm_session_module
+
+    monkeypatch.setattr(rlm_session_module, "RLMSession", FakeRLMSession)
+
+    warmed: list[str] = []
+    manager = SessionManager(
+        db_path=str(tmp_path / "sessions.db"),
+        state_root=str(tmp_path / "states"),
+        recursion_daemon=SimpleNamespace(
+            warm_session=lambda session: warmed.append(session.session_id),
+        ),
+    )
+
+    state_dir = tmp_path / "states" / "sess-1"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    session = SessionRecord(
+        session_id="sess-1",
+        client_id="tui:demo",
+        user_id="main",
+        created_at="2026-04-10T00:00:00+00:00",
+        last_active="2026-04-10T00:00:00+00:00",
+        state_dir=str(state_dir),
+    )
+
+    manager._activate_session(session, {})
+
+    assert session.rlm_instance is not None
+    assert warmed == ["sess-1"]
+
+
+def test_prune_idle_sessions_closes_stale_in_memory_session(tmp_path, monkeypatch) -> None:
+    _patch_activation(monkeypatch)
+    monkeypatch.setenv("RLM_SESSION_SCOPE", "main")
+
+    manager = SessionManager(
+        db_path=str(tmp_path / "sessions.db"),
+        state_root=str(tmp_path / "states"),
+    )
+    session = manager.get_or_create("tui:demo")
+    session.last_active = "2026-04-10T00:00:00+00:00"
+    session.rlm_instance = SimpleNamespace(save_state=lambda *_args, **_kwargs: None, close=lambda: None)
+
+    pruned = manager.prune_idle_sessions(
+        idle_timeout_s=60.0,
+        now_ts=datetime(2026, 4, 10, 0, 5, 0, tzinfo=timezone.utc).timestamp(),
+    )
+
+    assert pruned == [session.session_id]
+    assert session.session_id not in manager._active_sessions
+
+
+def test_prune_idle_sessions_ignores_recent_session(tmp_path, monkeypatch) -> None:
+    _patch_activation(monkeypatch)
+    monkeypatch.setenv("RLM_SESSION_SCOPE", "main")
+
+    manager = SessionManager(
+        db_path=str(tmp_path / "sessions.db"),
+        state_root=str(tmp_path / "states"),
+    )
+    session = manager.get_or_create("tui:demo")
+    session.last_active = "2026-04-10T00:04:30+00:00"
+    session.rlm_instance = SimpleNamespace(save_state=lambda *_args, **_kwargs: None, close=lambda: None)
+
+    pruned = manager.prune_idle_sessions(
+        idle_timeout_s=60.0,
+        now_ts=datetime(2026, 4, 10, 0, 5, 0, tzinfo=timezone.utc).timestamp(),
+    )
+
+    assert pruned == []
+    assert session.session_id in manager._active_sessions
+
+
+def test_prune_idle_sessions_preserves_live_daemon_session(tmp_path, monkeypatch) -> None:
+    _patch_activation(monkeypatch)
+    monkeypatch.setenv("RLM_SESSION_SCOPE", "main")
+
+    daemon = SimpleNamespace(warm_session=lambda session: None)
+    manager = SessionManager(
+        db_path=str(tmp_path / "sessions.db"),
+        state_root=str(tmp_path / "states"),
+        recursion_daemon=daemon,
+    )
+    session = manager.get_or_create("tui:demo")
+    session.last_active = "2026-04-10T00:00:00+00:00"
+    session.rlm_instance = SimpleNamespace(save_state=lambda *_args, **_kwargs: None, close=lambda: None)
+    daemon.should_preserve_session = lambda current: current.session_id == session.session_id
+
+    pruned = manager.prune_idle_sessions(
+        idle_timeout_s=60.0,
+        now_ts=datetime(2026, 4, 10, 0, 5, 0, tzinfo=timezone.utc).timestamp(),
+    )
+
+    assert pruned == []
+    assert session.session_id in manager._active_sessions
+
+
+def test_close_session_rebootstraps_live_daemon_runtime(tmp_path, monkeypatch) -> None:
+    _patch_activation(monkeypatch)
+    monkeypatch.setenv("RLM_SESSION_SCOPE", "main")
+
+    released: list[str] = []
+    bootstrapped: list[bool] = []
+    daemon = SimpleNamespace(
+        warm_session=lambda session: None,
+        should_preserve_session=lambda session: True,
+        release_session=lambda session: released.append(session.session_id) or True,
+        bootstrap_session=lambda: bootstrapped.append(True),
+    )
+    manager = SessionManager(
+        db_path=str(tmp_path / "sessions.db"),
+        state_root=str(tmp_path / "states"),
+        recursion_daemon=daemon,
+    )
+    session = manager.get_or_create("tui:demo")
+    session.rlm_instance = SimpleNamespace(save_state=lambda *_args, **_kwargs: None, close=lambda: None)
+
+    closed = manager.close_session(session.session_id)
+
+    assert closed is True
+    assert released == [session.session_id]
+    assert bootstrapped == [True]
 
 
 def test_summarize_inbound_payload_keeps_safe_fields_for_local_history() -> None:

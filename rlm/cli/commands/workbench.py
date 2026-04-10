@@ -5,9 +5,10 @@ from __future__ import annotations
 import shlex
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from rich.console import Console, Group, RenderableType
 from rich.layout import Layout
@@ -26,6 +27,104 @@ from rlm.cli.tui.channel_console import (
 from rlm.core.observability.operator_surface import apply_operator_command, build_activity_payload, dispatch_operator_prompt
 
 
+def _metadata_factory() -> dict[str, Any]:
+    return {}
+
+
+def _dict_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {str(key): item for key, item in cast(dict[Any, Any], value).items()}
+    return {}
+
+
+def _list_payload(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(cast(list[Any], value))
+    return []
+
+
+def _runtime_recursion_payload(runtime: dict[str, Any]) -> dict[str, Any]:
+    recursion = _dict_payload(runtime.get("recursion"))
+    if recursion:
+        normalized = dict(recursion)
+        normalized["controls"] = _dict_payload(recursion.get("controls"))
+        normalized["summary"] = _dict_payload(recursion.get("summary"))
+        normalized["branches"] = _list_payload(recursion.get("branches"))
+        normalized["events"] = _list_payload(recursion.get("events"))
+        normalized["latest_stats"] = _dict_payload(recursion.get("latest_stats"))
+        return normalized
+
+    coordination = _dict_payload(runtime.get("coordination"))
+    return {
+        "attached": bool(coordination.get("attached", False)),
+        "active_branch_id": coordination.get("branch_id"),
+        "controls": _dict_payload(runtime.get("controls")),
+        "summary": _dict_payload(coordination.get("latest_parallel_summary")),
+        "branches": _list_payload(coordination.get("branch_tasks")),
+        "events": _list_payload(coordination.get("events")),
+        "latest_stats": _dict_payload(coordination.get("latest_stats")),
+    }
+
+
+def _operation_summary(entry: dict[str, Any]) -> str:
+    payload = _dict_payload(entry.get("payload"))
+    summary = (
+        payload.get("reason")
+        or payload.get("note")
+        or payload.get("text_preview")
+        or payload.get("response_preview")
+        or payload.get("checkpoint_path")
+        or payload.get("error")
+        or payload
+        or "-"
+    )
+    return str(summary)
+
+
+def _daemon_payload(runtime: dict[str, Any]) -> dict[str, Any]:
+    daemon = _dict_payload(runtime.get("daemon"))
+    daemon["stats"] = _dict_payload(daemon.get("stats"))
+    daemon["warm_runtime"] = _dict_payload(daemon.get("warm_runtime"))
+    daemon["attached_channels"] = _dict_payload(daemon.get("attached_channels"))
+    daemon["outbox"] = _dict_payload(daemon.get("outbox"))
+    daemon["channel_runtime"] = _dict_payload(daemon.get("channel_runtime"))
+    daemon["memory_access"] = _dict_payload(daemon.get("memory_access"))
+    daemon["memory_access"]["last_scope"] = _dict_payload(daemon["memory_access"].get("last_scope"))
+    return daemon
+
+
+def _memory_scope_summary(scope: dict[str, Any]) -> str:
+    parts: list[str] = []
+    channel = str(scope.get("channel") or "")
+    actor = str(scope.get("actor") or "")
+    workspace_scope = str(scope.get("workspace_scope") or "")
+    agent_role = str(scope.get("agent_role") or "")
+    parent_session_id = str(scope.get("parent_session_id") or "")
+
+    if channel:
+        parts.append(f"channel={channel}")
+    if actor:
+        parts.append(f"actor={actor}")
+
+    active_channels = [str(item) for item in _list_payload(scope.get("active_channels")) if str(item).strip()]
+    if active_channels:
+        parts.append("active=" + ",".join(active_channels))
+
+    if workspace_scope:
+        parts.append(f"workspace={workspace_scope}")
+    if scope.get("agent_depth") is not None:
+        parts.append(f"depth={scope.get('agent_depth')}")
+    if scope.get("branch_id") is not None:
+        parts.append(f"branch={scope.get('branch_id')}")
+    if agent_role:
+        parts.append(f"role={agent_role}")
+    if parent_session_id:
+        parts.append(f"parent={parent_session_id}")
+    if not parts:
+        return "-"
+    return "  ".join(parts)
+
+
 @dataclass
 class LiveSession:
     """Proxy de sessao para live mode — sem rlm_instance local."""
@@ -33,7 +132,8 @@ class LiveSession:
     client_id: str
     status: str = "idle"
     state_dir: str = ""
-    metadata: dict = field(default_factory=dict)
+    last_activity_at: str = ""
+    metadata: dict[str, Any] = field(default_factory=_metadata_factory)
     rlm_instance: None = None
 
 
@@ -56,6 +156,7 @@ class RuntimeWorkbench:
         self._input_buffer = ""
         self._use_polled_input = sys.platform == "win32"
         self._channel_state = ChannelConsoleState()
+        self.session: Any
 
         if self._live_api is not None:
             info = self._live_api.ensure_session(client_id)
@@ -64,14 +165,43 @@ class RuntimeWorkbench:
                 client_id=info.client_id,
                 status=info.status,
                 state_dir=info.state_dir,
+                last_activity_at=str(info.metadata.get("last_activity_at", "") or ""),
                 metadata=dict(info.metadata),
             )
         else:
-            self.session = self.runtime.session_manager.get_or_create(client_id)
+            runtime = self.runtime
+            if runtime is None:
+                raise ValueError("runtime local e obrigatorio quando live_api nao for fornecido")
+            session_manager = cast(Any, runtime.session_manager)
+            self.session = session_manager.get_or_create(client_id)
 
     @property
     def _is_live(self) -> bool:
         return self._live_api is not None
+
+    def _require_runtime(self) -> WorkbenchRuntime:
+        runtime = self.runtime
+        if runtime is None:
+            raise RuntimeError("runtime local indisponivel neste modo")
+        return runtime
+
+    def _require_live_api(self) -> Any:
+        live_api = self._live_api
+        if live_api is None:
+            raise RuntimeError("live_api indisponivel fora do modo live")
+        return live_api
+
+    def _session_metadata(self) -> dict[str, Any]:
+        return _dict_payload(getattr(self.session, "metadata", {}))
+
+    def _session_last_activity(self) -> str:
+        return str(getattr(self.session, "last_activity_at", "") or getattr(self.session, "last_active", "") or "")
+
+    def _set_session_last_activity(self, value: Any) -> None:
+        normalized = str(value or "")
+        setattr(self.session, "last_activity_at", normalized)
+        if hasattr(self.session, "last_active"):
+            setattr(self.session, "last_active", normalized)
 
     def run(self, *, once: bool = False) -> int:
         if once:
@@ -139,40 +269,165 @@ class RuntimeWorkbench:
     def _dispatch_prompt(self, text: str) -> None:
         """Envia prompt ao runtime — via HTTP (live) ou local direto."""
         if self._is_live:
-            self._live_api.dispatch_prompt(
-                self.session.session_id,
-                self.client_id,
-                text,
-            )
+            self._dispatch_live_prompt(text)
         else:
+            runtime = self._require_runtime()
             dispatch_operator_prompt(
-                self.runtime.session_manager,
-                self.runtime.supervisor,
+                runtime.session_manager,
+                runtime.supervisor,
                 self.session,
                 text=text,
                 origin="tui",
-                runtime_services=self.runtime.dispatch_services,
+                runtime_services=runtime.dispatch_services,
                 client_id=self.client_id,
             )
         self.last_notice = "Turno enviado. Observando sessao viva ate a conclusao."
         self.watch_until_idle()
 
+    def _dispatch_live_prompt(self, text: str) -> None:
+        live_api = self._require_live_api()
+        self._run_live_with_reattach(
+            lambda: live_api.dispatch_prompt(self.session.session_id, self.client_id, text),
+            reason=f"prompt:{text[:80]}",
+        )
+        self.session.status = "running"
+
+    def _apply_live_command(self, *, command_type: str, payload: dict[str, Any], branch_id: int | None) -> dict[str, Any]:
+        live_api = self._require_live_api()
+        return self._run_live_with_reattach(
+            lambda: live_api.apply_command(
+                self.session.session_id,
+                client_id=self.client_id,
+                command_type=command_type,
+                payload=payload,
+                branch_id=branch_id,
+            ),
+            reason=f"command:{command_type}",
+        )
+
+    def _run_live_with_reattach(self, callback: Callable[[], Any], *, reason: str) -> Any:
+        try:
+            return callback()
+        except Exception as exc:
+            if not self._reattach_live_session(reason=f"{reason}:{exc}"):
+                raise
+            return callback()
+
+    def _activity_fallback_payload(self) -> dict[str, Any]:
+        return {
+            "session": {
+                "session_id": self.session.session_id,
+                "client_id": self.session.client_id,
+                "status": self.session.status,
+                "state_dir": self.session.state_dir,
+                "last_activity_at": self._session_last_activity(),
+                "metadata": self._session_metadata(),
+            },
+            "event_log": [],
+            "operation_log": [],
+            "runtime": None,
+        }
+
+    def _sync_live_session(self, activity: dict[str, Any]) -> None:
+        session_data = _dict_payload(activity.get("session"))
+        if not session_data:
+            return
+        self.session.session_id = str(session_data.get("session_id", self.session.session_id) or self.session.session_id)
+        self.session.client_id = str(session_data.get("client_id", self.session.client_id) or self.session.client_id)
+        self.session.status = str(session_data.get("status", self.session.status) or self.session.status)
+        self.session.state_dir = str(session_data.get("state_dir", self.session.state_dir) or self.session.state_dir)
+        self._set_session_last_activity(
+            session_data.get("last_activity_at")
+            or session_data.get("last_active")
+            or self._session_last_activity()
+            or ""
+        )
+        metadata = _dict_payload(session_data.get("metadata"))
+        if not metadata:
+            metadata = self._session_metadata()
+        last_activity_at = self._session_last_activity()
+        if last_activity_at:
+            metadata["last_activity_at"] = last_activity_at
+        self.session.metadata = metadata
+
+    def _normalize_activity(self, activity: dict[str, Any]) -> dict[str, Any]:
+        session_data = _dict_payload(activity.get("session"))
+        metadata = self._session_metadata()
+        metadata.update(_dict_payload(session_data.get("metadata")))
+        last_activity_at = str(
+            session_data.get("last_activity_at")
+            or session_data.get("last_active")
+            or self._session_last_activity()
+            or ""
+        )
+        if self._is_live:
+            session_data["session_id"] = self.session.session_id
+            session_data["client_id"] = self.session.client_id
+            session_data.setdefault("status", self.session.status)
+            session_data.setdefault("state_dir", self.session.state_dir)
+        if last_activity_at:
+            session_data["last_activity_at"] = last_activity_at
+            metadata["last_activity_at"] = last_activity_at
+        session_data["metadata"] = metadata
+        normalized: dict[str, Any] = {
+            "session": session_data,
+            "event_log": _list_payload(activity.get("event_log")),
+            "operation_log": _list_payload(activity.get("operation_log")),
+            "runtime": activity.get("runtime"),
+        }
+        self._sync_live_session(normalized)
+        return normalized
+
+    def _reattach_live_session(self, *, reason: str) -> bool:
+        live_api = self._require_live_api()
+        try:
+            info = live_api.ensure_session(self.client_id)
+        except Exception as exc:
+            self.last_notice = f"Reconnect falhou: {exc}"
+            return False
+
+        reconnects = int(self._session_metadata().get("live_reconnects", 0) or 0) + 1
+        metadata = dict(info.metadata or {})
+        metadata["live_reconnects"] = reconnects
+        metadata["live_reconnect_reason"] = reason
+        self.session.session_id = info.session_id
+        self.session.client_id = info.client_id
+        self.session.status = info.status
+        self.session.state_dir = info.state_dir
+        self._set_session_last_activity(metadata.get("last_activity_at", self._session_last_activity()) or self._session_last_activity())
+        self.session.metadata = metadata
+        self.last_notice = f"Sessao live reconectada: {info.session_id}"
+        return True
+
     def _fetch_activity(self) -> dict[str, Any]:
         """Busca activity payload — via HTTP (live) ou local direto."""
         if self._is_live:
+            from rlm.cli.tui.live_api import is_live_session_missing
+            live_api = self._require_live_api()
+
             try:
-                return self._live_api.fetch_activity(self.session.session_id)
-            except Exception:
-                return {"session": {}, "event_log": [], "runtime": None}
-        return build_activity_payload(self.runtime.session_manager, self.session)
+                activity = live_api.fetch_activity(self.session.session_id)
+                return self._normalize_activity(activity)
+            except Exception as exc:
+                if is_live_session_missing(exc) and self._reattach_live_session(reason=str(exc)):
+                    try:
+                        activity = live_api.fetch_activity(self.session.session_id)
+                        return self._normalize_activity(activity)
+                    except Exception as retry_exc:
+                        self.last_notice = f"Activity indisponivel: {retry_exc}"
+                        return self._activity_fallback_payload()
+                self.last_notice = f"Activity indisponivel: {exc}"
+                return self._activity_fallback_payload()
+        runtime = self._require_runtime()
+        return build_activity_payload(runtime.session_manager, self.session)
 
     def watch_until_idle(self, *, duration_s: float | None = None) -> None:
         started = time.time()
         if self._is_live:
             while True:
                 activity = self._fetch_activity()
-                session_data = activity.get("session") or {}
-                status = session_data.get("status", "idle")
+                session_data = _dict_payload(activity.get("session"))
+                status = str(session_data.get("status", "idle") or "idle")
                 if status not in ("running",):
                     self.session.status = status
                     break
@@ -182,14 +437,15 @@ class RuntimeWorkbench:
                     return
                 time.sleep(self.refresh_interval)
         else:
-            while self.runtime.supervisor.is_running(self.session.session_id):
+            runtime = self._require_runtime()
+            while runtime.supervisor.is_running(self.session.session_id):
                 self._render(clear=True)
                 if duration_s is not None and (time.time() - started) >= duration_s:
                     self.last_notice = "Watch encerrado pelo limite solicitado."
                     return
                 time.sleep(self.refresh_interval)
         self._render(clear=True)
-        status = (self.session.metadata or {}).get("last_operator_status") or getattr(self.session, "status", "done")
+        status = self._session_metadata().get("last_operator_status") or getattr(self.session, "status", "done")
         self.last_notice = f"Execucao encerrada com status: {status}"
 
     def _handle_operator_command(self, raw: str) -> bool:
@@ -224,7 +480,8 @@ class RuntimeWorkbench:
             channel_id = parts[1]
             try:
                 if self._is_live:
-                    result = self._live_api.probe_channel(channel_id)
+                    live_api = self._require_live_api()
+                    result = _dict_payload(live_api.probe_channel(channel_id))
                     self.last_notice = f"Probe {channel_id}: {result.get('status', 'ok')}"
                 else:
                     try:
@@ -246,7 +503,8 @@ class RuntimeWorkbench:
             message = " ".join(parts[2:])
             try:
                 if self._is_live:
-                    result = self._live_api.cross_channel_send(target, message)
+                    live_api = self._require_live_api()
+                    result = _dict_payload(live_api.cross_channel_send(target, message))
                     self.last_notice = f"Enviado para {target}: {result.get('status', 'ok')}"
                 else:
                     try:
@@ -262,20 +520,15 @@ class RuntimeWorkbench:
 
         command_type, payload, branch_id = self._translate_operator_command(parts)
         if self._is_live:
-            result = self._live_api.apply_command(
-                self.session.session_id,
-                client_id=self.client_id,
-                command_type=command_type,
-                payload=payload,
-                branch_id=branch_id,
-            )
-            cmd = result.get("command") or {}
+            result = self._apply_live_command(command_type=command_type, payload=payload, branch_id=branch_id)
+            cmd = _dict_payload(result.get("command"))
             self.last_notice = f"Comando aplicado: {cmd.get('command_type', command_type)}#{cmd.get('command_id', '?')}"
         else:
+            runtime = self._require_runtime()
             entry, _runtime = apply_operator_command(
-                self.runtime.session_manager,
+                runtime.session_manager,
                 self.session,
-                supervisor=self.runtime.supervisor,
+                supervisor=runtime.supervisor,
                 command_type=command_type,
                 payload=payload,
                 branch_id=branch_id,
@@ -344,20 +597,21 @@ class RuntimeWorkbench:
         self.console.print(self.build_layout())
 
     def build_layout(self) -> Layout:
+        activity: dict[str, Any]
         try:
             activity = self._fetch_activity()
         except Exception:
-            activity = {"session": {}, "event_log": [], "runtime": None}
-        runtime = activity.get("runtime") or {}
+            activity = {"session": {}, "event_log": [], "operation_log": [], "runtime": None}
+        runtime = _dict_payload(activity.get("runtime"))
 
         # Atualiza canais a cada render (dados vem do cache do state)
         refresh_channel_state(self._channel_state, live_api=self._live_api)
 
         layout = Layout(name="root")
         layout.split_column(
-            Layout(self._build_header(activity), name="header", size=5),
+            Layout(self._build_header(activity), name="header", size=9),
             Layout(name="body", ratio=1),
-            Layout(self._build_footer(runtime), name="footer", size=6),
+            Layout(self._build_footer(runtime), name="footer", size=7),
         )
 
         # Coluna direita: eventos (topo) + canais (base)
@@ -375,12 +629,18 @@ class RuntimeWorkbench:
         return layout
 
     def _build_header(self, activity: dict[str, Any]) -> Panel:
-        session_data = activity.get("session") or {}
-        runtime = activity.get("runtime") or {}
-        controls = runtime.get("controls") or {}
-        summary = (runtime.get("coordination") or {}).get("latest_parallel_summary") or {}
+        session_data = _dict_payload(activity.get("session"))
+        session_metadata = _dict_payload(session_data.get("metadata"))
+        channel_context = _dict_payload(session_metadata.get("_channel_context"))
+        runtime = _dict_payload(activity.get("runtime"))
+        recursion = _runtime_recursion_payload(runtime)
+        daemon = _daemon_payload(runtime)
+        daemon_stats = _dict_payload(daemon.get("stats"))
+        memory_access = _dict_payload(daemon.get("memory_access"))
+        controls = _dict_payload(recursion.get("controls"))
+        summary = _dict_payload(recursion.get("summary"))
         rlm_core = getattr(getattr(self.session, "rlm_instance", None), "_rlm", None)
-        backend_kwargs = getattr(rlm_core, "backend_kwargs", None) or {}
+        backend_kwargs = _dict_payload(getattr(rlm_core, "backend_kwargs", None))
         model_name = backend_kwargs.get("model_name") or "unknown"
         mode_label = "live" if self._is_live else "local"
         text = Text()
@@ -390,10 +650,40 @@ class RuntimeWorkbench:
         text.append(f"Status: {session_data.get('status', self.session.status)}  ")
         text.append(f"Modelo: {model_name}  ")
         text.append(f"Modo: {mode_label}\n", style="bold green" if self._is_live else "bold yellow")
+        last_activity_at = session_data.get("last_activity_at") or session_data.get("last_active") or self._session_last_activity() or "-"
+        text.append(
+            f"Transport: {channel_context.get('transport') or '-'}  "
+            f"Source: {channel_context.get('source_name') or '-'}  "
+            f"Actor: {channel_context.get('actor') or '-'}  "
+            f"Origem: {channel_context.get('origin_session_id') or channel_context.get('requested_session_id') or '-'}\n"
+        )
+        text.append(
+            f"OrigemSessao: {channel_context.get('session_origin') or '-'}  "
+            f"Atividade: {last_activity_at}\n"
+        )
         text.append(f"Paused: {controls.get('paused', False)}  ")
         text.append(f"Focus: {controls.get('focused_branch_id')}  ")
         text.append(f"Winner: {summary.get('winner_branch_id')}  ")
         text.append(f"Checkpoint: {controls.get('last_checkpoint_path') or '-'}")
+        if daemon:
+            daemon_state = "ready" if daemon.get("ready") else "cold"
+            if daemon.get("draining"):
+                daemon_state = "draining"
+            text.append(
+                f"\nDaemon: {daemon_state}  Inflight: {daemon.get('inflight_dispatches', 0)}  "
+                f"LLM: {daemon_stats.get('llm_invoked', 0)}  Determ: {daemon_stats.get('deterministic_used', 0)}  "
+                f"TaskAgents: {daemon_stats.get('task_agent_invoked', 0)}"
+            )
+            if memory_access:
+                text.append(
+                    f"\nMemory: recall={memory_access.get('recall_requests', 0)}  "
+                    f"hits={memory_access.get('recall_hits', 0)}  "
+                    f"session={memory_access.get('session_blocks', 0)}  "
+                    f"workspace={memory_access.get('workspace_blocks', 0)}  "
+                    f"kb={memory_access.get('kb_blocks', 0)}  "
+                    f"post={memory_access.get('post_turn_requests', 0)}  "
+                    f"episodic={memory_access.get('episodic_writes', 0)}"
+                )
         ds = getattr(self.runtime, "dispatch_services", None) if self.runtime else None
         if ds and ds.eligible_skills:
             skills_dir = Path(ds.eligible_skills[0].source_path).parent.parent
@@ -401,27 +691,35 @@ class RuntimeWorkbench:
         return Panel(text, border_style="cyan")
 
     def _build_branches_panel(self, runtime: dict[str, Any]) -> Panel:
-        coordination = runtime.get("coordination") or {}
-        controls = runtime.get("controls") or {}
-        summary = coordination.get("latest_parallel_summary") or {}
+        recursion = _runtime_recursion_payload(runtime)
+        controls = _dict_payload(recursion.get("controls"))
+        summary = _dict_payload(recursion.get("summary"))
+        priorities = _dict_payload(controls.get("branch_priorities"))
         tree = Tree("Branches", guide_style="cyan")
-        for item in coordination.get("branch_tasks") or []:
-            branch_id = item.get("branch_id")
-            metadata = item.get("metadata") or {}
-            label = f"branch {branch_id} | {item.get('title', 'sem titulo')} | {item.get('mode', '-') } | {item.get('status', '-') }"
-            if summary.get("winner_branch_id") == branch_id:
+        for item in _list_payload(recursion.get("branches")):
+            branch_item = _dict_payload(item)
+            branch_id = branch_item.get("branch_id")
+            metadata = _dict_payload(branch_item.get("metadata"))
+            label = (
+                f"branch {branch_id} | {branch_item.get('title', 'sem titulo')} | "
+                f"{branch_item.get('mode', '-')} | {branch_item.get('status', '-')}"
+            )
+            if bool(branch_item.get("operator_fixed_winner")) or summary.get("winner_branch_id") == branch_id:
                 label += " | winner"
-            if controls.get("focused_branch_id") == branch_id:
+            if bool(branch_item.get("operator_focused")) or controls.get("focused_branch_id") == branch_id:
                 label += " | focus"
-            if str(branch_id) in (controls.get("branch_priorities") or {}):
-                label += f" | prio={(controls.get('branch_priorities') or {}).get(str(branch_id))}"
+            operator_priority = branch_item.get("operator_priority")
+            if operator_priority in (None, "") and str(branch_id) in priorities:
+                operator_priority = priorities.get(str(branch_id))
+            if operator_priority not in (None, ""):
+                label += f" | prio={operator_priority}"
             branch = tree.add(label)
             if metadata:
                 for key, value in sorted(metadata.items()):
                     branch.add(f"{key}: {value}")
 
-        tasks = runtime.get("tasks") or {}
-        current = tasks.get("current") or {}
+        tasks = _dict_payload(runtime.get("tasks"))
+        current = _dict_payload(tasks.get("current"))
         content: RenderableType = Group(
             tree,
             Text(),
@@ -431,15 +729,17 @@ class RuntimeWorkbench:
         return Panel(content, title="Branches", border_style="green")
 
     def _build_messages_panel(self, runtime: dict[str, Any]) -> Panel:
-        messages = ((runtime.get("recursive_session") or {}).get("messages") or [])[-12:]
-        timeline = (runtime.get("timeline") or {}).get("entries") or []
+        recursive_session = _dict_payload(runtime.get("recursive_session"))
+        messages = _list_payload(recursive_session.get("messages"))[-12:]
+        timeline = _list_payload(_dict_payload(runtime.get("timeline")).get("entries"))
         blocks: list[RenderableType] = []
         if messages:
             message_table = Table(box=None, expand=True, show_header=True)
             message_table.add_column("Role", style="cyan", width=10)
             message_table.add_column("Conteudo")
             for message in messages:
-                message_table.add_row(str(message.get("role", "?")), str(message.get("content", "")))
+                message_payload = _dict_payload(message)
+                message_table.add_row(str(message_payload.get("role", "?")), str(message_payload.get("content", "")))
             blocks.append(message_table)
         else:
             blocks.append(Text("Sem mensagens recursivas ainda.", style="dim"))
@@ -450,8 +750,14 @@ class RuntimeWorkbench:
         timeline_table.add_column("Tipo", width=18)
         timeline_table.add_column("Resumo")
         for entry in timeline[-8:]:
-            summary = entry.get("summary") or entry.get("message") or entry.get("title") or str(entry.get("payload") or "")
-            timeline_table.add_row(str(entry.get("event_type") or entry.get("kind") or "-"), str(summary))
+            timeline_entry = _dict_payload(entry)
+            summary = (
+                timeline_entry.get("summary")
+                or timeline_entry.get("message")
+                or timeline_entry.get("title")
+                or str(timeline_entry.get("payload") or "")
+            )
+            timeline_table.add_row(str(timeline_entry.get("event_type") or timeline_entry.get("kind") or "-"), str(summary))
         if timeline:
             blocks.append(timeline_table)
         else:
@@ -459,24 +765,47 @@ class RuntimeWorkbench:
         return Panel(Group(*blocks), title="Mensagens E Timeline", border_style="blue")
 
     def _build_events_panel(self, activity: dict[str, Any], runtime: dict[str, Any]) -> Panel:
-        event_log = activity.get("event_log") or []
-        recursive_events = ((runtime.get("recursive_session") or {}).get("events") or [])[-8:]
-        coordination_events = ((runtime.get("coordination") or {}).get("events") or [])[-6:]
-        latest_response = (self.session.metadata or {}).get("last_operator_response") or "-"
+        event_log = _list_payload(activity.get("event_log"))
+        operation_log = _list_payload(activity.get("operation_log"))
+        recursion = _runtime_recursion_payload(runtime)
+        recursive_events = _list_payload(_dict_payload(runtime.get("recursive_session")).get("events"))[-8:]
+        coordination_events = _list_payload(recursion.get("events"))[-6:]
+        latest_response = self._session_metadata().get("last_operator_response") or "-"
+        latest_operation = _dict_payload(operation_log[-1] if operation_log else {})
+        latest_operation_name = str(latest_operation.get("operation") or "-")
+        latest_operation_status = str(latest_operation.get("status") or "")
+        if latest_operation_status:
+            latest_operation_name = f"{latest_operation_name}/{latest_operation_status}"
 
         event_table = Table(box=None, expand=True, show_header=True)
         event_table.add_column("Fonte", width=12)
         event_table.add_column("Evento", width=24)
         event_table.add_column("Resumo")
-        for item in event_log[-8:]:
-            payload = item.get("payload") or {}
-            summary = payload.get("text_preview") or payload.get("response_preview") or payload.get("error") or payload.get("command_type") or str(payload)
-            event_table.add_row("session", str(item.get("event_type", "-")), str(summary))
-        for item in recursive_events:
-            payload = item.get("payload") or {}
-            event_table.add_row("runtime", str(item.get("event_type", "-")), str(payload or item.get("source") or ""))
-        for item in coordination_events:
-            event_table.add_row("coord", str(item.get("operation", "-")), str(item.get("payload_preview") or item.get("topic") or ""))
+        for item in reversed(event_log[-8:]):
+            event_item = _dict_payload(item)
+            payload = _dict_payload(event_item.get("payload"))
+            summary = (
+                payload.get("text_preview")
+                or payload.get("response_preview")
+                or payload.get("error")
+                or payload.get("command_type")
+                or str(payload)
+            )
+            event_table.add_row("session", str(event_item.get("event_type", "-")), str(summary))
+        for item in reversed(operation_log[-6:]):
+            operation_item = _dict_payload(item)
+            operation_name = str(operation_item.get("operation") or "-")
+            operation_status = str(operation_item.get("status") or "")
+            if operation_status:
+                operation_name = f"{operation_name}/{operation_status}"
+            event_table.add_row("op", operation_name, _operation_summary(operation_item))
+        for item in reversed(recursive_events):
+            event_item = _dict_payload(item)
+            payload = _dict_payload(event_item.get("payload"))
+            event_table.add_row("runtime", str(event_item.get("event_type", "-")), str(payload or event_item.get("source") or ""))
+        for item in reversed(coordination_events):
+            event_item = _dict_payload(item)
+            event_table.add_row("coord", str(event_item.get("operation", "-")), str(event_item.get("payload_preview") or event_item.get("topic") or ""))
 
         help_text = Text()
         help_text.append("/pause [motivo]  /resume [motivo]\n")
@@ -488,24 +817,43 @@ class RuntimeWorkbench:
         help_text.append("Texto livre envia prompt ao runtime", style="dim")
 
         content = Group(
-            Text("Resposta mais recente", style="bold yellow"),
-            Text(str(latest_response)),
-            Text(),
+            Text(f"Resposta mais recente: {latest_response}", style="bold yellow"),
+            Text("Ultima operacao", style="bold yellow"),
+            Text(f"{latest_operation_name} :: {_operation_summary(latest_operation)}"),
             Text("Eventos", style="bold yellow"),
             event_table,
-            Text(),
             Text("Controles", style="bold yellow"),
             help_text,
         )
         return Panel(content, title="Eventos E Comandos", border_style="yellow")
 
     def _build_footer(self, runtime: dict[str, Any]) -> Panel:
-        controls = runtime.get("controls") or {}
+        controls = _dict_payload(_runtime_recursion_payload(runtime).get("controls"))
+        daemon = _daemon_payload(runtime)
+        warm_runtime = _dict_payload(daemon.get("warm_runtime"))
+        outbox = _dict_payload(daemon.get("outbox"))
+        channel_runtime = _dict_payload(daemon.get("channel_runtime"))
+        memory_access = _dict_payload(daemon.get("memory_access"))
+        memory_scope = _dict_payload(memory_access.get("last_scope"))
         text = Text()
         text.append(self.last_notice, style="bold")
         text.append("\n")
         text.append(f"Pause reason: {controls.get('pause_reason') or '-'}  ")
         text.append(f"Operator note: {controls.get('last_operator_note') or '-'}\n")
+        if daemon:
+            text.append(
+                f"Warm runtime: req={warm_runtime.get('requests', 0)}  "
+                f"warmed={warm_runtime.get('warmed', 0)}  already={warm_runtime.get('already_warm', 0)}  "
+                f"failed={warm_runtime.get('failed', 0)}\n"
+            )
+            text.append(
+                f"Flow: sessions={int(daemon.get('active_sessions', 0) or 0)}  "
+                f"channels={channel_runtime.get('running', 0)}/{channel_runtime.get('total', 0)}  "
+                f"healthy={channel_runtime.get('healthy', 0)}  "
+                f"backlog={outbox.get('backlog', 0)}  dlq={outbox.get('dlq', 0)}\n"
+            )
+            if memory_access:
+                text.append(f"Memory scope: {_memory_scope_summary(memory_scope)}\n")
         if self._use_polled_input:
             text.append(f"Input: {self._input_buffer or ' '}\n", style="cyan")
         text.append(f"Refresh: {self.refresh_interval:.2f}s  ")

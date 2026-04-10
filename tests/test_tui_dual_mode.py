@@ -63,14 +63,21 @@ class _FakeSessionManager:
 class _FakeLiveAPI:
     """Substitui LiveWorkbenchAPI — sem HTTP real."""
 
-    def __init__(self, *, probe_result: bool = True, session_id: str = "live-sess-1"):
+    def __init__(self, *, probe_result: bool = True, session_id: str = "live-sess-1", ensure_sequence: list[str] | None = None):
         self._probe_result = probe_result
         self._session_id = session_id
+        self._ensure_sequence = list(ensure_sequence or [session_id])
+        self.ensure_calls: list[str] = []
+        self.fetch_calls: list[str] = []
+        self.fetch_errors: list[Exception] = []
+        self.prompt_errors: list[Exception] = []
+        self.command_errors: list[Exception] = []
         self.prompts: list[dict] = []
         self.commands: list[dict] = []
         self._activity: dict[str, Any] = {
-            "session": {"session_id": session_id, "client_id": "tui:test", "status": "idle"},
+            "session": {"session_id": session_id, "client_id": "tui:test", "status": "idle", "metadata": {}},
             "event_log": [],
+            "operation_log": [],
             "runtime": None,
         }
 
@@ -83,6 +90,9 @@ class _FakeLiveAPI:
 
     def ensure_session(self, client_id: str):
         from rlm.cli.tui.live_api import LiveSessionInfo
+        self.ensure_calls.append(client_id)
+        if self._ensure_sequence:
+            self._session_id = self._ensure_sequence.pop(0)
         return LiveSessionInfo(
             session_id=self._session_id,
             client_id=client_id,
@@ -91,15 +101,36 @@ class _FakeLiveAPI:
         )
 
     def fetch_activity(self, session_id: str) -> dict[str, Any]:
-        return dict(self._activity)
+        self.fetch_calls.append(session_id)
+        if self.fetch_errors:
+            raise self.fetch_errors.pop(0)
+        payload = dict(self._activity)
+        session = dict(payload.get("session") or {})
+        session.setdefault("session_id", self._session_id)
+        session.setdefault("client_id", "tui:test")
+        payload["session"] = session
+        return payload
 
     def dispatch_prompt(self, session_id: str, client_id: str, text: str) -> dict[str, Any]:
+        if self.prompt_errors:
+            raise self.prompt_errors.pop(0)
         self.prompts.append({"session_id": session_id, "client_id": client_id, "text": text})
         return {"status": "accepted"}
 
     def apply_command(self, session_id: str, *, client_id: str, command_type: str, payload: dict, branch_id: int | None) -> dict[str, Any]:
+        if self.command_errors:
+            raise self.command_errors.pop(0)
         self.commands.append({"command_type": command_type, "payload": payload, "branch_id": branch_id})
         return {"command": {"command_type": command_type, "command_id": 42}}
+
+    def fetch_channels_status(self) -> dict[str, Any]:
+        return {"channels": {}}
+
+    def probe_channel(self, channel_id: str) -> dict[str, Any]:
+        return {"status": "ok", "channel_id": channel_id}
+
+    def cross_channel_send(self, target_client_id: str, message: str) -> dict[str, Any]:
+        return {"status": "ok", "target_client_id": target_client_id, "message": message}
 
 
 def _make_dummy_env():
@@ -307,6 +338,180 @@ class TestRuntimeWorkbenchLiveMode:
         assert "Arkhe TUI Workbench" in rendered
         assert "Modo: live" in rendered
 
+    def test_live_mode_renders_channel_context(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI()
+        fake_api._activity["session"] = {
+            "session_id": "live-sess-1",
+            "client_id": "tui:test",
+            "status": "running",
+            "last_activity_at": "2026-04-10T10:00:00+00:00",
+            "metadata": {
+                "_channel_context": {
+                    "transport": "brain_router",
+                    "source_name": "brain_router",
+                    "actor": "cli",
+                    "origin_session_id": "cli-session-9",
+                    "session_origin": "brain_prompt",
+                }
+            },
+        }
+        console = Console(record=True, width=160)
+        wb = RuntimeWorkbench(None, client_id="tui:test", live_api=fake_api, console=console)
+
+        wb.run(once=True)
+        rendered = console.export_text()
+
+        assert "Transport: brain_router" in rendered
+        assert "Source: brain_router" in rendered
+        assert "Actor: cli" in rendered
+        assert "Origem: cli-session-9" in rendered
+        assert "OrigemSessao: brain_prompt" in rendered
+
+    def test_live_mode_prefers_runtime_recursion_projection(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI()
+        fake_api._activity["runtime"] = {
+            "recursion": {
+                "controls": {
+                    "paused": True,
+                    "pause_reason": "operador",
+                    "focused_branch_id": 3,
+                    "branch_priorities": {"3": 9},
+                    "last_checkpoint_path": "/tmp/ckpt.json",
+                    "last_operator_note": "seguir branch 3",
+                },
+                "summary": {"winner_branch_id": 7},
+                "branches": [
+                    {
+                        "branch_id": 3,
+                        "title": "diagnosticar",
+                        "mode": "parallel",
+                        "status": "running",
+                        "operator_priority": 9,
+                        "metadata": {"role": "worker"},
+                    },
+                    {
+                        "branch_id": 7,
+                        "title": "responder",
+                        "mode": "parallel",
+                        "status": "completed",
+                        "operator_fixed_winner": True,
+                        "metadata": {},
+                    },
+                ],
+                "events": [{"operation": "fanout", "payload_preview": "spawned"}],
+            },
+            "tasks": {"current": {"title": "macro", "status": "running", "note": "aguardando"}},
+            "recursive_session": {"messages": [], "events": []},
+            "timeline": {"entries": []},
+        }
+        console = Console(record=True, width=180)
+        wb = RuntimeWorkbench(None, client_id="tui:test", live_api=fake_api, console=console)
+
+        wb.run(once=True)
+        rendered = console.export_text()
+
+        assert "Focus: 3" in rendered
+        assert "Winner: 7" in rendered
+        assert "diagnosticar" in rendered
+        assert "focus" in rendered
+        assert "prio=9" in rendered
+        assert "Pause reason: operador" in rendered
+
+    def test_live_mode_renders_operation_log_entries(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI()
+        fake_api._activity["operation_log"] = [
+            {
+                "operation": "session.status",
+                "status": "running",
+                "source": "supervisor",
+                "payload": {"reason": "unit"},
+            },
+            {
+                "operation": "dispatch.prompt",
+                "status": "completed",
+                "source": "daemon",
+                "payload": {"response_preview": "ok"},
+            },
+        ]
+        fake_api._activity["runtime"] = {
+            "recursion": {"controls": {}, "summary": {}, "branches": [], "events": []},
+            "recursive_session": {"messages": [], "events": []},
+            "timeline": {"entries": []},
+        }
+        console = Console(record=True, width=180)
+        wb = RuntimeWorkbench(None, client_id="tui:test", live_api=fake_api, console=console)
+
+        wb.run(once=True)
+        rendered = console.export_text()
+
+        assert "Ultima operacao" in rendered
+        assert "dispatch.prompt/completed" in rendered
+        assert "ok" in rendered
+
+    def test_live_mode_renders_daemon_status(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI()
+        fake_api._activity["runtime"] = {
+            "daemon": {
+                "name": "main",
+                "running": True,
+                "ready": True,
+                "draining": False,
+                "inflight_dispatches": 2,
+                "active_sessions": 2,
+                "stats": {"llm_invoked": 4, "deterministic_used": 3, "task_agent_invoked": 1},
+                "warm_runtime": {"requests": 7, "warmed": 2, "already_warm": 5, "failed": 0},
+                "outbox": {"pending": 3, "delivering": 1, "delivered": 5, "failed": 0, "dlq": 1, "backlog": 4, "worker_alive": True},
+                "channel_runtime": {"total": 3, "running": 2, "healthy": 2, "registered_channels": ["telegram", "tui", "webchat"]},
+                "memory_access": {
+                    "recall_requests": 8,
+                    "recall_hits": 5,
+                    "session_blocks": 4,
+                    "workspace_blocks": 3,
+                    "kb_blocks": 2,
+                    "post_turn_requests": 6,
+                    "post_turn_delegated": 6,
+                    "episodic_writes": 4,
+                    "last_scope": {
+                        "channel": "tui",
+                        "actor": "cli",
+                        "active_channels": ["tui", "telegram"],
+                        "workspace_scope": "workspace::repo-main",
+                        "agent_depth": 2,
+                        "branch_id": 7,
+                        "agent_role": "child_parallel",
+                        "parent_session_id": "sess-root",
+                    },
+                },
+            },
+            "recursion": {"controls": {}, "summary": {}, "branches": [], "events": []},
+            "recursive_session": {"messages": [], "events": []},
+            "timeline": {"entries": []},
+        }
+        console = Console(record=True, width=220)
+        wb = RuntimeWorkbench(None, client_id="tui:test", live_api=fake_api, console=console)
+
+        wb.run(once=True)
+        rendered = console.export_text()
+
+        assert "Daemon: ready" in rendered
+        assert "Inflight: 2" in rendered
+        assert "LLM: 4" in rendered
+        assert "Memory: recall=8" in rendered
+        assert "episodic=4" in rendered
+        assert "Warm runtime: req=7" in rendered
+        assert "Flow: sessions=2" in rendered
+        assert "backlog=4" in rendered
+        assert "Memory scope: channel=tui" in rendered
+        assert "branch=7" in rendered
+
     def test_live_dispatch_calls_api(self):
         from rlm.cli.commands.workbench import RuntimeWorkbench
 
@@ -344,6 +549,55 @@ class TestRuntimeWorkbenchLiveMode:
         activity = wb._fetch_activity()
         assert "session" in activity
         assert "event_log" in activity
+
+    def test_live_fetch_activity_updates_live_session_snapshot(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI()
+        fake_api._activity["session"] = {
+            "session_id": "live-sess-1",
+            "client_id": "tui:test",
+            "status": "running",
+            "last_activity_at": "2026-04-10T12:00:00+00:00",
+            "metadata": {"_channel_context": {"transport": "brain_router", "actor": "cli"}},
+        }
+        wb = RuntimeWorkbench(None, client_id="tui:test", live_api=fake_api, console=Console(record=True, width=120))
+
+        activity = wb._fetch_activity()
+
+        assert activity["session"]["status"] == "running"
+        assert wb.session.status == "running"
+        assert wb.session.last_activity_at == "2026-04-10T12:00:00+00:00"
+        assert wb.session.metadata["_channel_context"]["actor"] == "cli"
+
+    def test_live_fetch_activity_reattaches_when_session_is_missing(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI(ensure_sequence=["live-sess-1", "live-sess-2"])
+        fake_api.fetch_errors.append(RuntimeError("HTTP 404 em /operator/session/live-sess-1/activity: Session not found"))
+        wb = RuntimeWorkbench(None, client_id="tui:test", live_api=fake_api, console=Console(record=True, width=120))
+
+        activity = wb._fetch_activity()
+
+        assert wb.session.session_id == "live-sess-2"
+        assert fake_api.ensure_calls == ["tui:test", "tui:test"]
+        assert fake_api.fetch_calls == ["live-sess-1", "live-sess-2"]
+        assert activity["session"]["session_id"] == "live-sess-2"
+
+    def test_live_dispatch_retries_after_reattach(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI(ensure_sequence=["live-sess-1", "live-sess-2"])
+        fake_api.prompt_errors.append(RuntimeError("HTTP 404 em /operator/session/live-sess-1/message: Session not found"))
+        wb = RuntimeWorkbench(None, client_id="tui:test", live_api=fake_api, console=Console(record=True, width=120))
+
+        with patch.object(RuntimeWorkbench, "watch_until_idle", return_value=None):
+            wb._dispatch_prompt("Olá mundo")
+
+        assert wb.session.session_id == "live-sess-2"
+        assert wb.session.status == "running"
+        assert fake_api.ensure_calls == ["tui:test", "tui:test"]
+        assert fake_api.prompts[-1]["session_id"] == "live-sess-2"
 
 
 class TestRuntimeWorkbenchLocalMode:

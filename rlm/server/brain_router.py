@@ -22,30 +22,35 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from rlm.core.engine.permission_policy import PermissionPolicy, PolicyAction
+from rlm.core.engine.permission_policy import PermissionPolicy
 from rlm.core.engine.session_journal import SessionJournal
 from rlm.core.security.execution_fence import (
     ApprovalRequiredError,
     ExecutionFence,
     PermissionDeniedError,
 )
-from rlm.core.tools import ToolDispatcher, get_registry
-from rlm.core.tools.specs import PermissionMode
+from rlm.core.tools import get_registry
 from rlm.gateway.auth_helpers import require_token
+from rlm.server.runtime_pipeline import build_runtime_dispatch_services, dispatch_runtime_prompt_sync
 
 logger = logging.getLogger(__name__)
+_BRAIN_AUTH_ENV_NAMES = ("RLM_ADMIN_TOKEN", "RLM_API_TOKEN", "RLM_WS_TOKEN")
 
 # ---------------------------------------------------------------------------
 # Router FastAPI
 # ---------------------------------------------------------------------------
 
 router = APIRouter(prefix="/brain", tags=["brain"])
+
+
+def _empty_tool_calls() -> list[dict[str, object]]:
+    return []
 
 # ---------------------------------------------------------------------------
 # Schemas Pydantic
@@ -62,7 +67,7 @@ class PromptResponse(BaseModel):
     session_id: str
     response: str
     elapsed_ms: float
-    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    tool_calls: list[dict[str, object]] = Field(default_factory=_empty_tool_calls)
 
 
 class ExecToolRequest(BaseModel):
@@ -112,6 +117,14 @@ def _get_journal(session_id: str) -> SessionJournal:
     return SessionJournal(data_dir=data_dir, session_id=session_id)
 
 
+def _require_brain_api_auth(request: Request) -> str:
+    return require_token(
+        request,
+        env_names=_BRAIN_AUTH_ENV_NAMES,
+        scope="brain API",
+    )
+
+
 # ---------------------------------------------------------------------------
 # POST /brain/prompt
 # ---------------------------------------------------------------------------
@@ -119,7 +132,8 @@ def _get_journal(session_id: str) -> SessionJournal:
 @router.post("/prompt", response_model=PromptResponse)
 async def handle_prompt(
     req: PromptRequest,
-    _token: str = Depends(require_token),
+    request: Request,
+    _token: str = Depends(_require_brain_api_auth),
 ) -> PromptResponse:
     """Encaminha prompt ao agente brain e retorna resposta.
 
@@ -129,48 +143,56 @@ async def handle_prompt(
     journal = _get_journal(req.session_id)
     journal.push_message("user", req.content, extra=req.metadata or None)
 
-    # Integração com o pipeline existente via importação lazy
-    # (evita acoplamento circular com runtime_pipeline)
     try:
-        from rlm.server.runtime_pipeline import dispatch_runtime_prompt_sync
-
-        result_text = await _run_prompt_async(req.content, req.session_id, req.actor)
-    except ImportError:
-        result_text = "[brain] Pipeline de runtime não disponível neste ambiente."
+        dispatch_result = await _run_prompt_async(request, req)
+        result_text = str(dispatch_result.get("response", "") or "")
+        response_session_id = str(dispatch_result.get("session_id", req.session_id) or req.session_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Erro ao processar prompt para sessão %s", req.session_id)
         result_text = f"[ERROR] {exc}"
+        response_session_id = req.session_id
 
     journal.push_message("assistant", result_text)
     elapsed = round((time.monotonic() - t0) * 1000, 2)
 
     return PromptResponse(
-        session_id=req.session_id,
+        session_id=response_session_id,
         response=result_text,
         elapsed_ms=elapsed,
     )
 
 
-async def _run_prompt_async(content: str, session_id: str, actor: str) -> str:
-    """Delega ao runtime_pipeline de forma assíncrona, com fallback gracioso."""
+async def _run_prompt_async(request: Request, req: PromptRequest) -> dict[str, Any]:
+    """Delega ao runtime pipeline compartilhado usando o mesmo path lógico do daemon."""
     import asyncio
-    from concurrent.futures import ThreadPoolExecutor
+    metadata = dict(req.metadata or {})
+    client_id = str(metadata.get("client_id") or req.session_id)
+    services = build_runtime_dispatch_services(request.app.state)
+    session_manager = cast(Any, services.session_manager)
+    session = session_manager.get_or_create(client_id)
+    payload_metadata = dict(metadata)
+    payload_metadata.setdefault("actor", req.actor)
+    payload_metadata.setdefault("transport", "brain_router")
+    payload_metadata.setdefault("requested_session_id", req.session_id)
 
-    try:
-        from rlm.server.runtime_pipeline import dispatch_runtime_prompt_sync
-
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = loop.run_in_executor(
-                pool,
-                dispatch_runtime_prompt_sync,
-                content,
-                session_id,
-            )
-            return await asyncio.wait_for(future, timeout=120.0)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("dispatch_runtime_prompt_sync falhou: %s", exc)
-        return f"[brain] Sem resposta disponível: {exc}"
+    loop = asyncio.get_event_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(
+            None,
+            lambda: dispatch_runtime_prompt_sync(
+                services,
+                client_id,
+                {
+                    "text": req.content,
+                    "content_type": "text",
+                    "metadata": payload_metadata,
+                },
+                session=session,
+                source_name="brain_router",
+            ),
+        ),
+        timeout=120.0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +203,7 @@ async def _run_prompt_async(content: str, session_id: str, actor: str) -> str:
 async def execute_tool(
     tool_name: str,
     body: ExecToolRequest,
-    _token: str = Depends(require_token),
+    _token: str = Depends(_require_brain_api_auth),
 ) -> ExecToolResponse:
     """Executa ferramenta diretamente, passando pelo ExecutionFence."""
     fence = _get_fence()
@@ -222,7 +244,7 @@ async def execute_tool(
 
 @router.get("/tools", response_model=list[ToolListItem])
 async def list_tools(
-    _token: str = Depends(require_token),
+    _token: str = Depends(_require_brain_api_auth),
 ) -> list[ToolListItem]:
     """Lista todas as ferramentas registradas no ToolRegistry."""
     registry = get_registry()
@@ -247,7 +269,7 @@ async def list_tools(
 async def get_session(
     session_id: str,
     include_rotated: bool = False,
-    _token: str = Depends(require_token),
+    _token: str = Depends(_require_brain_api_auth),
 ) -> JSONResponse:
     """Retorna histórico de mensagens de uma sessão."""
     journal = _get_journal(session_id)
@@ -262,7 +284,7 @@ async def get_session(
 @router.delete("/session/{session_id}")
 async def clear_session(
     session_id: str,
-    _token: str = Depends(require_token),
+    _token: str = Depends(_require_brain_api_auth),
 ) -> JSONResponse:
     """Remove histórico persistido de uma sessão."""
     journal = _get_journal(session_id)
@@ -314,7 +336,7 @@ def _get_auth_db() -> str:
 @router.post("/admin/clients", status_code=201)
 async def admin_client_register(
     body: ClientRegisterRequest,
-    _token: str = Depends(require_token),
+    _token: str = Depends(_require_brain_api_auth),
 ) -> JSONResponse:
     """Registra novo cliente/dispositivo. Retorna token em claro — exibido uma única vez."""
     from rlm.core.auth import register_client
@@ -341,7 +363,7 @@ async def admin_client_register(
 @router.get("/admin/clients")
 async def admin_client_list(
     include_inactive: bool = False,
-    _token: str = Depends(require_token),
+    _token: str = Depends(_require_brain_api_auth),
 ) -> JSONResponse:
     """Lista clientes registrados."""
     from rlm.core.auth import list_clients
@@ -353,7 +375,7 @@ async def admin_client_list(
 @router.get("/admin/clients/{client_id}")
 async def admin_client_status(
     client_id: str,
-    _token: str = Depends(require_token),
+    _token: str = Depends(_require_brain_api_auth),
 ) -> JSONResponse:
     """Retorna status detalhado de um cliente."""
     from rlm.core.auth import get_client_status
@@ -367,7 +389,7 @@ async def admin_client_status(
 @router.delete("/admin/clients/{client_id}")
 async def admin_client_revoke(
     client_id: str,
-    _token: str = Depends(require_token),
+    _token: str = Depends(_require_brain_api_auth),
 ) -> JSONResponse:
     """Revoga um cliente (marca active=0, sem DELETE para manter auditoria)."""
     from rlm.core.auth import revoke_client

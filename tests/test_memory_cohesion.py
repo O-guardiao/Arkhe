@@ -59,6 +59,16 @@ class TestRLMMemoryLayerIsolation:
 
 
 class TestRuntimePipelineMemoryDelegation:
+    def test_prepend_memory_block_prefers_daemon_memory_access_contract(self):
+        daemon = MagicMock()
+        daemon.inject_memory_prompt.return_value = "prompt-with-daemon-memory"
+        session = SimpleNamespace(_rlm=SimpleNamespace(_recursion_daemon=daemon))
+
+        result = _prepend_memory_block(session, "hello", "prompt")
+
+        assert result == "prompt-with-daemon-memory"
+        daemon.inject_memory_prompt.assert_called_once_with(session, "hello", "prompt", session=None)
+
     def test_prepend_memory_block_prefers_session_contract(self):
         session = MagicMock()
         session.inject_memory_prompt.return_value = "prompt-with-memory"
@@ -68,12 +78,43 @@ class TestRuntimePipelineMemoryDelegation:
         assert result == "prompt-with-memory"
         session.inject_memory_prompt.assert_called_once_with("prompt", "hello", available_tokens=2500)
 
+    def test_fire_post_turn_memory_prefers_daemon_memory_access_contract(self):
+        daemon = MagicMock()
+        session = SimpleNamespace(_rlm=SimpleNamespace(_recursion_daemon=daemon))
+
+        _fire_post_turn_memory(session, "hello", "world")
+
+        daemon.record_post_turn_memory.assert_called_once_with(session, "hello", "world", session=None)
+
     def test_fire_post_turn_memory_prefers_session_contract(self):
         session = MagicMock()
 
         _fire_post_turn_memory(session, "hello", "world")
 
         session.schedule_post_turn_memory.assert_called_once_with("hello", "world")
+
+
+class TestSessionMemoryToolsDaemonDelegation:
+    def test_session_memory_tools_use_direct_memory_access(self):
+        """After daemon diagnostic proxy removal, tools go directly to rlm_session.memory."""
+        from rlm.tools.session_memory_tools import get_session_memory_tools
+
+        mock_memory = MagicMock()
+        mock_memory.search_hybrid = MagicMock(return_value=[{"id": "m1"}])
+        mock_memory.db_path = ":memory:"
+
+        rlm_session = SimpleNamespace(
+            memory=mock_memory,
+            session_id="sess-direct",
+        )
+
+        tools = get_session_memory_tools(rlm_session)
+
+        result = tools["session_memory_search"]("daemon")
+        assert result == [{"id": "m1"}]
+        mock_memory.search_hybrid.assert_called_once_with(
+            "daemon", limit=5, session_id="sess-direct", temporal_decay=True,
+        )
 
 
 class TestRLMSessionMemoryLifecycle:

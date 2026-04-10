@@ -54,6 +54,7 @@ from rlm.core.comms.message_bus import get_message_bus
 from rlm.core.comms.internal_api import resolve_internal_api_base_url
 from rlm.core.comms.channel_status import ChannelStatusRegistry
 from rlm.gateway.message_envelope import InboundMessage
+from rlm.daemon import RecursionDaemon
 from rlm.runtime import build_runtime_guard_from_env
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger
@@ -205,6 +206,12 @@ async def lifespan(app: FastAPI):
     app.state.runtime_guard = build_runtime_guard_from_env()
     app.state.exec_approval = app.state.runtime_guard.approvals
     app.state.exec_approval_required = app.state.runtime_guard.exec_approval_required
+    app.state.recursion_daemon = RecursionDaemon(event_bus=app.state.event_bus)
+    app.state.recursion_daemon.start()
+    set_recursion_daemon = getattr(app.state.session_manager, "set_recursion_daemon", None)
+    if callable(set_recursion_daemon):
+        set_recursion_daemon(app.state.recursion_daemon)
+    app.state.recursion_daemon.attach_session_manager(app.state.session_manager)
 
     # Phase 9.1: MCP Skills
     _skills_dir = os.environ.get(
@@ -232,24 +239,31 @@ async def lifespan(app: FastAPI):
     )
 
     # Phase 8: Scheduler
-    def _run_scheduled_job(client_id: str, prompt: str):
+    def _execute_scheduled_prompt(client_id: str, prompt: str) -> dict[str, Any]:
         session = app.state.session_manager.get_or_create(client_id)
-        # Use existing event loop without blocking scheduler thread
-        loop = None
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            pass
-        if loop and loop.is_running():
-            loop.call_soon_threadsafe(
-                lambda: loop.run_in_executor(None, lambda: app.state.supervisor.execute(session, prompt))
+        result = app.state.supervisor.execute(session, prompt)
+        return {
+            "status": result.status,
+            "response": str(result.response or ""),
+            "session_id": result.session_id,
+            "execution_time": result.execution_time,
+            "iterations_used": result.iterations_used,
+            "error_detail": result.error_detail,
+        }
+
+    def _run_scheduled_job(client_id: str, prompt: str):
+        daemon = getattr(app.state, "recursion_daemon", None)
+        if daemon is not None:
+            return daemon.dispatch_scheduled_sync(
+                client_id=client_id,
+                prompt=prompt,
+                fallback=lambda event: _execute_scheduled_prompt(event.client_id, event.text),
             )
-        else:
-            # Fallback if no loop
-            app.state.supervisor.execute(session, prompt)
+        return _execute_scheduled_prompt(client_id, prompt)
 
     app.state.scheduler = RLMScheduler(execute_fn=_run_scheduled_job)
     app.state.scheduler.start()
+    app.state.recursion_daemon.attach_scheduler(app.state.scheduler)
 
     ws_disabled = os.environ.get("RLM_WS_DISABLED", "false").lower() == "true"
     if not ws_disabled:
@@ -296,8 +310,12 @@ async def lifespan(app: FastAPI):
         event_bus=app.state.event_bus, interval_s=30.0,
     )
     app.state.health_monitor.register("api", lambda: True)
+    app.state.health_monitor.register(
+        "recursion_daemon", lambda: app.state.recursion_daemon.is_running,
+    )
     app.state.health_monitor.start()
     gateway_log.info("✓ Health Monitor started")
+    gateway_log.info("✓ RecursionDaemon started")
 
     # ── Channel Infrastructure (bootstrap unificado — Camada 4) ─────
     # ANTES: ~140 linhas de init inline (CSR, MessageBus, adapters,
@@ -319,6 +337,12 @@ async def lifespan(app: FastAPI):
     app.state.delivery_worker = _channel_infra.delivery_worker
     app.state.use_message_bus = _channel_infra.use_message_bus
     app.state.channel_infra = _channel_infra
+    app.state.recursion_daemon.attach_channel_runtime(
+        channel_status_registry=_channel_infra.csr,
+        message_bus=_channel_infra.message_bus,
+        outbox=_channel_infra.outbox,
+        delivery_worker=_channel_infra.delivery_worker,
+    )
 
     await _channel_infra.delivery_worker.start()
     app.state.health_monitor.register(
@@ -371,6 +395,7 @@ async def lifespan(app: FastAPI):
         gateway_log.info("Telegram Gateway stopped")
     app.state.health_monitor.dispose()
     app.state.scheduler.stop()
+    app.state.recursion_daemon.stop()
 
     # Fase 3: Cleanup de recursos
     app.state.skill_loader.deactivate_all()
@@ -548,6 +573,7 @@ async def receive_webhook(client_id: str, request: Request):
         skill_context=request.app.state.skill_context,
         exec_approval=request.app.state.exec_approval,
         exec_approval_required=request.app.state.exec_approval_required,
+        recursion_daemon=request.app.state.recursion_daemon,
     )
 
     session = sm.get_or_create(client_id)
