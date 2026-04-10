@@ -699,6 +699,72 @@ class TestRunWorkbenchEntryPoint:
         start_services.assert_called_once_with(foreground=False, context=ctx)
         build_local_runtime.assert_not_called()
 
+    def test_autostart_local_service_reuses_live_target_port(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI(probe_result=False)
+        fake_api.probe = MagicMock(side_effect=[False, True])
+        calls: list[str] = []
+
+        def fake_run(self_wb, *, once=False):
+            calls.append("live" if self_wb._is_live else "local")
+            return 0
+
+        def fake_start_services(*, foreground=False, context=None):
+            assert foreground is False
+            assert context is ctx
+            assert context.env["RLM_API_HOST"] == "127.0.0.1"
+            assert context.env["RLM_API_PORT"] == "5000"
+            assert context.env["RLM_INTERNAL_HOST"] == "http://127.0.0.1:5000"
+            return 0
+
+        ctx = MagicMock()
+        ctx.env = {
+            "RLM_INTERNAL_HOST": "http://127.0.0.1:5000",
+            "RLM_API_HOST": "127.0.0.1",
+            "RLM_API_PORT": "1",
+        }
+        ctx.api_base_url.return_value = "http://127.0.0.1:1"
+
+        with patch("rlm.cli.tui.live_api.LiveWorkbenchAPI", return_value=fake_api), \
+             patch("rlm.cli.service.start_services", side_effect=fake_start_services) as start_services, \
+             patch("rlm.cli.commands.workbench.build_local_workbench_runtime") as build_local_runtime, \
+             patch.object(RuntimeWorkbench, "run", fake_run):
+            from rlm.cli.commands.workbench import run_workbench
+            result = run_workbench(ctx, client_id="tui:test", refresh_interval=0.75, once=True)
+
+        assert result == 0
+        assert calls == ["live"]
+        assert start_services.call_count == 1
+        build_local_runtime.assert_not_called()
+
+    def test_local_live_target_does_not_fallback_to_ephemeral_runtime_when_autostart_fails(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI(probe_result=False)
+        fake_api.probe = MagicMock(return_value=False)
+        calls: list[str] = []
+
+        def fake_run(self_wb, *, once=False):
+            calls.append("live" if self_wb._is_live else "local")
+            return 0
+
+        ctx = MagicMock()
+        ctx.env = {"RLM_INTERNAL_HOST": "http://127.0.0.1:5000"}
+        ctx.api_base_url.return_value = "http://127.0.0.1:5000"
+
+        with patch("rlm.cli.tui.live_api.LiveWorkbenchAPI", return_value=fake_api), \
+             patch("rlm.cli.service.start_services", return_value=1) as start_services, \
+             patch("rlm.cli.commands.workbench.build_local_workbench_runtime") as build_local_runtime, \
+             patch.object(RuntimeWorkbench, "run", fake_run):
+            from rlm.cli.commands.workbench import run_workbench
+            result = run_workbench(ctx, client_id="tui:test", refresh_interval=0.75, once=True)
+
+        assert result == 1
+        assert calls == []
+        start_services.assert_called_once_with(foreground=False, context=ctx)
+        build_local_runtime.assert_not_called()
+
     def test_fallback_local_when_probe_fails(self):
         from rlm.cli.commands.workbench import RuntimeWorkbench
 

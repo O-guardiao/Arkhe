@@ -126,12 +126,32 @@ def _memory_scope_summary(scope: dict[str, Any]) -> str:
     return "  ".join(parts)
 
 
-def _is_local_live_target(context: CliContext) -> bool:
-    configured = str(context.env.get("RLM_INTERNAL_HOST", context.api_base_url()) or "").strip()
+def _configured_live_target_url(context: CliContext) -> str:
+    return str(context.env.get("RLM_INTERNAL_HOST", context.api_base_url()) or "").strip()
+
+
+def _parsed_live_target(context: CliContext) -> tuple[str, str, int] | None:
+    configured = _configured_live_target_url(context)
     if not configured:
-        return False
+        return None
     parsed = urlparse(configured if "://" in configured else f"http://{configured}")
     hostname = str(parsed.hostname or "").strip().lower()
+    if not hostname:
+        return None
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+    if port <= 0 or port > 65535:
+        return None
+    return (parsed.scheme or "http"), hostname, port
+
+
+def _is_local_live_target(context: CliContext) -> bool:
+    target = _parsed_live_target(context)
+    if target is None:
+        return False
+    _, hostname, _ = target
     return hostname in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 
 
@@ -147,6 +167,29 @@ def _probe_live_api(live_api: Any, *, timeout: int = 3) -> bool:
         return False
 
 
+def _synchronize_local_live_service_target(context: CliContext, live_api: Any | None) -> None:
+    target = _parsed_live_target(context)
+    if target is None:
+        return
+
+    scheme, hostname, port = target
+    bind_host = hostname
+    connect_host = hostname
+    if hostname in {"localhost", "::1"}:
+        bind_host = "127.0.0.1"
+        connect_host = "127.0.0.1"
+    elif hostname == "0.0.0.0":
+        connect_host = "127.0.0.1"
+
+    normalized_base_url = f"{scheme}://{connect_host}:{port}"
+    context.env["RLM_API_HOST"] = bind_host
+    context.env["RLM_API_PORT"] = str(port)
+    context.env["RLM_INTERNAL_HOST"] = normalized_base_url
+
+    if live_api is not None and hasattr(live_api, "_base_url"):
+        setattr(live_api, "_base_url", normalized_base_url)
+
+
 def _ensure_live_service(context: CliContext, console: Console, live_api: Any | None) -> Any | None:
     if live_api is None:
         return None
@@ -157,10 +200,14 @@ def _ensure_live_service(context: CliContext, console: Console, live_api: Any | 
 
     from rlm.cli.service import start_services
 
+    _synchronize_local_live_service_target(context, live_api)
     console.print(
         "[yellow]Servidor vivo indisponivel — tentando iniciar backend persistente local...[/]"
     )
     if start_services(foreground=False, context=context) != 0:
+        console.print(
+            f"[red]Falha ao iniciar backend persistente local em {_configured_live_target_url(context)}[/]"
+        )
         return None
 
     deadline = time.monotonic() + 6.0
@@ -171,6 +218,9 @@ def _ensure_live_service(context: CliContext, console: Console, live_api: Any | 
             )
             return live_api
         time.sleep(0.25)
+    console.print(
+        f"[red]Backend persistente local nao respondeu em {_configured_live_target_url(context)}[/]"
+    )
     return None
 
 
@@ -945,6 +995,12 @@ def run_workbench(context: CliContext, *, client_id: str | None, refresh_interva
             live_api=live_api,
         )
         return workbench.run(once=once)
+
+    if _is_local_live_target(context) and _autostart_live_service_enabled(context):
+        console.print(
+            "[bold red]Backend persistente local indisponivel; abortando para evitar fallback local efemero.[/]"
+        )
+        return 1
 
     # --- Fallback: modo local (sem multichannel) ---
     console.print(
