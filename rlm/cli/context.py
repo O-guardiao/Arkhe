@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import MutableMapping
+from urllib.parse import urlparse
 
 # Backward-compat: re-export from new homes so existing "from rlm.cli.context import X" still works
 from rlm.cli.output import print_error, print_success  # noqa: F401
@@ -18,6 +19,29 @@ def _discover_project_root(start: Path) -> Path:
         if (candidate / "pyproject.toml").exists() or (candidate / ".git").exists():
             return candidate
     return current
+
+
+def resolve_operator_api_base_url(env: MutableMapping[str, str], api_base_url: str) -> str:
+    operator_host = str(env.get("RLM_OPERATOR_HOST", "") or "").strip()
+    if operator_host:
+        return operator_host.rstrip("/")
+
+    configured = str(api_base_url or "").strip() or "http://127.0.0.1:5000"
+    parsed = urlparse(configured if "://" in configured else f"http://{configured}")
+    scheme = parsed.scheme or "http"
+    host = str(parsed.hostname or env.get("RLM_API_HOST", "127.0.0.1") or "127.0.0.1").strip() or "127.0.0.1"
+    if host == "0.0.0.0":
+        host = "127.0.0.1"
+
+    try:
+        port = parsed.port or 5000
+    except ValueError:
+        port = 5000
+
+    if port <= 0 or port > 65535:
+        port = 5000
+
+    return f"{scheme}://{host}:{port}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +145,9 @@ class CliContext:
 
     def api_base_url(self) -> str:
         return f"http://{self.api_host()}:{self.api_port()}"
+
+    def operator_api_base_url(self) -> str:
+        return resolve_operator_api_base_url(self.env, self.api_base_url())
 
     def ws_base_url(self) -> str:
         return f"ws://{self.ws_host()}:{self.ws_port()}"

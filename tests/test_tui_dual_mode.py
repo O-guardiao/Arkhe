@@ -231,9 +231,19 @@ class TestTuiAdapter:
 # =========================================================================
 
 class TestLiveWorkbenchAPI:
-    def _make_api(self, *, host: str = "http://127.0.0.1:9999"):
+    def _make_api(
+        self,
+        *,
+        host: str = "http://127.0.0.1:9999",
+        operator_host: str | None = None,
+        internal_host: str | None = None,
+    ):
         ctx = MagicMock()
-        ctx.env = {"RLM_INTERNAL_HOST": host, "RLM_INTERNAL_TOKEN": "test-tok-123"}
+        ctx.env = {"RLM_INTERNAL_TOKEN": "test-tok-123"}
+        if operator_host is not None:
+            ctx.env["RLM_OPERATOR_HOST"] = operator_host
+        if internal_host is not None:
+            ctx.env["RLM_INTERNAL_HOST"] = internal_host
         ctx.api_base_url.return_value = host
         from rlm.cli.tui.live_api import LiveWorkbenchAPI
         return LiveWorkbenchAPI(ctx)
@@ -251,6 +261,23 @@ class TestLiveWorkbenchAPI:
 
         with patch("rlm.cli.tui.live_api.urequest.urlopen", return_value=fake_resp):
             assert api.probe() is True
+
+    def test_prefers_operator_host_over_internal_host(self):
+        api = self._make_api(
+            host="http://127.0.0.1:5000",
+            operator_host="http://127.0.0.1:6000",
+            internal_host="http://bridge.internal:7777",
+        )
+
+        assert api.base_url == "http://127.0.0.1:6000"
+
+    def test_ignores_internal_host_when_operator_host_missing(self):
+        api = self._make_api(
+            host="http://0.0.0.0:5000",
+            internal_host="http://bridge.internal:7777",
+        )
+
+        assert api.base_url == "http://127.0.0.1:5000"
 
     def test_ensure_session_parses_response(self):
         api = self._make_api()
@@ -661,7 +688,7 @@ class TestRunWorkbenchEntryPoint:
             return 0
 
         ctx = MagicMock()
-        ctx.env = {"RLM_INTERNAL_HOST": "http://fake:9999", "RLM_INTERNAL_TOKEN": "tok"}
+        ctx.env = {"RLM_OPERATOR_HOST": "http://fake:9999", "RLM_INTERNAL_TOKEN": "tok"}
         ctx.api_base_url.return_value = "http://fake:9999"
 
         with patch("rlm.cli.tui.live_api.LiveWorkbenchAPI", return_value=fake_api), \
@@ -684,7 +711,7 @@ class TestRunWorkbenchEntryPoint:
             return 0
 
         ctx = MagicMock()
-        ctx.env = {"RLM_INTERNAL_HOST": "http://127.0.0.1:5000"}
+        ctx.env = {"RLM_OPERATOR_HOST": "http://127.0.0.1:5000"}
         ctx.api_base_url.return_value = "http://127.0.0.1:5000"
 
         with patch("rlm.cli.tui.live_api.LiveWorkbenchAPI", return_value=fake_api), \
@@ -715,12 +742,12 @@ class TestRunWorkbenchEntryPoint:
             assert context is ctx
             assert context.env["RLM_API_HOST"] == "127.0.0.1"
             assert context.env["RLM_API_PORT"] == "5000"
-            assert context.env["RLM_INTERNAL_HOST"] == "http://127.0.0.1:5000"
+            assert context.env["RLM_OPERATOR_HOST"] == "http://127.0.0.1:5000"
             return 0
 
         ctx = MagicMock()
         ctx.env = {
-            "RLM_INTERNAL_HOST": "http://127.0.0.1:5000",
+            "RLM_OPERATOR_HOST": "http://127.0.0.1:5000",
             "RLM_API_HOST": "127.0.0.1",
             "RLM_API_PORT": "1",
         }
@@ -750,7 +777,7 @@ class TestRunWorkbenchEntryPoint:
             return 0
 
         ctx = MagicMock()
-        ctx.env = {"RLM_INTERNAL_HOST": "http://127.0.0.1:5000"}
+        ctx.env = {"RLM_OPERATOR_HOST": "http://127.0.0.1:5000"}
         ctx.api_base_url.return_value = "http://127.0.0.1:5000"
 
         with patch("rlm.cli.tui.live_api.LiveWorkbenchAPI", return_value=fake_api), \
@@ -776,7 +803,7 @@ class TestRunWorkbenchEntryPoint:
             return 0
 
         ctx = MagicMock()
-        ctx.env = {"RLM_INTERNAL_HOST": "http://fake:9999"}
+        ctx.env = {"RLM_OPERATOR_HOST": "http://fake:9999"}
         ctx.api_base_url.return_value = "http://fake:9999"
 
         mock_runtime = MagicMock()

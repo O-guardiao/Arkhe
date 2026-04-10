@@ -10,7 +10,7 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from rlm.cli.context import CliContext, doctor_runtime_requirement
+from rlm.cli.context import CliContext, doctor_runtime_requirement, resolve_operator_api_base_url
 from rlm.cli.json_output import build_cli_json_envelope
 
 
@@ -258,6 +258,10 @@ def _doctor_launcher_state_json(context: CliContext, *, server_online: bool) -> 
     return build_launcher_state_diagnosis(context, health_online=server_online)
 
 
+def _doctor_operator_target(context: CliContext) -> str:
+    return resolve_operator_api_base_url(context.env, context.api_base_url())
+
+
 def cmd_doctor(args: argparse.Namespace, *, context: CliContext | None = None) -> int:  # noqa: ARG001
     """
     Valida toda a configuração do Arkhe e testa as conexões com serviços.
@@ -273,7 +277,7 @@ def cmd_doctor(args: argparse.Namespace, *, context: CliContext | None = None) -
 
     if json_only:
         current_context.load_env_file(override=False)
-        rlm_host = current_context.env.get("RLM_INTERNAL_HOST", current_context.api_base_url())
+        rlm_host = _doctor_operator_target(current_context)
         server_online = False
         try:
             status, _body = _doctor_http_request(
@@ -405,7 +409,7 @@ def cmd_doctor(args: argparse.Namespace, *, context: CliContext | None = None) -
     else:
         row("RLM_API_TOKEN", "⚠", "OpenAI-compat /v1 ficará desabilitada")
 
-    rlm_host = current_context.env.get("RLM_INTERNAL_HOST", current_context.api_base_url())
+    rlm_host = _doctor_operator_target(current_context)
     server_online = False
     try:
         status, _body = _doctor_http_request(
@@ -419,7 +423,11 @@ def cmd_doctor(args: argparse.Namespace, *, context: CliContext | None = None) -
         else:
             row("Servidor Arkhe", "⚠", f"status {status} em {rlm_host}")
     except urllib_error.HTTPError as exc:
-        row("Servidor Arkhe", "✗", f"health rejeitado (HTTP {exc.code}) — verifique RLM_ADMIN_TOKEN")
+        row(
+            "Servidor Arkhe",
+            "✗",
+            f"health rejeitado (HTTP {exc.code}) em {rlm_host} — verifique se o operador aponta para a API Arkhe correta",
+        )
         errors += 1
     except Exception:
         row("Servidor Arkhe", "⚠", "offline (use 'arkhe start')")

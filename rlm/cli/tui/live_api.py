@@ -8,7 +8,7 @@ from typing import Any
 from urllib import error as uerror
 from urllib import request as urequest
 
-from rlm.cli.context import CliContext
+from rlm.cli.context import CliContext, resolve_operator_api_base_url
 
 
 class LiveWorkbenchError(RuntimeError):
@@ -48,7 +48,7 @@ class LiveSessionInfo:
 class LiveWorkbenchAPI:
     def __init__(self, context: CliContext) -> None:
         self._context = context
-        self._base_url = context.env.get("RLM_INTERNAL_HOST", context.api_base_url()).rstrip("/")
+        self._base_url = resolve_operator_api_base_url(context.env, context.api_base_url()).rstrip("/")
         self._headers = _build_headers(dict(context.env))
 
     @property

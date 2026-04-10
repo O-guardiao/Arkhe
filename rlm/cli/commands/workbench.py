@@ -18,7 +18,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
-from rlm.cli.context import CliContext
+from rlm.cli.context import CliContext, resolve_operator_api_base_url
 from rlm.cli.tui.runtime_factory import WorkbenchRuntime, build_local_workbench_runtime
 from rlm.cli.tui.channel_console import (
     ChannelConsoleState,
@@ -127,7 +127,7 @@ def _memory_scope_summary(scope: dict[str, Any]) -> str:
 
 
 def _configured_live_target_url(context: CliContext) -> str:
-    return str(context.env.get("RLM_INTERNAL_HOST", context.api_base_url()) or "").strip()
+    return resolve_operator_api_base_url(context.env, context.api_base_url())
 
 
 def _parsed_live_target(context: CliContext) -> tuple[str, str, int] | None:
@@ -184,7 +184,7 @@ def _synchronize_local_live_service_target(context: CliContext, live_api: Any | 
     normalized_base_url = f"{scheme}://{connect_host}:{port}"
     context.env["RLM_API_HOST"] = bind_host
     context.env["RLM_API_PORT"] = str(port)
-    context.env["RLM_INTERNAL_HOST"] = normalized_base_url
+    context.env["RLM_OPERATOR_HOST"] = normalized_base_url
 
     if live_api is not None and hasattr(live_api, "_base_url"):
         setattr(live_api, "_base_url", normalized_base_url)

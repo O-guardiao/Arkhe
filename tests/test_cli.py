@@ -478,6 +478,51 @@ class TestDoctorHelpers:
         assert payload["severity"] == "info"
         assert payload["signals"]["state_exists"] is False
 
+    def test_doctor_uses_operator_host_not_internal_host_for_health(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        from rlm.cli.commands.doctor import cmd_doctor
+        from rlm.cli.context import CliContext
+
+        (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-test\n", encoding="utf-8")
+
+        context = CliContext(
+            env={
+                "OPENAI_API_KEY": "sk-test",
+                "RLM_WS_TOKEN": "x" * 64,
+                "RLM_INTERNAL_TOKEN": "y" * 64,
+                "RLM_ADMIN_TOKEN": "z" * 64,
+                "RLM_HOOK_TOKEN": "h" * 64,
+                "RLM_API_TOKEN": "a" * 64,
+                "TELEGRAM_BOT_TOKEN": "123:abc",
+                "RLM_API_HOST": "0.0.0.0",
+                "RLM_API_PORT": "5000",
+                "RLM_INTERNAL_HOST": "http://bridge.internal:7777",
+            },
+            cwd=tmp_path,
+            home=tmp_path,
+        )
+
+        def fake_http_request(url: str, **_: object):
+            if url == "http://127.0.0.1:5000/health":
+                return 200, b"{}"
+            raise AssertionError(url)
+
+        response = MagicMock()
+        response.status = 200
+        response.__enter__.return_value = response
+        response.__exit__.return_value = None
+
+        monkeypatch.setattr("rlm.cli.commands.doctor._doctor_http_request", fake_http_request)
+        monkeypatch.setattr("rlm.cli.commands.doctor._doctor_runtime_requirement", lambda: (True, "Python 3.11"))
+        monkeypatch.setattr("rlm.cli.commands.doctor._doctor_channel_handshake", lambda *args, **kwargs: ("·", "skip"))
+        monkeypatch.setattr("rlm.cli.commands.doctor._doctor_launcher_state_status", lambda *args, **kwargs: ("✓", "ok"))
+        monkeypatch.setattr("rlm.cli.commands.doctor.urllib_request.urlopen", lambda *args, **kwargs: response)
+
+        rc = cmd_doctor(argparse.Namespace(), context=context)
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "online em http://127.0.0.1:5000" in out
+
     def test_cmd_setup_blocks_old_python(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from rlm.cli.commands.setup import cmd_setup
 
