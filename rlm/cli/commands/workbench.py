@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 from rich.console import Console, Group, RenderableType
 from rich.layout import Layout
@@ -123,6 +124,54 @@ def _memory_scope_summary(scope: dict[str, Any]) -> str:
     if not parts:
         return "-"
     return "  ".join(parts)
+
+
+def _is_local_live_target(context: CliContext) -> bool:
+    configured = str(context.env.get("RLM_INTERNAL_HOST", context.api_base_url()) or "").strip()
+    if not configured:
+        return False
+    parsed = urlparse(configured if "://" in configured else f"http://{configured}")
+    hostname = str(parsed.hostname or "").strip().lower()
+    return hostname in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def _autostart_live_service_enabled(context: CliContext) -> bool:
+    raw = str(context.env.get("RLM_TUI_AUTOSTART_SERVICE", "true") or "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _probe_live_api(live_api: Any, *, timeout: int = 3) -> bool:
+    try:
+        return bool(live_api.probe(timeout=timeout))
+    except Exception:
+        return False
+
+
+def _ensure_live_service(context: CliContext, console: Console, live_api: Any | None) -> Any | None:
+    if live_api is None:
+        return None
+    if not _is_local_live_target(context):
+        return None
+    if not _autostart_live_service_enabled(context):
+        return None
+
+    from rlm.cli.service import start_services
+
+    console.print(
+        "[yellow]Servidor vivo indisponivel — tentando iniciar backend persistente local...[/]"
+    )
+    if start_services(foreground=False, context=context) != 0:
+        return None
+
+    deadline = time.monotonic() + 6.0
+    while time.monotonic() < deadline:
+        if _probe_live_api(live_api, timeout=1):
+            console.print(
+                f"[bold green]Backend persistente local ativo em {live_api.base_url}[/]"
+            )
+            return live_api
+        time.sleep(0.25)
+    return None
 
 
 @dataclass
@@ -864,13 +913,14 @@ class RuntimeWorkbench:
 def run_workbench(context: CliContext, *, client_id: str | None, refresh_interval: float, once: bool) -> int:
     resolved_client_id = client_id or "tui:default"
     console = Console()
+    live_api: Any | None = None
 
     # --- Tenta modo live (servidor vivo) ---
     try:
         from rlm.cli.tui.live_api import LiveWorkbenchAPI
 
         live_api = LiveWorkbenchAPI(context)
-        if live_api.probe():
+        if _probe_live_api(live_api):
             console.print(
                 f"[bold green]Conectado ao servidor vivo em {live_api.base_url}[/]"
             )
@@ -883,7 +933,18 @@ def run_workbench(context: CliContext, *, client_id: str | None, refresh_interva
             )
             return workbench.run(once=once)
     except Exception:
-        pass
+        live_api = None
+
+    live_api = _ensure_live_service(context, console, live_api)
+    if live_api is not None:
+        workbench = RuntimeWorkbench(
+            None,
+            client_id=resolved_client_id,
+            refresh_interval=refresh_interval,
+            console=console,
+            live_api=live_api,
+        )
+        return workbench.run(once=once)
 
     # --- Fallback: modo local (sem multichannel) ---
     console.print(
