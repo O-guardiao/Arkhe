@@ -982,7 +982,12 @@ def run_workbench(context: CliContext, *, client_id: str | None, refresh_interva
                 live_api=live_api,
             )
             return workbench.run(once=once)
-    except Exception:
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        console.print(
+            f"[bold red]Falha ao inicializar sessao live: {type(exc).__name__}: {exc}[/]"
+        )
         live_api = None
 
     live_api = _ensure_live_service(context, console, live_api)
