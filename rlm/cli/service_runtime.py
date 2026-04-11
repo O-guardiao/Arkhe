@@ -54,25 +54,58 @@ def port_accepting_connections(host: str, port: int) -> bool:
 
 
 def _find_port_pid(port: int) -> int | None:
-    """Descobre o PID do processo segurando *port* (Linux only via fuser)."""
+    """Descobre o PID do processo segurando *port* (Linux: fuser → ss → lsof)."""
     if sys.platform == "win32":
         return None
+
+    import re as _re
+
+    # 1) fuser  — rápido, mas nem sempre instalado
     fuser = shutil.which("fuser")
-    if not fuser:
-        return None
-    try:
-        result = subprocess.run(
-            [fuser, f"{port}/tcp"],
-            capture_output=True, text=True, timeout=5,
-        )
-        # fuser outputs PIDs to stderr (e.g. "5000/tcp:  1105")
-        raw = result.stderr if result.stderr else result.stdout
-        for token in raw.split():
-            token = token.strip()
-            if token.isdigit():
-                return int(token)
-    except Exception:
-        pass
+    if fuser:
+        try:
+            result = subprocess.run(
+                [fuser, f"{port}/tcp"],
+                capture_output=True, text=True, timeout=5,
+            )
+            raw = result.stderr if result.stderr else result.stdout
+            for token in raw.split():
+                # fuser pode anexar letras de acesso (ex: "12345e")
+                cleaned = token.strip().rstrip("cefFrm.")
+                if cleaned.isdigit():
+                    return int(cleaned)
+        except Exception:
+            pass
+
+    # 2) ss -tlnp  — presente em qualquer Linux com iproute2
+    ss = shutil.which("ss")
+    if ss:
+        try:
+            result = subprocess.run(
+                [ss, "-tlnp", "sport", "=", f":{port}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            m = _re.search(r"pid=(\d+)", result.stdout)
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+
+    # 3) lsof  — fallback final
+    lsof = shutil.which("lsof")
+    if lsof:
+        try:
+            result = subprocess.run(
+                [lsof, "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.strip().splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    return int(line)
+        except Exception:
+            pass
+
     return None
 
 
@@ -156,7 +189,7 @@ def start_runtime(
                 return subprocess.run([python, "-m", "rlm.server.ws_server"], env=env).returncode
 
             fg_port = int(env.get("RLM_API_PORT", "5000"))
-            if fg_port < 1 or fg_port > 65535:
+            if fg_port < 1024 or fg_port > 65535:
                 fg_port = 5000
             start_server(
                 host=env.get("RLM_API_HOST", "127.0.0.1"),
@@ -180,7 +213,7 @@ def start_runtime(
             api_port = int(env.get("RLM_API_PORT", "5000"))
         except (ValueError, TypeError):
             api_port = 5000
-        if api_port < 1 or api_port > 65535:
+        if api_port < 1024 or api_port > 65535:
             warn(f"RLM_API_PORT={env.get('RLM_API_PORT')!r} inválida — usando 5000")
             api_port = 5000
         api_host = env.get("RLM_API_HOST", "127.0.0.1")

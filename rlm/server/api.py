@@ -1133,6 +1133,6 @@ def start_server(host: str = "127.0.0.1", port: int = 5000):
 if __name__ == "__main__":
     _host = os.environ.get("RLM_API_HOST", "127.0.0.1")
     _port = int(os.environ.get("RLM_API_PORT", "5000"))
-    if _port < 1 or _port > 65535:
+    if _port < 1024 or _port > 65535:
         _port = 5000
     start_server(host=_host, port=_port)
