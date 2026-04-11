@@ -66,7 +66,7 @@ from rlm.core.skillkit.skill_telemetry import get_skill_telemetry
 gateway_log = get_logger("api")
 
 _INTERNAL_AUTH_ENV_NAMES = ("RLM_INTERNAL_TOKEN", "RLM_WS_TOKEN", "RLM_API_TOKEN")
-_ADMIN_AUTH_ENV_NAMES = ("RLM_ADMIN_TOKEN", "RLM_API_TOKEN", "RLM_WS_TOKEN")
+_ADMIN_AUTH_ENV_NAMES = ("RLM_ADMIN_TOKEN", "RLM_API_TOKEN", "RLM_WS_TOKEN", "RLM_INTERNAL_TOKEN")
 
 
 def _require_internal_api_auth(request: Request) -> None:

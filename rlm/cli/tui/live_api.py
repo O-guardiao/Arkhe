@@ -21,7 +21,7 @@ def is_live_session_missing(exc: Exception) -> bool:
 
 
 def _internal_token(env: dict[str, str]) -> str:
-    for name in ("RLM_INTERNAL_TOKEN", "RLM_WS_TOKEN", "RLM_API_TOKEN"):
+    for name in ("RLM_ADMIN_TOKEN", "RLM_API_TOKEN", "RLM_WS_TOKEN", "RLM_INTERNAL_TOKEN"):
         token = env.get(name, "").strip()
         if token:
             return token
