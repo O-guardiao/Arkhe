@@ -64,7 +64,7 @@ class TuiAdapter(ChannelAdapter):
 
 router = APIRouter(prefix="/operator", tags=["operator"])
 
-_INTERNAL_AUTH_ENV_NAMES = ("RLM_INTERNAL_TOKEN", "RLM_WS_TOKEN", "RLM_API_TOKEN")
+_INTERNAL_AUTH_ENV_NAMES = ("RLM_ADMIN_TOKEN", "RLM_INTERNAL_TOKEN", "RLM_WS_TOKEN", "RLM_API_TOKEN")
 
 
 def _require_operator_auth(request: Request) -> None:
