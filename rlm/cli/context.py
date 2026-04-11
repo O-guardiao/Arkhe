@@ -135,7 +135,14 @@ class CliContext:
         return self.env.get("RLM_API_HOST", "127.0.0.1")
 
     def api_port(self) -> int:
-        return int(self.env.get("RLM_API_PORT", "5000"))
+        raw = self.env.get("RLM_API_PORT", "5000")
+        try:
+            port = int(raw)
+        except (ValueError, TypeError):
+            port = 5000
+        if port < 1 or port > 65535:
+            port = 5000
+        return port
 
     def ws_host(self) -> str:
         return self.env.get("RLM_WS_HOST", self.api_host())

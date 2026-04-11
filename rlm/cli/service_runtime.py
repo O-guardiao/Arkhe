@@ -155,9 +155,12 @@ def start_runtime(
             if ws_only:
                 return subprocess.run([python, "-m", "rlm.server.ws_server"], env=env).returncode
 
+            fg_port = int(env.get("RLM_API_PORT", "5000"))
+            if fg_port < 1 or fg_port > 65535:
+                fg_port = 5000
             start_server(
                 host=env.get("RLM_API_HOST", "127.0.0.1"),
-                port=int(env.get("RLM_API_PORT", "5000")),
+                port=fg_port,
             )
         except KeyboardInterrupt:
             info("Encerrado pelo usuário.")
@@ -173,7 +176,13 @@ def start_runtime(
     api_proc = None
 
     if not ws_only:
-        api_port = int(env.get("RLM_API_PORT", "5000"))
+        try:
+            api_port = int(env.get("RLM_API_PORT", "5000"))
+        except (ValueError, TypeError):
+            api_port = 5000
+        if api_port < 1 or api_port > 65535:
+            warn(f"RLM_API_PORT={env.get('RLM_API_PORT')!r} inválida — usando 5000")
+            api_port = 5000
         api_host = env.get("RLM_API_HOST", "127.0.0.1")
         if port_accepting_connections(api_host, api_port):
             if not _kill_orphan_on_port(api_port, api_host, warn=warn, info=info):
