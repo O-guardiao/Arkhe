@@ -764,7 +764,7 @@ class RecursionDaemon:
         rlm_core = getattr(rlm_session, "_rlm", None) if rlm_session else None
         policy = getattr(rlm_core, "_runtime_execution_policy", None) if rlm_core else None
         if policy is not None:
-            llm_policy.setdefault("task_class", getattr(policy, "task_class", "default"))
+            llm_policy["task_class"] = getattr(policy, "task_class", "default")
 
         return DaemonSessionState(
             session_id=session_id,

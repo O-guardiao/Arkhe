@@ -4,11 +4,35 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from urllib import error as uerror
 from urllib import request as urequest
 
 from rlm.cli.context import CliContext, resolve_operator_api_base_url
+
+
+def _metadata_factory() -> dict[str, Any]:
+    return {}
+
+
+def _sanitize_text(value: object) -> str:
+    text = str(value or "")
+    return text.encode("utf-8", errors="replace").decode("utf-8")
+
+
+def _sanitize_json_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    if isinstance(value, dict):
+        return {
+            _sanitize_text(key): _sanitize_json_payload(item)
+            for key, item in cast(dict[Any, Any], value).items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_json_payload(item) for item in cast(list[Any], value)]
+    if isinstance(value, tuple):
+        return [_sanitize_json_payload(item) for item in cast(tuple[Any, ...], value)]
+    return value
 
 
 class LiveWorkbenchError(RuntimeError):
@@ -42,7 +66,7 @@ class LiveSessionInfo:
     client_id: str
     status: str
     state_dir: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=_metadata_factory)
 
 
 class LiveWorkbenchAPI:
@@ -117,7 +141,7 @@ class LiveWorkbenchAPI:
         url = f"{self._base_url}{path}"
         data = None
         if body is not None:
-            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            data = json.dumps(_sanitize_json_payload(body), ensure_ascii=False).encode("utf-8")
         req = urequest.Request(url, data=data, headers=self._headers, method=method)
         try:
             with urequest.urlopen(req, timeout=timeout) as resp:
@@ -134,7 +158,7 @@ class LiveWorkbenchAPI:
 
         if not isinstance(payload, dict):
             raise LiveWorkbenchError(f"Resposta invalida do backend vivo em {path}")
-        return payload
+        return _sanitize_json_payload(payload)
 
     # ── Channel status endpoints ──────────────────────────────────────
 

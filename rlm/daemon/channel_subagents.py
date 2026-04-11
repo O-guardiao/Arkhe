@@ -274,6 +274,165 @@ class WebChatSubAgent(ChannelSubAgent):
         return channel_meta
 
 
+class DiscordSubAgent(ChannelSubAgent):
+    """Extrai guild_id, user_id, interaction_id do payload Discord."""
+
+    def normalize_payload(
+        self,
+        *,
+        client_id: str,
+        payload: dict[str, Any],
+        session: Any | None = None,
+    ) -> dict[str, Any]:
+        normalized_payload = super().normalize_payload(client_id=client_id, payload=payload, session=session)
+        if not normalized_payload.get("content_type"):
+            normalized_payload["content_type"] = "text"
+        return normalized_payload
+
+    def build_channel_meta(
+        self,
+        *,
+        client_id: str,
+        payload: dict[str, Any],
+        session: Any | None = None,
+    ) -> dict[str, Any]:
+        channel_meta = super().build_channel_meta(client_id=client_id, payload=payload, session=session)
+
+        # discord client_id = "discord:{guild_id}:{user_id}"
+        parts = client_id.split(":")
+        guild_id = _first_non_empty(
+            payload.get("guild_id"),
+            channel_meta.get("guild_id"),
+            parts[1] if len(parts) > 1 else "",
+        )
+        if guild_id:
+            channel_meta.setdefault("guild_id", guild_id)
+
+        user_id = _first_non_empty(
+            payload.get("user_id"),
+            channel_meta.get("user_id"),
+            parts[2] if len(parts) > 2 else "",
+        )
+        if user_id:
+            channel_meta.setdefault("user_id", user_id)
+
+        interaction_id = _first_non_empty(
+            payload.get("interaction_id"),
+            channel_meta.get("interaction_id"),
+        )
+        if interaction_id:
+            channel_meta.setdefault("interaction_id", interaction_id)
+
+        if guild_id:
+            channel_meta.setdefault("replyable", True)
+        return channel_meta
+
+
+class SlackSubAgent(ChannelSubAgent):
+    """Extrai thread_ts, team_id, slack channel do payload Slack."""
+
+    def normalize_payload(
+        self,
+        *,
+        client_id: str,
+        payload: dict[str, Any],
+        session: Any | None = None,
+    ) -> dict[str, Any]:
+        normalized_payload = super().normalize_payload(client_id=client_id, payload=payload, session=session)
+        # thread_ts é o equivalente ao thread_id no Slack
+        normalized_payload.setdefault(
+            "thread_id",
+            _first_non_empty(
+                normalized_payload.get("thread_id"),
+                normalized_payload.get("thread_ts"),
+                normalized_payload.get("ts"),
+            ),
+        )
+        if not normalized_payload.get("content_type"):
+            normalized_payload["content_type"] = "text"
+        return normalized_payload
+
+    def build_channel_meta(
+        self,
+        *,
+        client_id: str,
+        payload: dict[str, Any],
+        session: Any | None = None,
+    ) -> dict[str, Any]:
+        channel_meta = super().build_channel_meta(client_id=client_id, payload=payload, session=session)
+
+        thread_ts = _first_non_empty(
+            payload.get("thread_ts"),
+            payload.get("ts"),
+            channel_meta.get("thread_ts"),
+        )
+        if thread_ts:
+            channel_meta.setdefault("thread_ts", thread_ts)
+            channel_meta.setdefault("thread_id", thread_ts)
+
+        team_id = _first_non_empty(
+            payload.get("team_id"),
+            channel_meta.get("team_id"),
+        )
+        if team_id:
+            channel_meta.setdefault("team_id", team_id)
+
+        # "channel" no Slack = ID do canal Slack (não confundir com self.channel)
+        slack_channel = _first_non_empty(
+            payload.get("channel"),
+            payload.get("slack_channel"),
+            channel_meta.get("slack_channel"),
+        )
+        if slack_channel:
+            channel_meta.setdefault("slack_channel", slack_channel)
+
+        channel_meta.setdefault("replyable", True)
+        return channel_meta
+
+
+class WhatsAppSubAgent(ChannelSubAgent):
+    """Extrai wa_id, message_id do payload WhatsApp."""
+
+    def normalize_payload(
+        self,
+        *,
+        client_id: str,
+        payload: dict[str, Any],
+        session: Any | None = None,
+    ) -> dict[str, Any]:
+        normalized_payload = super().normalize_payload(client_id=client_id, payload=payload, session=session)
+        if not normalized_payload.get("content_type"):
+            normalized_payload["content_type"] = "text"
+        return normalized_payload
+
+    def build_channel_meta(
+        self,
+        *,
+        client_id: str,
+        payload: dict[str, Any],
+        session: Any | None = None,
+    ) -> dict[str, Any]:
+        channel_meta = super().build_channel_meta(client_id=client_id, payload=payload, session=session)
+
+        wa_id = _first_non_empty(
+            payload.get("wa_id"),
+            channel_meta.get("wa_id"),
+            _client_channel_suffix(client_id),
+        )
+        if wa_id:
+            channel_meta.setdefault("wa_id", wa_id)
+            channel_meta.setdefault("replyable", True)
+
+        message_id = _first_non_empty(
+            payload.get("message_id"),
+            channel_meta.get("message_id"),
+        )
+        if message_id:
+            channel_meta.setdefault("message_id", message_id)
+
+        return channel_meta
+
+
 class IoTSubAgent(ChannelSubAgent):
     def normalize_payload(
         self,
@@ -318,6 +477,12 @@ def create_channel_subagent(
         return TuiSubAgent(daemon=daemon, channel=channel, source_name=source_name, agent_name="tui")
     if channel == "telegram":
         return TelegramSubAgent(daemon=daemon, channel=channel, source_name=source_name, agent_name="telegram")
+    if channel == "discord":
+        return DiscordSubAgent(daemon=daemon, channel=channel, source_name=source_name, agent_name="discord")
+    if channel == "slack":
+        return SlackSubAgent(daemon=daemon, channel=channel, source_name=source_name, agent_name="slack")
+    if channel == "whatsapp":
+        return WhatsAppSubAgent(daemon=daemon, channel=channel, source_name=source_name, agent_name="whatsapp")
     if channel == "iot":
         return IoTSubAgent(daemon=daemon, channel=channel, source_name=source_name, agent_name="iot")
     if channel in {"webchat", "api"}:
@@ -327,9 +492,12 @@ def create_channel_subagent(
 
 __all__ = [
     "ChannelSubAgent",
+    "DiscordSubAgent",
     "IoTSubAgent",
+    "SlackSubAgent",
     "TelegramSubAgent",
     "TuiSubAgent",
     "WebChatSubAgent",
+    "WhatsAppSubAgent",
     "create_channel_subagent",
 ]

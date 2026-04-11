@@ -17,6 +17,11 @@ from rich.table import Table
 from rich.text import Text
 
 
+def _sanitize_text(value: object) -> str:
+    text = str(value or "")
+    return text.encode("utf-8", errors="replace").decode("utf-8")
+
+
 # ── Status icons ──────────────────────────────────────────────────────────
 
 _ICON_RUNNING = "●"
@@ -56,14 +61,15 @@ class ChannelSnapshot:
     def from_dict(cls, d: dict[str, Any]) -> ChannelSnapshot:
         ident = d.get("identity") or {}
         name = ident.get("display_name") or ident.get("username") or ""
+        raw_last_error = d.get("last_error")
         return cls(
-            channel_id=d.get("channel_id", "?"),
-            account_id=d.get("account_id", "default"),
+            channel_id=_sanitize_text(d.get("channel_id", "?")),
+            account_id=_sanitize_text(d.get("account_id", "default")),
             configured=bool(d.get("configured")),
             running=bool(d.get("running")),
             healthy=bool(d.get("healthy")),
-            identity_name=str(name),
-            last_error=d.get("last_error"),
+            identity_name=_sanitize_text(name),
+            last_error=_sanitize_text(raw_last_error) if raw_last_error not in (None, "") else None,
             reconnect_attempts=int(d.get("reconnect_attempts", 0)),
             last_probe_ms=float(d.get("last_probe_ms", 0)),
             meta=dict(d.get("meta") or {}),
@@ -88,7 +94,7 @@ def build_channel_panel(state: ChannelConsoleState) -> Panel:
     if not state.snapshots and not state.fetch_error:
         blocks.append(Text("Nenhum canal registrado.", style="dim"))
     elif state.fetch_error:
-        blocks.append(Text(f"Erro: {state.fetch_error}", style="bold red"))
+        blocks.append(Text(f"Erro: {_sanitize_text(state.fetch_error)}", style="bold red"))
     else:
         table = Table(box=None, expand=True, show_header=True, padding=(0, 1))
         table.add_column("", width=2)  # icon
@@ -130,7 +136,7 @@ def build_channel_panel(state: ChannelConsoleState) -> Panel:
         blocks.append(Text(" · ".join(summary_parts), style="dim"))
 
     if state.last_send_result:
-        blocks.append(Text(state.last_send_result, style="bold"))
+        blocks.append(Text(_sanitize_text(state.last_send_result), style="bold"))
 
     # Help
     blocks.append(Text())
@@ -199,4 +205,4 @@ def refresh_channel_state(
         state.last_fetch_at = time.time()
         state.fetch_error = ""
     except Exception as exc:
-        state.fetch_error = str(exc)[:120]
+        state.fetch_error = _sanitize_text(exc)[:120]

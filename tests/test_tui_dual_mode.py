@@ -322,6 +322,26 @@ class TestLiveWorkbenchAPI:
             with pytest.raises(LiveWorkbenchError, match="indisponivel"):
                 api.dispatch_prompt("s-1", "tui:x", "oi")
 
+    def test_request_json_sanitizes_surrogates_in_body(self):
+        api = self._make_api()
+        captured: dict[str, bytes] = {}
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = b'{"status": "ok"}'
+        fake_resp.status = 200
+        fake_resp.__enter__ = lambda s: s
+        fake_resp.__exit__ = MagicMock(return_value=False)
+
+        def _capture(req, timeout=10):
+            captured["data"] = req.data
+            return fake_resp
+
+        with patch("rlm.cli.tui.live_api.urequest.urlopen", side_effect=_capture):
+            api.cross_channel_send("telegram:42\udcc3", "ok\udcc3")
+
+        payload = json.loads(captured["data"].decode("utf-8"))
+        assert "\udcc3" not in payload["target_client_id"]
+        assert "\udcc3" not in payload["message"]
+
     def test_headers_include_token(self):
         api = self._make_api()
         assert api._headers.get("X-RLM-Token") == "test-tok-123"
@@ -538,6 +558,39 @@ class TestRuntimeWorkbenchLiveMode:
         assert "backlog=4" in rendered
         assert "Memory scope: channel=tui" in rendered
         assert "branch=7" in rendered
+
+    def test_live_mode_sanitizes_surrogates_in_activity_and_channels(self):
+        from rlm.cli.commands.workbench import RuntimeWorkbench
+
+        fake_api = _FakeLiveAPI()
+        fake_api._activity["session"] = {
+            "session_id": "live-sess-1",
+            "client_id": "tui:test",
+            "status": "idle",
+            "metadata": {"last_operator_response": "ok\udcc3"},
+        }
+        fake_api.fetch_channels_status = lambda: {
+            "channels": {
+                "telegram": {
+                    "channel_id": "telegram",
+                    "account_id": "default",
+                    "configured": True,
+                    "running": True,
+                    "healthy": True,
+                    "identity": {"display_name": "bot\udcc3"},
+                }
+            }
+        }
+        console = Console(record=True, width=180)
+        wb = RuntimeWorkbench(None, client_id="tui:test", live_api=fake_api, console=console)
+
+        wb.run(once=True)
+        rendered = console.export_text()
+
+        assert "Resposta mais recente:" in rendered
+        assert "Canais" in rendered
+        assert "ok?" in rendered
+        assert "\udcc3" not in rendered
 
     def test_live_dispatch_calls_api(self):
         from rlm.cli.commands.workbench import RuntimeWorkbench

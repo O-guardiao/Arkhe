@@ -32,15 +32,35 @@ def _metadata_factory() -> dict[str, Any]:
     return {}
 
 
+def _sanitize_text(value: object) -> str:
+    text = str(value or "")
+    return text.encode("utf-8", errors="replace").decode("utf-8")
+
+
+def _sanitize_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    if isinstance(value, dict):
+        return {
+            _sanitize_text(key): _sanitize_payload(item)
+            for key, item in cast(dict[Any, Any], value).items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_payload(item) for item in cast(list[Any], value)]
+    if isinstance(value, tuple):
+        return [_sanitize_payload(item) for item in cast(tuple[Any, ...], value)]
+    return value
+
+
 def _dict_payload(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
-        return {str(key): item for key, item in cast(dict[Any, Any], value).items()}
+        return cast(dict[str, Any], _sanitize_payload(value))
     return {}
 
 
 def _list_payload(value: Any) -> list[Any]:
     if isinstance(value, list):
-        return list(cast(list[Any], value))
+        return cast(list[Any], _sanitize_payload(value))
     return []
 
 
@@ -294,10 +314,12 @@ class RuntimeWorkbench:
         return _dict_payload(getattr(self.session, "metadata", {}))
 
     def _session_last_activity(self) -> str:
-        return str(getattr(self.session, "last_activity_at", "") or getattr(self.session, "last_active", "") or "")
+        return _sanitize_text(
+            getattr(self.session, "last_activity_at", "") or getattr(self.session, "last_active", "") or ""
+        )
 
     def _set_session_last_activity(self, value: Any) -> None:
-        normalized = str(value or "")
+        normalized = _sanitize_text(value)
         setattr(self.session, "last_activity_at", normalized)
         if hasattr(self.session, "last_active"):
             setattr(self.session, "last_active", normalized)
@@ -935,7 +957,7 @@ class RuntimeWorkbench:
         memory_access = _dict_payload(daemon.get("memory_access"))
         memory_scope = _dict_payload(memory_access.get("last_scope"))
         text = Text()
-        text.append(self.last_notice, style="bold")
+        text.append(_sanitize_text(self.last_notice), style="bold")
         text.append("\n")
         text.append(f"Pause reason: {controls.get('pause_reason') or '-'}  ")
         text.append(f"Operator note: {controls.get('last_operator_note') or '-'}\n")
