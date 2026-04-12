@@ -53,6 +53,7 @@ from rlm.plugins import PluginLoader
 from rlm.core.comms.message_bus import get_message_bus
 from rlm.core.comms.internal_api import resolve_internal_api_base_url
 from rlm.core.comms.channel_status import ChannelStatusRegistry
+from rlm.core.comms.dedup import MessageDedup
 from rlm.gateway.message_envelope import InboundMessage
 from rlm.daemon import RecursionDaemon  # noqa: layer — composition root
 from rlm.runtime import build_runtime_guard_from_env
@@ -64,6 +65,11 @@ from rlm.core.skillkit.skill_telemetry import get_skill_telemetry
 # Os try/except abaixo foram removidos; use `from rlm.gateway.transport_router import ...`
 
 gateway_log = get_logger("api")
+
+# Dedup defensivo no webhook — impede que o MESMO payload (mesmo client_id +
+# texto + janela temporal) seja processado mais de uma vez.
+# TTL=120s cobre timeout do bridge + backoff.
+_webhook_dedup = MessageDedup(ttl_s=120.0, max_entries=5_000)
 
 _INTERNAL_AUTH_ENV_NAMES = ("RLM_INTERNAL_TOKEN", "RLM_WS_TOKEN", "RLM_API_TOKEN")
 _ADMIN_AUTH_ENV_NAMES = ("RLM_ADMIN_TOKEN", "RLM_API_TOKEN", "RLM_WS_TOKEN", "RLM_INTERNAL_TOKEN")
@@ -559,6 +565,21 @@ async def receive_webhook(client_id: str, request: Request):
         payload = await request.json()
     except Exception:
         raise HTTPException(400, "Invalid JSON payload")
+
+    # ── Dedup defensivo ───────────────────────────────────────────────────
+    # Gera msg_id determinístico a partir de client_id + texto + chat_id.
+    # Se idêntico payload chegar de múltiplos processos em <120s, descarta.
+    import hashlib as _hl
+    _text = str(payload.get("text", ""))[:200]
+    _chat = str(payload.get("chat_id", ""))
+    _dedup_key = f"{client_id}:{_chat}:{_hl.md5(_text.encode()).hexdigest()}"
+    if _webhook_dedup.is_duplicate(_dedup_key):
+        gateway_log.warn(
+            "Webhook duplicado descartado (dedup)",
+            client_id=client_id,
+            dedup_key=_dedup_key,
+        )
+        return {"response": "", "already_replied": True, "deduplicated": True}
 
     sm: SessionManager = request.app.state.session_manager
     services = RuntimeDispatchServices(

@@ -35,6 +35,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from rlm.core.comms.internal_api import resolve_internal_api_base_url
+from rlm.core.comms.dedup import MessageDedup
 from rlm.logging import get_runtime_logger
 from rlm.gateway.backoff import GATEWAY_RECONNECT, compute_backoff, sleep_sync
 from rlm.gateway.heartbeat import SyncHeartbeat
@@ -262,6 +263,20 @@ class TelegramGateway:
             window_s=self.config.rate_window_s,
         )
 
+        # Dedup de update_id — impede reprocessamento mesmo com múltiplos
+        # processos ou reconexão que re-entregue updates já vistos.
+        # TTL=600s cobre a janela de long-polling + backoff.
+        self._dedup = MessageDedup(ttl_s=600.0, max_entries=5_000)
+
+        # Lock file para single-poller enforcement
+        import hashlib
+        token_hash = hashlib.sha256(self.token.encode()).hexdigest()[:12]
+        self._lock_path = os.path.join(
+            os.environ.get("RLM_DATA_DIR", "."),
+            f".tg_gateway_{token_hash}.lock",
+        )
+        self._lock_fd: Any = None
+
         # Estado do polling
         self._offset: int | None = None
         self._running = False
@@ -360,6 +375,12 @@ class TelegramGateway:
 
     def _handle_update(self, update: dict):
         """Processa um update do Telegram."""
+        # ── Dedup: descartar update_id já processado ──────────────────────
+        update_id = update.get("update_id")
+        if update_id is not None and self._dedup.is_duplicate(str(update_id)):
+            logger.debug("Update duplicado descartado", update_id=update_id)
+            return
+
         message = update.get("message", {})
         if not message:
             return
@@ -468,6 +489,57 @@ class TelegramGateway:
 
         return len(updates)
 
+    def _acquire_poll_lock(self) -> bool:
+        """
+        Tenta adquirir lock exclusivo via PID file.
+        Retorna True se o lock foi adquirido (somos o único poller).
+        Em Windows usa msvcrt.locking; em POSIX usa fcntl.flock.
+        """
+        try:
+            self._lock_fd = open(self._lock_path, "w")
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(self._lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Grava PID para diagnóstico
+            self._lock_fd.write(str(os.getpid()))
+            self._lock_fd.flush()
+            return True
+        except (IOError, OSError):
+            logger.error(
+                "Outro processo já está fazendo polling deste bot. "
+                "Mate processos antigos ou remova o lock file.",
+                lock_path=self._lock_path,
+            )
+            if self._lock_fd:
+                self._lock_fd.close()
+                self._lock_fd = None
+            return False
+
+    def _release_poll_lock(self) -> None:
+        """Libera lock file."""
+        if self._lock_fd is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    try:
+                        msvcrt.locking(self._lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+                    except (IOError, OSError):
+                        pass
+                else:
+                    import fcntl
+                    fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+                self._lock_fd.close()
+            except (IOError, OSError):
+                pass
+            self._lock_fd = None
+        try:
+            os.remove(self._lock_path)
+        except (IOError, OSError):
+            pass
+
     def run(self, until_stopped: bool = True):
         """
         Inicia o loop de polling.
@@ -475,6 +547,13 @@ class TelegramGateway:
         Args:
             until_stopped: Se True, roda indefinidamente até Ctrl+C ou stop().
         """
+        # ── Single-poller guard ───────────────────────────────────────────
+        if not self._acquire_poll_lock():
+            raise RuntimeError(
+                f"Outro processo já controla este bot (lock: {self._lock_path}). "
+                "Mate processos anteriores antes de iniciar."
+            )
+
         self._running = True
         self._stats["start_time"] = time.time()
         self._error_count = 0
@@ -482,6 +561,7 @@ class TelegramGateway:
         # Verificar token
         me = _tg_request(self.token, "getMe")
         if not me.get("ok"):
+            self._release_poll_lock()
             raise RuntimeError(f"Token inválido ou sem conexão: {me.get('description')}")
 
         bot_name = me["result"].get("username", "?")
@@ -491,6 +571,11 @@ class TelegramGateway:
             api_url=self.config.api_base_url,
         )
         logger.info("Rate limit", max_requests_per_min=self.config.max_requests_per_min)
+
+        # ── Flush stale updates ───────────────────────────────────────────
+        # Descarta updates pendentes acumulados enquanto o bot esteve offline.
+        # Isso evita reprocessamento de mensagens antigas no cold start.
+        self._flush_stale_updates()
 
         # Graceful shutdown (apenas quando rodando standalone na main thread)
         if until_stopped:
@@ -530,6 +615,8 @@ class TelegramGateway:
                 sleep_sync(delay)
 
         self._running = False
+        self._release_poll_lock()
+        self._dedup.dispose()
         logger.info("Gateway encerrado", messages_processed=self._stats["messages_processed"])
 
     def run_in_thread(self) -> threading.Thread:
@@ -541,6 +628,41 @@ class TelegramGateway:
     def stop(self):
         """Para o loop de polling."""
         self._running = False
+
+    def _flush_stale_updates(self) -> None:
+        """
+        Descarta todos os updates pendentes no cold start.
+
+        Chama getUpdates com offset=-1 para pegar o último update e
+        depois seta offset para update_id+1, descartando todo o backlog.
+        Isso impede que mensagens enviadas durante downtime sejam
+        processadas em massa quando o bot reinicia.
+        """
+        try:
+            # Pega o último update pendente (se houver)
+            result = _tg_request(self.token, "getUpdates", {
+                "timeout": 0,
+                "offset": -1,
+                "limit": 1,
+            }, timeout=10)
+            if result.get("ok") and result.get("result"):
+                last_update_id = result["result"][-1]["update_id"]
+                self._offset = last_update_id + 1
+                # Confirma o descarte fazendo getUpdates com o novo offset
+                _tg_request(self.token, "getUpdates", {
+                    "timeout": 0,
+                    "offset": self._offset,
+                    "limit": 1,
+                }, timeout=10)
+                logger.info(
+                    "Stale updates descartados no cold start",
+                    last_discarded_update_id=last_update_id,
+                    new_offset=self._offset,
+                )
+            else:
+                logger.info("Nenhum update pendente no cold start")
+        except Exception as exc:
+            logger.warn("Falha ao flush stale updates (não fatal)", error=str(exc))
 
 
 # ---------------------------------------------------------------------------
