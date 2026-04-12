@@ -102,13 +102,11 @@ class MessageBus:
         para que o MessageBus conheça o envelope e possa correlacionar
         a resposta depois.
         """
-        # Import tardio para evitar circular (message_envelope em gateway/)
-        from rlm.gateway.message_envelope import InboundMessage
-
-        if isinstance(inbound_msg, InboundMessage):
-            envelope = Envelope.from_inbound_message(inbound_msg)
-        elif isinstance(inbound_msg, Envelope):
+        if isinstance(inbound_msg, Envelope):
             envelope = inbound_msg
+        elif hasattr(inbound_msg, "msg_id") and hasattr(inbound_msg, "channel") and hasattr(inbound_msg, "content_type"):
+            # Duck-type check para InboundMessage (gateway layer) — evita import cross-layer.
+            envelope = Envelope.from_inbound_message(inbound_msg)
         else:
             raise TypeError(
                 f"MessageBus.ingest espera InboundMessage ou Envelope, "

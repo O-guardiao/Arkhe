@@ -32,3 +32,6 @@ jobs:
 
       - name: Run ty type checking
         run: ty check --exit-zero --output-format=concise
+
+      - name: Check layer boundaries
+        run: python scripts/check_layer_imports.py

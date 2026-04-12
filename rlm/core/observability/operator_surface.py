@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from collections import Counter
 import threading
 import time
@@ -8,6 +8,18 @@ from pathlib import Path
 from typing import Any
 
 from rlm.plugins.channel_registry import sanitize_text_payload
+from rlm.runtime.contracts import (
+    RuntimeDaemonChannelRuntime,
+    RuntimeDaemonMemoryAccess,
+    RuntimeDaemonMemoryScope,
+    RuntimeDaemonProjection,
+    RuntimeProjection,
+    RuntimeRecursionBranchView,
+    RuntimeRecursionControls,
+    RuntimeRecursionEvent,
+    RuntimeRecursionProjection,
+    RuntimeRecursionSummary,
+)
 
 
 def _tail(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -86,7 +98,7 @@ def _normalize_branch_final_status(status: str, metadata: dict[str, Any], error_
     return None
 
 
-def _build_recursion_controls(controls: dict[str, Any]) -> dict[str, Any]:
+def _build_recursion_controls(controls: dict[str, Any]) -> RuntimeRecursionControls:
     branch_priorities = _as_dict(controls.get("branch_priorities"))
     normalized_priorities = {
         str(key): int(value)
@@ -94,24 +106,26 @@ def _build_recursion_controls(controls: dict[str, Any]) -> dict[str, Any]:
         if _as_int(value) is not None
         for value in [_as_int(value)]
     }
-    return {
-        "paused": bool(controls.get("paused", False)),
-        "pause_reason": str(controls.get("pause_reason") or ""),
-        "focused_branch_id": _as_int(controls.get("focused_branch_id")),
-        "fixed_winner_branch_id": _as_int(controls.get("fixed_winner_branch_id")),
-        "branch_priorities": normalized_priorities,
-        "last_checkpoint_path": str(controls.get("last_checkpoint_path") or "-"),
-        "last_operator_note": str(controls.get("last_operator_note") or ""),
-    }
+    return RuntimeRecursionControls(
+        paused=bool(controls.get("paused", False)),
+        pause_reason=str(controls.get("pause_reason") or ""),
+        focused_branch_id=_as_int(controls.get("focused_branch_id")),
+        fixed_winner_branch_id=_as_int(controls.get("fixed_winner_branch_id")),
+        branch_priorities=normalized_priorities,
+        last_checkpoint_path=str(controls.get("last_checkpoint_path") or "-"),
+        last_operator_note=str(controls.get("last_operator_note") or ""),
+    )
 
 
-def _build_recursion_branch_view(branch: dict[str, Any], controls: dict[str, Any]) -> dict[str, Any]:
+def _build_recursion_branch_view(
+    branch: dict[str, Any], controls: RuntimeRecursionControls
+) -> RuntimeRecursionBranchView:
     raw = dict(branch)
     metadata = _as_dict(raw.get("metadata"))
     branch_id = _as_int(raw.get("branch_id"))
-    focused_branch_id = _as_int(controls.get("focused_branch_id"))
-    fixed_winner_branch_id = _as_int(controls.get("fixed_winner_branch_id"))
-    branch_priorities = _as_dict(controls.get("branch_priorities"))
+    focused_branch_id = controls.focused_branch_id
+    fixed_winner_branch_id = controls.fixed_winner_branch_id
+    branch_priorities = dict(controls.branch_priorities)
     parent_branch_id = _as_int(raw.get("parent_branch_id"))
     if parent_branch_id is None:
         parent_branch_id = _as_int(metadata.get("parent_branch_id"))
@@ -133,73 +147,74 @@ def _build_recursion_branch_view(branch: dict[str, Any], controls: dict[str, Any
         operator_priority = _as_int(branch_priorities.get(str(branch_id)))
     status_text = str(raw.get("status") or "")
 
-    view = {
-        "branch_id": branch_id,
-        "task_id": _as_int(raw.get("task_id")),
-        "parent_task_id": _as_int(raw.get("parent_task_id")),
-        "parent_branch_id": parent_branch_id,
-        "depth": depth,
-        "role": raw.get("role") or metadata.get("role"),
-        "mode": str(raw.get("mode") or ""),
-        "title": str(raw.get("title") or ""),
-        "status": status_text,
-        "final_status": _normalize_branch_final_status(status_text, metadata, error_message),
-        "duration_ms": duration_ms,
-        "error_type": raw.get("error_type") or metadata.get("error_type"),
-        "error_message": error_message,
-        "operator_focused": bool(metadata.get("operator_focus")) or (branch_id is not None and branch_id == focused_branch_id),
-        "operator_fixed_winner": bool(metadata.get("operator_fixed_winner")) or (branch_id is not None and branch_id == fixed_winner_branch_id),
-        "operator_priority": operator_priority,
-        "created_at": raw.get("created_at"),
-        "updated_at": raw.get("updated_at"),
-        "metadata": metadata,
-    }
-    return view
+    return RuntimeRecursionBranchView(
+        branch_id=branch_id,
+        task_id=_as_int(raw.get("task_id")),
+        parent_task_id=_as_int(raw.get("parent_task_id")),
+        parent_branch_id=parent_branch_id,
+        depth=depth,
+        role=raw.get("role") or metadata.get("role"),
+        mode=str(raw.get("mode") or ""),
+        title=str(raw.get("title") or ""),
+        status=status_text,
+        final_status=_normalize_branch_final_status(status_text, metadata, error_message),
+        duration_ms=duration_ms,
+        error_type=raw.get("error_type") or metadata.get("error_type"),
+        error_message=error_message,
+        operator_focused=bool(metadata.get("operator_focus"))
+        or (branch_id is not None and branch_id == focused_branch_id),
+        operator_fixed_winner=bool(metadata.get("operator_fixed_winner"))
+        or (branch_id is not None and branch_id == fixed_winner_branch_id),
+        operator_priority=operator_priority,
+        created_at=raw.get("created_at"),
+        updated_at=raw.get("updated_at"),
+        metadata=metadata,
+    )
 
 
-def _build_recursion_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
+def _build_recursion_events(items: list[dict[str, Any]]) -> list[RuntimeRecursionEvent]:
+    normalized: list[RuntimeRecursionEvent] = []
     for item in items:
         raw = dict(item)
         normalized.append(
-            {
-                "operation": str(raw.get("operation") or "unknown"),
-                "topic": str(raw.get("topic") or ""),
-                "sender_id": _as_int(raw.get("sender_id")),
-                "receiver_id": _as_int(raw.get("receiver_id")),
-                "payload_preview": str(raw.get("payload_preview") or ""),
-                "metadata": _as_dict(raw.get("metadata")),
-                "timestamp": str(raw.get("timestamp") or ""),
-            }
+            RuntimeRecursionEvent(
+                operation=str(raw.get("operation") or "unknown"),
+                topic=str(raw.get("topic") or ""),
+                sender_id=_as_int(raw.get("sender_id")),
+                receiver_id=_as_int(raw.get("receiver_id")),
+                payload_preview=str(raw.get("payload_preview") or ""),
+                metadata=_as_dict(raw.get("metadata")),
+                timestamp=str(raw.get("timestamp") or ""),
+            )
         )
     return normalized
 
 
 def _build_recursion_summary(
     summary: dict[str, Any],
-    controls: dict[str, Any],
-    branches: list[dict[str, Any]],
-) -> dict[str, Any]:
-    status_counts = Counter(str(branch.get("status") or "unknown") for branch in branches)
+    controls: RuntimeRecursionControls,
+    branches: list[RuntimeRecursionBranchView],
+) -> RuntimeRecursionSummary:
+    status_counts = Counter(str(branch.status or "unknown") for branch in branches)
     winner_branch_id = _as_int(summary.get("winner_branch_id"))
-    fixed_winner_branch_id = _as_int(controls.get("fixed_winner_branch_id"))
+    fixed_winner_branch_id = controls.fixed_winner_branch_id
     if fixed_winner_branch_id is not None:
         winner_branch_id = fixed_winner_branch_id
-    return {
-        "winner_branch_id": winner_branch_id,
-        "cancelled_count": int(_as_int(summary.get("cancelled_count")) or 0),
-        "failed_count": int(_as_int(summary.get("failed_count")) or 0),
-        "total_tasks": int(_as_int(summary.get("total_tasks")) or len(branches)),
-        "branch_count": len(branches),
-        "branch_status_counts": dict(status_counts),
-        "strategy": _as_dict(summary.get("strategy")),
-        "stop_evaluation": _as_dict(summary.get("stop_evaluation")),
-        "focused_branch_id": _as_int(controls.get("focused_branch_id")),
-        "fixed_winner_branch_id": fixed_winner_branch_id,
-    }
+    return RuntimeRecursionSummary(
+        winner_branch_id=winner_branch_id,
+        cancelled_count=int(_as_int(summary.get("cancelled_count")) or 0),
+        failed_count=int(_as_int(summary.get("failed_count")) or 0),
+        total_tasks=int(_as_int(summary.get("total_tasks")) or len(branches)),
+        branch_count=len(branches),
+        branch_status_counts=dict(status_counts),
+        strategy=_as_dict(summary.get("strategy")),
+        stop_evaluation=_as_dict(summary.get("stop_evaluation")),
+        focused_branch_id=controls.focused_branch_id,
+        fixed_winner_branch_id=fixed_winner_branch_id,
+    )
 
 
-def _build_recursion_projection(runtime: dict[str, Any]) -> dict[str, Any]:
+def _build_recursion_projection(runtime: dict[str, Any]) -> RuntimeRecursionProjection:
     coordination = _as_dict(runtime.get("coordination"))
     controls = _build_recursion_controls(_as_dict(runtime.get("controls")))
     branch_tasks = [
@@ -207,33 +222,35 @@ def _build_recursion_projection(runtime: dict[str, Any]) -> dict[str, Any]:
         for item in _as_list(coordination.get("branch_tasks"))
         if isinstance(item, dict)
     ]
-    return {
-        "attached": bool(coordination.get("attached", False)),
-        "active_branch_id": _as_int(coordination.get("branch_id")),
-        "controls": controls,
-        "summary": _build_recursion_summary(
+    return RuntimeRecursionProjection(
+        attached=bool(coordination.get("attached", False)),
+        active_branch_id=_as_int(coordination.get("branch_id")),
+        controls=controls,
+        summary=_build_recursion_summary(
             _as_dict(coordination.get("latest_parallel_summary")),
             controls,
             branch_tasks,
         ),
-        "branches": branch_tasks,
-        "events": _build_recursion_events(_as_list(coordination.get("events"))),
-        "latest_stats": _as_dict(coordination.get("latest_stats")),
-    }
+        branches=branch_tasks,
+        events=_build_recursion_events(_as_list(coordination.get("events"))),
+        latest_stats=_as_dict(coordination.get("latest_stats")),
+    )
 
 
-def _build_daemon_projection(session: Any, session_manager: Any | None = None) -> dict[str, Any]:
+def _build_daemon_projection(
+    session: Any, session_manager: Any | None = None
+) -> RuntimeDaemonProjection | None:
     daemon = getattr(session_manager, "_recursion_daemon", None)
     if daemon is None:
         rlm_core = getattr(getattr(session, "rlm_instance", None), "_rlm", None)
         daemon = getattr(rlm_core, "_recursion_daemon", None)
     snapshot = getattr(daemon, "snapshot", None)
     if not callable(snapshot):
-        return {}
+        return None
 
     raw_snapshot = snapshot()
     if not isinstance(raw_snapshot, dict):
-        return {}
+        return None
 
     attached_channels = {
         str(key): int(value)
@@ -282,35 +299,35 @@ def _build_daemon_projection(session: Any, session_manager: Any | None = None) -
         for value in [_as_int(value)]
     }
     raw_last_scope = _as_dict(raw_memory_access.get("last_scope"))
-    memory_access["last_scope"] = {
-        "session_id": str(raw_last_scope.get("session_id") or ""),
-        "channel": str(raw_last_scope.get("channel") or ""),
-        "actor": str(raw_last_scope.get("actor") or ""),
-        "active_channels": [
+    memory_scope = RuntimeDaemonMemoryScope(
+        session_id=str(raw_last_scope.get("session_id") or ""),
+        channel=str(raw_last_scope.get("channel") or ""),
+        actor=str(raw_last_scope.get("actor") or ""),
+        active_channels=[
             str(item)
             for item in _as_list(raw_last_scope.get("active_channels"))
             if str(item).strip()
         ],
-        "workspace_scope": str(raw_last_scope.get("workspace_scope") or ""),
-        "agent_depth": _as_int(raw_last_scope.get("agent_depth")),
-        "branch_id": _as_int(raw_last_scope.get("branch_id")),
-        "agent_role": str(raw_last_scope.get("agent_role") or ""),
-        "parent_session_id": str(raw_last_scope.get("parent_session_id") or ""),
-    }
-    return {
-        "name": str(raw_snapshot.get("name") or "main"),
-        "running": bool(raw_snapshot.get("running", False)),
-        "ready": bool(raw_snapshot.get("ready", False)),
-        "draining": bool(raw_snapshot.get("draining", False)),
-        "inflight_dispatches": int(_as_int(raw_snapshot.get("inflight_dispatches")) or 0),
-        "active_sessions": int(_as_int(raw_snapshot.get("active_sessions")) or 0),
-        "attached_channels": attached_channels,
-        "stats": stats,
-        "warm_runtime": warm_runtime,
-        "outbox": outbox,
-        "channel_runtime": channel_runtime,
-        "memory_access": memory_access,
-    }
+        workspace_scope=str(raw_last_scope.get("workspace_scope") or ""),
+        agent_depth=_as_int(raw_last_scope.get("agent_depth")),
+        branch_id=_as_int(raw_last_scope.get("branch_id")),
+        agent_role=str(raw_last_scope.get("agent_role") or ""),
+        parent_session_id=str(raw_last_scope.get("parent_session_id") or ""),
+    )
+    return RuntimeDaemonProjection(
+        name=str(raw_snapshot.get("name") or "main"),
+        running=bool(raw_snapshot.get("running", False)),
+        ready=bool(raw_snapshot.get("ready", False)),
+        draining=bool(raw_snapshot.get("draining", False)),
+        inflight_dispatches=int(_as_int(raw_snapshot.get("inflight_dispatches")) or 0),
+        active_sessions=int(_as_int(raw_snapshot.get("active_sessions")) or 0),
+        attached_channels=attached_channels,
+        stats=stats,
+        warm_runtime=warm_runtime,
+        outbox=outbox,
+        channel_runtime=RuntimeDaemonChannelRuntime(**channel_runtime),
+        memory_access=RuntimeDaemonMemoryAccess(counts=memory_access, last_scope=memory_scope),
+    )
 
 
 def build_runtime_snapshot(session: Any, session_manager: Any | None = None) -> dict[str, Any] | None:
@@ -319,13 +336,13 @@ def build_runtime_snapshot(session: Any, session_manager: Any | None = None) -> 
     snapshot = getattr(env, "get_runtime_state_snapshot", None)
     if not callable(snapshot):
         if daemon_projection:
-            return {"daemon": daemon_projection}
+            return {"daemon": daemon_projection.to_dict()}
         return None
 
     runtime_raw = snapshot()
     if not isinstance(runtime_raw, dict):
         if daemon_projection:
-            return {"daemon": daemon_projection}
+            return {"daemon": daemon_projection.to_dict()}
         return None
 
     runtime = dict(runtime_raw)
@@ -335,6 +352,7 @@ def build_runtime_snapshot(session: Any, session_manager: Any | None = None) -> 
     timeline = _as_dict(runtime.get("timeline"))
     coordination = _as_dict(runtime.get("coordination"))
     controls = _as_dict(runtime.get("controls"))
+    strategy = _as_dict(runtime.get("strategy"))
 
     recursive["messages"] = _tail(list(recursive.get("messages") or []), 40)
     recursive["commands"] = _tail(list(recursive.get("commands") or []), 20)
@@ -350,10 +368,19 @@ def build_runtime_snapshot(session: Any, session_manager: Any | None = None) -> 
     runtime["timeline"] = timeline
     runtime["coordination"] = coordination
     runtime["controls"] = controls
-    runtime["recursion"] = _build_recursion_projection(runtime)
-    if daemon_projection:
-        runtime["daemon"] = daemon_projection
-    return runtime
+
+    projection = RuntimeProjection(
+        tasks=tasks,
+        attachments=attachments,
+        timeline=timeline,
+        recursive_session=recursive,
+        coordination=coordination,
+        controls=controls,
+        strategy=strategy,
+        recursion=_build_recursion_projection(runtime),
+        daemon=daemon_projection,
+    )
+    return projection.to_dict()
 
 
 def build_activity_payload(session_manager: Any, session: Any, *, event_limit: int = 40) -> dict[str, Any]:
@@ -634,6 +661,7 @@ def dispatch_operator_prompt(
     origin: str = "operator",
     runtime_services: Any | None = None,
     client_id: str | None = None,
+    dispatch_fn: Callable[..., Any] | None = None,
 ) -> str:
     prompt = text.strip()
     if not prompt:
@@ -694,9 +722,10 @@ def dispatch_operator_prompt(
         session_manager.update_session(target_session)
 
     if runtime_services is not None:
-        def _worker() -> None:
-            from rlm.server.runtime_pipeline import dispatch_runtime_prompt_sync
+        if dispatch_fn is None:
+            raise TypeError("dispatch_fn é obrigatório quando runtime_services é fornecido")
 
+        def _worker() -> None:
             completion_notified = False
 
             def _notify(result: Any, finished_session: Any | None = None) -> None:
@@ -705,7 +734,7 @@ def dispatch_operator_prompt(
                 _on_complete(result, finished_session)
 
             try:
-                dispatch_runtime_prompt_sync(
+                dispatch_fn(
                     runtime_services,
                     client_id or getattr(session, "client_id", ""),
                     {

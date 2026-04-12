@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkhe.dev/schemas/runtime-projection.v1.json",
+  "title": "Runtime Projection",
+  "description": "Projecao operacional canonica do runtime recursivo Python para CLI, TUI, dashboard e operator surfaces.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/FullRuntimeProjection"
+    },
+    {
+      "$ref": "#/$defs/DaemonOnlyProjection"
+    }
+  ],
+  "$defs": {
+    "IntegerMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "default": {}
+    },
+    "RecursionControls": {
+      "type": "object",
+      "required": [
+        "paused",
+        "pause_reason",
+        "focused_branch_id",
+        "fixed_winner_branch_id",
+        "branch_priorities",
+        "last_checkpoint_path",
+        "last_operator_note"
+      ],
+      "properties": {
+        "paused": { "type": "boolean" },
+        "pause_reason": { "type": "string" },
+        "focused_branch_id": { "type": ["integer", "null"] },
+        "fixed_winner_branch_id": { "type": ["integer", "null"] },
+        "branch_priorities": { "$ref": "#/$defs/IntegerMap" },
+        "last_checkpoint_path": { "type": "string" },
+        "last_operator_note": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "RecursionBranchView": {
+      "type": "object",
+      "required": [
+        "branch_id",
+        "task_id",
+        "parent_task_id",
+        "parent_branch_id",
+        "depth",
+        "role",
+        "mode",
+        "title",
+        "status",
+        "final_status",
+        "duration_ms",
+        "error_type",
+        "error_message",
+        "operator_focused",
+        "operator_fixed_winner",
+        "operator_priority",
+        "created_at",
+        "updated_at",
+        "metadata"
+      ],
+      "properties": {
+        "branch_id": { "type": ["integer", "null"] },
+        "task_id": { "type": ["integer", "null"] },
+        "parent_task_id": { "type": ["integer", "null"] },
+        "parent_branch_id": { "type": ["integer", "null"] },
+        "depth": { "type": ["integer", "null"] },
+        "role": { "type": ["string", "null"] },
+        "mode": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string" },
+        "final_status": { "type": ["string", "null"] },
+        "duration_ms": { "type": ["number", "null"] },
+        "error_type": { "type": ["string", "null"] },
+        "error_message": { "type": ["string", "null"] },
+        "operator_focused": { "type": "boolean" },
+        "operator_fixed_winner": { "type": "boolean" },
+        "operator_priority": { "type": ["integer", "null"] },
+        "created_at": {},
+        "updated_at": {},
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "RecursionEvent": {
+      "type": "object",
+      "required": [
+        "operation",
+        "topic",
+        "sender_id",
+        "receiver_id",
+        "payload_preview",
+        "metadata",
+        "timestamp"
+      ],
+      "properties": {
+        "operation": { "type": "string" },
+        "topic": { "type": "string" },
+        "sender_id": { "type": ["integer", "null"] },
+        "receiver_id": { "type": ["integer", "null"] },
+        "payload_preview": { "type": "string" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "timestamp": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "RecursionSummary": {
+      "type": "object",
+      "required": [
+        "winner_branch_id",
+        "cancelled_count",
+        "failed_count",
+        "total_tasks",
+        "branch_count",
+        "branch_status_counts",
+        "strategy",
+        "stop_evaluation",
+        "focused_branch_id",
+        "fixed_winner_branch_id"
+      ],
+      "properties": {
+        "winner_branch_id": { "type": ["integer", "null"] },
+        "cancelled_count": { "type": "integer" },
+        "failed_count": { "type": "integer" },
+        "total_tasks": { "type": "integer" },
+        "branch_count": { "type": "integer" },
+        "branch_status_counts": { "$ref": "#/$defs/IntegerMap" },
+        "strategy": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "stop_evaluation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "focused_branch_id": { "type": ["integer", "null"] },
+        "fixed_winner_branch_id": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "RecursionProjection": {
+      "type": "object",
+      "required": [
+        "attached",
+        "active_branch_id",
+        "controls",
+        "summary",
+        "branches",
+        "events",
+        "latest_stats"
+      ],
+      "properties": {
+        "attached": { "type": "boolean" },
+        "active_branch_id": { "type": ["integer", "null"] },
+        "controls": { "$ref": "#/$defs/RecursionControls" },
+        "summary": { "$ref": "#/$defs/RecursionSummary" },
+        "branches": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RecursionBranchView" }
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RecursionEvent" }
+        },
+        "latest_stats": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "DaemonMemoryScope": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "channel",
+        "actor",
+        "active_channels",
+        "workspace_scope",
+        "agent_depth",
+        "branch_id",
+        "agent_role",
+        "parent_session_id"
+      ],
+      "properties": {
+        "session_id": { "type": "string" },
+        "channel": { "type": "string" },
+        "actor": { "type": "string" },
+        "active_channels": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "workspace_scope": { "type": "string" },
+        "agent_depth": { "type": ["integer", "null"] },
+        "branch_id": { "type": ["integer", "null"] },
+        "agent_role": { "type": "string" },
+        "parent_session_id": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "DaemonMemoryAccess": {
+      "type": "object",
+      "required": ["last_scope"],
+      "properties": {
+        "last_scope": { "$ref": "#/$defs/DaemonMemoryScope" }
+      },
+      "additionalProperties": {
+        "type": "integer"
+      }
+    },
+    "DaemonChannelRuntime": {
+      "type": "object",
+      "required": ["total", "running", "healthy", "registered_channels"],
+      "properties": {
+        "total": { "type": "integer" },
+        "running": { "type": "integer" },
+        "healthy": { "type": "integer" },
+        "registered_channels": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DaemonProjection": {
+      "type": "object",
+      "required": [
+        "name",
+        "running",
+        "ready",
+        "draining",
+        "inflight_dispatches",
+        "active_sessions",
+        "attached_channels",
+        "stats",
+        "warm_runtime",
+        "outbox",
+        "channel_runtime",
+        "memory_access"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "running": { "type": "boolean" },
+        "ready": { "type": "boolean" },
+        "draining": { "type": "boolean" },
+        "inflight_dispatches": { "type": "integer" },
+        "active_sessions": { "type": "integer" },
+        "attached_channels": { "$ref": "#/$defs/IntegerMap" },
+        "stats": { "$ref": "#/$defs/IntegerMap" },
+        "warm_runtime": { "$ref": "#/$defs/IntegerMap" },
+        "outbox": {
+          "type": "object",
+          "required": ["worker_alive"],
+          "properties": {
+            "worker_alive": { "type": "boolean" }
+          },
+          "additionalProperties": {
+            "type": ["integer", "boolean"]
+          }
+        },
+        "channel_runtime": { "$ref": "#/$defs/DaemonChannelRuntime" },
+        "memory_access": { "$ref": "#/$defs/DaemonMemoryAccess" }
+      },
+      "additionalProperties": false
+    },
+    "FullRuntimeProjection": {
+      "type": "object",
+      "required": [
+        "tasks",
+        "attachments",
+        "timeline",
+        "recursive_session",
+        "coordination",
+        "controls",
+        "strategy",
+        "recursion"
+      ],
+      "properties": {
+        "tasks": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "attachments": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "timeline": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "recursive_session": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "coordination": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "controls": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "strategy": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "recursion": { "$ref": "#/$defs/RecursionProjection" },
+        "daemon": { "$ref": "#/$defs/DaemonProjection" }
+      },
+      "additionalProperties": false,
+      "examples": [
+        {
+          "tasks": {"current": {"title": "Analisar sessão", "status": "in-progress", "note": "runtime ativo"}, "items": []},
+          "attachments": {"items": []},
+          "timeline": {"entries": []},
+          "recursive_session": {"state": {}, "messages": [], "commands": [], "events": []},
+          "coordination": {"events": [], "branch_tasks": [], "latest_parallel_summary": {}},
+          "controls": {"paused": false, "pause_reason": "", "focused_branch_id": null, "fixed_winner_branch_id": null, "branch_priorities": {}, "last_checkpoint_path": null, "last_operator_note": ""},
+          "strategy": {"active_recursive_strategy": null},
+          "recursion": {
+            "attached": false,
+            "active_branch_id": null,
+            "controls": {
+              "paused": false,
+              "pause_reason": "",
+              "focused_branch_id": null,
+              "fixed_winner_branch_id": null,
+              "branch_priorities": {},
+              "last_checkpoint_path": "-",
+              "last_operator_note": ""
+            },
+            "summary": {
+              "winner_branch_id": null,
+              "cancelled_count": 0,
+              "failed_count": 0,
+              "total_tasks": 0,
+              "branch_count": 0,
+              "branch_status_counts": {},
+              "strategy": {},
+              "stop_evaluation": {},
+              "focused_branch_id": null,
+              "fixed_winner_branch_id": null
+            },
+            "branches": [],
+            "events": [],
+            "latest_stats": {}
+          }
+        }
+      ]
+    },
+    "DaemonOnlyProjection": {
+      "type": "object",
+      "required": ["daemon"],
+      "properties": {
+        "daemon": { "$ref": "#/$defs/DaemonProjection" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

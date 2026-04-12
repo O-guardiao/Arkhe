@@ -26,6 +26,7 @@ from rlm.cli.tui.channel_console import (
     refresh_channel_state,
 )
 from rlm.core.observability.operator_surface import apply_operator_command, build_activity_payload, dispatch_operator_prompt
+from rlm.server.runtime_pipeline import dispatch_runtime_prompt_sync
 
 
 def _metadata_factory() -> dict[str, Any]:
@@ -401,6 +402,7 @@ class RuntimeWorkbench:
                 origin="tui",
                 runtime_services=runtime.dispatch_services,
                 client_id=self.client_id,
+                dispatch_fn=dispatch_runtime_prompt_sync,
             )
         self.last_notice = "Turno enviado. Observando sessao viva ate a conclusao."
         self.watch_until_idle()

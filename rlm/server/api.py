@@ -54,7 +54,7 @@ from rlm.core.comms.message_bus import get_message_bus
 from rlm.core.comms.internal_api import resolve_internal_api_base_url
 from rlm.core.comms.channel_status import ChannelStatusRegistry
 from rlm.gateway.message_envelope import InboundMessage
-from rlm.daemon import RecursionDaemon
+from rlm.daemon import RecursionDaemon  # noqa: layer — composition root
 from rlm.runtime import build_runtime_guard_from_env
 from rlm.server.event_router import EventRouter
 from rlm.core.structured_log import get_logger

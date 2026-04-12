@@ -458,7 +458,7 @@ class TestWebhookDispatch:
         app = self._make_app("tok", recursion_daemon=daemon)
 
         with patch(
-            "rlm.gateway.webhook_dispatch.dispatch_runtime_prompt_sync",
+            "rlm.server.webhook_dispatch.dispatch_runtime_prompt_sync",
             return_value={"status": "completed", "response": "via-daemon", "execution_time": 0.25},
         ) as fake_dispatch:
             with TestClient(app) as client:

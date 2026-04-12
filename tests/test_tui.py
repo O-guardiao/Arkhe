@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import jsonschema
 from rich.console import Console
 
 
@@ -168,6 +171,11 @@ def _make_session():
     )
 
 
+def _load_schema(name: str) -> dict:
+    path = Path(__file__).resolve().parents[1] / "schemas" / name
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def test_apply_operator_command_updates_focus() -> None:
     from rlm.core.observability.operator_surface import apply_operator_command
 
@@ -220,6 +228,20 @@ def test_build_runtime_snapshot_adds_recursion_projection() -> None:
     assert runtime["daemon"]["channel_runtime"]["running"] == 2
     assert runtime["daemon"]["memory_access"]["episodic_writes"] == 4
     assert runtime["daemon"]["memory_access"]["last_scope"]["branch_id"] == 7
+    jsonschema.validate(instance=runtime, schema=_load_schema("runtime-projection.v1.json"))
+
+
+def test_build_runtime_snapshot_validates_daemon_only_projection() -> None:
+    from rlm.core.observability.operator_surface import build_runtime_snapshot
+
+    session = _make_session()
+    session.rlm_instance._persistent_env = SimpleNamespace()
+
+    runtime = build_runtime_snapshot(session)
+
+    assert runtime == {"daemon": runtime["daemon"]}
+    assert runtime["daemon"]["ready"] is True
+    jsonschema.validate(instance=runtime, schema=_load_schema("runtime-projection.v1.json"))
 
 
 def test_dispatch_operator_prompt_records_response() -> None:
@@ -271,17 +293,17 @@ def test_dispatch_operator_prompt_uses_runtime_pipeline_when_available() -> None
 
     from unittest.mock import patch
 
-    with patch("rlm.server.runtime_pipeline.dispatch_runtime_prompt_sync", side_effect=fake_dispatch):
-        dispatch_operator_prompt(
-            manager,
-            MagicMock(is_running=lambda session_id: False),
-            session,
-            text="roteie via pipeline",
-            origin="tui",
-            runtime_services=runtime_services,
-            client_id="tui:demo",
-        )
-        time.sleep(0.05)
+    dispatch_operator_prompt(
+        manager,
+        MagicMock(is_running=lambda session_id: False),
+        session,
+        text="roteie via pipeline",
+        origin="tui",
+        runtime_services=runtime_services,
+        client_id="tui:demo",
+        dispatch_fn=fake_dispatch,
+    )
+    time.sleep(0.05)
 
     assert called[0]["services"] is runtime_services
     assert called[0]["client_id"] == "tui:demo"
@@ -296,22 +318,20 @@ def test_dispatch_operator_prompt_records_worker_error_when_pipeline_fails_early
     session = _make_session()
     manager = _DummySessionManager(session)
 
-    from unittest.mock import patch
+    def _failing_dispatch(*args, **kwargs):
+        raise RuntimeError("falha no bootstrap do dispatch")
 
-    with patch(
-        "rlm.server.runtime_pipeline.dispatch_runtime_prompt_sync",
-        side_effect=RuntimeError("falha no bootstrap do dispatch"),
-    ):
-        dispatch_operator_prompt(
-            manager,
-            MagicMock(is_running=lambda session_id: False),
-            session,
-            text="roteie via pipeline",
-            origin="tui",
-            runtime_services=object(),
-            client_id="tui:demo",
-        )
-        time.sleep(0.05)
+    dispatch_operator_prompt(
+        manager,
+        MagicMock(is_running=lambda session_id: False),
+        session,
+        text="roteie via pipeline",
+        origin="tui",
+        runtime_services=object(),
+        client_id="tui:demo",
+        dispatch_fn=_failing_dispatch,
+    )
+    time.sleep(0.05)
 
     assert session.metadata["last_operator_status"] == "error"
     assert session.metadata["last_operator_response"] == "falha no bootstrap do dispatch"

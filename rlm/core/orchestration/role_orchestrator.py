@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from rlm.daemon import DaemonTaskRequest, DaemonTaskResult
+from rlm.core.daemon_contracts import DaemonTaskRequest, DaemonTaskResult
 from rlm.core.orchestration.handoff import HandoffRecord
 from rlm.core.engine.sub_rlm import make_sub_rlm_fn
 

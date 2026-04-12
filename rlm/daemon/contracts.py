@@ -3,6 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+# ── Tipos compartilhados (canônicos em rlm.core.daemon_contracts) ─────────
+from rlm.core.daemon_contracts import (  # noqa: F401
+    DaemonTaskRequest,
+    DaemonTaskResult,
+    TaskDispatchRoute,
+    AUTO_DIVERT_TEXT_ROLES,
+)
+
 
 DispatchClass = Literal[
     "deterministic",
@@ -12,7 +20,6 @@ DispatchClass = Literal[
 ]
 
 EventPriority = Literal["low", "normal", "high", "urgent"]
-TaskDispatchRoute = Literal["internal_evaluator", "internal_planner", "internal_text_worker", "spawn_child_rlm"]
 
 
 def _dict_factory() -> dict[str, Any]:
@@ -71,24 +78,3 @@ class RecursionResult:
     memory_writes: tuple[dict[str, Any], ...] = ()
     channel_updates: tuple[dict[str, Any], ...] = ()
     metrics: dict[str, Any] = field(default_factory=_dict_factory)
-
-
-@dataclass(frozen=True, slots=True)
-class DaemonTaskRequest:
-    session_id: str = ""
-    client_id: str = ""
-    task: str = ""
-    context: str = ""
-    model: str | None = None
-    model_role: str = "worker"
-    max_iterations: int = 8
-    timeout_s: float = 300.0
-    interaction_mode: str = "repl"
-    metadata: dict[str, Any] = field(default_factory=_dict_factory)
-
-
-@dataclass(frozen=True, slots=True)
-class DaemonTaskResult:
-    route: TaskDispatchRoute
-    response: str
-    metadata: dict[str, Any] = field(default_factory=_dict_factory)

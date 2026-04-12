@@ -18,7 +18,7 @@ from rlm.core.engine.compaction import ContextCompactor, CompactionConfig
 from rlm.core.engine.loop_detector import LoopDetector, LoopDetectorConfig
 from rlm.utils.token_utils import get_context_limit
 from rlm.core.engine.hooks import HookSystem
-from rlm.core.comms.sibling_bus import SiblingBus
+from rlm.core.orchestration.sibling_bus import SiblingBus
 from rlm.core.lifecycle.cancellation import CancellationToken
 from rlm.core.lifecycle.disposable import DisposableStore
 from rlm.core.engine.control_flow import ReentrancyBarrier

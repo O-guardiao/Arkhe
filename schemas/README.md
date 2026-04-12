@@ -9,6 +9,7 @@ Este diretório contém os **JSON Schemas formais** que definem os contratos de 
 | [`envelope.v1.json`](envelope.v1.json) | v1 | Unidade de transferência de mensagem entre canais e o Brain |
 | [`ws-protocol.v1.json`](ws-protocol.v1.json) | v1 | Protocolo de mensagens WebSocket (Gateway ↔ Brain) |
 | [`health-report.v1.json`](health-report.v1.json) | v1 | Relatório de saúde dos canais do gateway |
+| [`runtime-projection.v1.json`](runtime-projection.v1.json) | v1 | Projeção operacional canônica do runtime para CLI, TUI, dashboard e operator surface |
 | [`tool-spec.v1.json`](tool-spec.v1.json) | v1 | Especificação de ferramentas do ToolRegistry |
 | [`permission-policy.v1.json`](permission-policy.v1.json) | v1 | Política de permissões para execução de ferramentas |
 
@@ -23,6 +24,7 @@ Este diretório contém os **JSON Schemas formais** que definem os contratos de 
 │                     Brain Python                             │
 │   rlm/server/brain_router.py        ←→  envelope.v1.json   │
 │   rlm/core/tools/registry.py        ←→  tool-spec.v1.json  │
+│   rlm/core/observability/operator_surface.py ← runtime-projection │
 │   rlm/core/engine/permission_policy.py ← permission-policy │
 └─────────────────────────────────────────────────────────────┘
                              ↕
@@ -53,6 +55,14 @@ O protocolo WS (`ws-protocol.v1.json`) define o protocolo binário de controle e
 - `ping/pong` — keepalive
 - `error` — erro de protocolo
 - `health.request/report` — monitoramento
+
+### 2.1 RuntimeProjection como visão oficial do runtime
+O schema `runtime-projection.v1.json` é a única projeção oficial do estado recursivo consumida por superfícies humanas. CLI, TUI, dashboard e operator routes devem ler esta projeção, não reconstruir semântica a partir de ledgers internos.
+
+**Campos chave:**
+- `recursion`: branches, controles, eventos e sumário recursivo
+- `daemon`: estado operacional, outbox, canais anexados e memória acessada
+- blocos brutos `tasks`, `attachments`, `timeline`, `recursive_session`, `coordination`, `controls` e `strategy` preservados como contexto operacional, não como contrato interpretado pela UI
 
 ### 3. ToolSpec inspirado no claw-code
 O schema `tool-spec.v1.json` replica a estrutura `ToolSpec` do claw-code (Rust):

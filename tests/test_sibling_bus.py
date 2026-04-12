@@ -33,34 +33,34 @@ import pytest
 class TestSiblingMessage:
 
     def test_import(self):
-        from rlm.core.comms.sibling_bus import SiblingMessage
+        from rlm.core.orchestration.sibling_bus import SiblingMessage
         assert SiblingMessage is not None
 
     def test_required_fields(self):
-        from rlm.core.comms.sibling_bus import SiblingMessage
+        from rlm.core.orchestration.sibling_bus import SiblingMessage
         msg = SiblingMessage(topic="t1", data={"key": "val"})
         assert msg.topic == "t1"
         assert msg.data == {"key": "val"}
 
     def test_sender_id_defaults_none(self):
-        from rlm.core.comms.sibling_bus import SiblingMessage
+        from rlm.core.orchestration.sibling_bus import SiblingMessage
         msg = SiblingMessage(topic="t1", data="dado")
         assert msg.sender_id is None
 
     def test_sender_id_custom(self):
-        from rlm.core.comms.sibling_bus import SiblingMessage
+        from rlm.core.orchestration.sibling_bus import SiblingMessage
         msg = SiblingMessage(topic="t1", data="dado", sender_id=3)
         assert msg.sender_id == 3
 
     def test_timestamp_auto_populated(self):
-        from rlm.core.comms.sibling_bus import SiblingMessage
+        from rlm.core.orchestration.sibling_bus import SiblingMessage
         before = _time.perf_counter()
         msg = SiblingMessage(topic="t", data=1)
         after = _time.perf_counter()
         assert before <= msg.timestamp <= after
 
     def test_data_any_type(self):
-        from rlm.core.comms.sibling_bus import SiblingMessage
+        from rlm.core.orchestration.sibling_bus import SiblingMessage
         for data in [None, 42, "texto", [1, 2], {"a": 1}, lambda: None]:
             msg = SiblingMessage(topic="t", data=data)
             assert msg.data is data
@@ -73,20 +73,20 @@ class TestSiblingMessage:
 class TestSiblingBusPublishSubscribe:
 
     def test_subscribe_receives_published_data(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("etl", {"rows": 100})
         result = bus.subscribe("etl", timeout_s=1.0)
         assert result == {"rows": 100}
 
     def test_subscribe_returns_none_on_timeout(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         result = bus.subscribe("empty_topic", timeout_s=0.05)
         assert result is None
 
     def test_subscribe_fifo_order(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("q", "primeiro")
         bus.publish("q", "segundo")
@@ -98,7 +98,7 @@ class TestSiblingBusPublishSubscribe:
 
     def test_subscribe_nonblocking_when_zero_timeout(self):
         """timeout_s=0 não deve bloquear."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         t0 = _time.perf_counter()
         result = bus.subscribe("nada", timeout_s=0)
@@ -108,7 +108,7 @@ class TestSiblingBusPublishSubscribe:
 
     def test_subscribe_negative_timeout_is_treated_as_nonblocking(self):
         """timeout negativo não deve estourar ValueError nem bloquear."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         t0 = _time.perf_counter()
         result = bus.subscribe("nada", timeout_s=-1)
@@ -117,14 +117,14 @@ class TestSiblingBusPublishSubscribe:
         assert elapsed < 0.5
 
     def test_empty_topic_is_rejected(self):
-        from rlm.core.comms.sibling_bus import SiblingBus, SiblingBusError
+        from rlm.core.orchestration.sibling_bus import SiblingBus, SiblingBusError
         bus = SiblingBus()
         with pytest.raises(SiblingBusError, match="topic"):
             bus.publish("   ", "x")
 
     def test_sender_id_stored_in_message(self):
         """publish com sender_id deve armazenar o remetente."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("canal", "dado", sender_id=2)
         # subscribe retorna apenas data, não o envelope
@@ -138,7 +138,7 @@ class TestSiblingBusPublishSubscribe:
         assert msg.data == "dado"
 
     def test_different_topics_isolated(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("a", "dado_A")
         bus.publish("b", "dado_B")
@@ -148,7 +148,7 @@ class TestSiblingBusPublishSubscribe:
         assert bus.subscribe("b", timeout_s=0.05) is None
 
     def test_any_data_type_published(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         payloads = [None, 42, "texto", [1, 2], {"k": "v"}]
         for p in payloads:
@@ -165,7 +165,7 @@ class TestSiblingBusPublishSubscribe:
 class TestSiblingBusPeek:
 
     def test_peek_returns_all_data(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("t", "a")
         bus.publish("t", "b")
@@ -175,7 +175,7 @@ class TestSiblingBusPeek:
 
     def test_peek_non_destructive(self):
         """Peek não deve consumir as mensagens."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("t", "msg1")
         bus.publish("t", "msg2")
@@ -184,13 +184,13 @@ class TestSiblingBusPeek:
         assert first_peek == second_peek == ["msg1", "msg2"]
 
     def test_peek_empty_topic_returns_empty_list(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         assert bus.peek("inexistente") == []
 
     def test_peek_then_subscribe_still_gets_messages(self):
         """Após peek, subscribe deve ainda receber as mensagens."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("t", "x")
         bus.peek("t")  # não consome
@@ -198,7 +198,7 @@ class TestSiblingBusPeek:
         assert result == "x"
 
     def test_peek_returns_list_not_none(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         result = bus.peek("nao_existe")
         assert isinstance(result, list)
@@ -212,7 +212,7 @@ class TestSiblingBusPeek:
 class TestSiblingBusDrain:
 
     def test_drain_returns_all_data(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("t", "x")
         bus.publish("t", "y")
@@ -220,20 +220,20 @@ class TestSiblingBusDrain:
         assert result == ["x", "y"]
 
     def test_drain_empties_channel(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("t", "dado")
         bus.drain("t")
         assert bus.drain("t") == []
 
     def test_drain_empty_returns_empty_list(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         assert bus.drain("nada") == []
 
     def test_drain_vs_peek_difference(self):
         """drain esvazia, peek não esvazia."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("t", "dado")
         peeked = bus.peek("t")
@@ -251,26 +251,26 @@ class TestSiblingBusDrain:
 class TestSiblingBusTopics:
 
     def test_topics_empty_when_no_messages(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         assert bus.topics() == []
 
     def test_topics_shows_topic_with_messages(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("etl/done", True)
         assert "etl/done" in bus.topics()
 
     def test_topics_hides_empty_topic(self):
         """Tópicos com fila vazia não aparecem em topics()."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("a", "msg")
         bus.subscribe("a", timeout_s=0.1)  # consome
         assert "a" not in bus.topics()
 
     def test_topics_multiple(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("t1", 1)
         bus.publish("t2", 2)
@@ -286,7 +286,7 @@ class TestSiblingBusTopics:
 class TestMakeReplFunctions:
 
     def test_returns_dict_with_required_keys(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns = bus.make_repl_functions(sender_id=0)
         assert "sibling_publish" in fns
@@ -304,21 +304,21 @@ class TestMakeReplFunctions:
         assert "sibling_topics" in fns
 
     def test_all_values_are_callable(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns = bus.make_repl_functions(sender_id=1)
         for k, v in fns.items():
             assert callable(v), f"{k} deve ser callable"
 
     def test_sibling_publish_writes_to_bus(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns = bus.make_repl_functions(sender_id=0)
         fns["sibling_publish"]("canal", "payload")
         assert bus.subscribe("canal", timeout_s=0.1) == "payload"
 
     def test_sibling_subscribe_reads_from_bus(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns = bus.make_repl_functions(sender_id=0)
         bus.publish("canal", "dado")
@@ -326,7 +326,7 @@ class TestMakeReplFunctions:
         assert result == "dado"
 
     def test_sibling_peek_reads_non_destructive(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("t", "x")
         bus.publish("t", "y")
@@ -336,14 +336,14 @@ class TestMakeReplFunctions:
         assert peek1 == peek2 == ["x", "y"]
 
     def test_sibling_topics_lists_active(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("active", 1)
         fns = bus.make_repl_functions()
         assert "active" in fns["sibling_topics"]()
 
     def test_sibling_subscribe_meta_returns_envelope(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns = bus.make_repl_functions(sender_id=11)
         fns["sibling_publish"]("meta", {"ok": True})
@@ -354,7 +354,7 @@ class TestMakeReplFunctions:
         assert envelope["sender_id"] == 11
 
     def test_sibling_peek_meta_returns_pending_envelopes(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns = bus.make_repl_functions(sender_id=3)
         fns["sibling_publish"]("meta", "a")
@@ -364,7 +364,7 @@ class TestMakeReplFunctions:
         assert [item["sender_id"] for item in envelopes] == [3, 3]
 
     def test_sibling_drain_empties_channel(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns = bus.make_repl_functions(sender_id=0)
         fns["sibling_publish"]("drain", "x")
@@ -373,7 +373,7 @@ class TestMakeReplFunctions:
         assert fns["sibling_drain"]("drain") == []
 
     def test_sibling_control_publish_and_poll_broadcast_by_generation(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         sender = bus.make_repl_functions(sender_id=0)
         recv_a = bus.make_repl_functions(sender_id=1)
@@ -393,7 +393,7 @@ class TestMakeReplFunctions:
         assert recv_b["sibling_control_poll"]("control/stop") is None
 
     def test_sibling_control_wait_receives_next_generation(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         sender = bus.make_repl_functions(sender_id=0)
         recv = bus.make_repl_functions(sender_id=5)
@@ -416,7 +416,7 @@ class TestMakeReplFunctions:
         assert result_holder[0]["generation"] == 1
 
     def test_sibling_control_peek_does_not_consume_generation(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         sender = bus.make_repl_functions(sender_id=9)
         recv = bus.make_repl_functions(sender_id=4)
@@ -431,7 +431,7 @@ class TestMakeReplFunctions:
         assert polled["data"] == "safe"
 
     def test_sibling_stats_helpers_expose_telemetry(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns = bus.make_repl_functions(sender_id=3)
 
@@ -451,7 +451,7 @@ class TestMakeReplFunctions:
 
     def test_sender_id_embedded_in_publish(self):
         """Publicação via repl_functions deve embutir sender_id."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns = bus.make_repl_functions(sender_id=7)
         fns["sibling_publish"]("t", "dado")
@@ -464,7 +464,7 @@ class TestMakeReplFunctions:
 
     def test_two_branches_share_same_bus(self):
         """Filho-A publica, Filho-B lê — mesmo bus."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         fns_a = bus.make_repl_functions(sender_id=0)
         fns_b = bus.make_repl_functions(sender_id=1)
@@ -474,7 +474,7 @@ class TestMakeReplFunctions:
 
     def test_independent_buses_isolated(self):
         """Dois SiblingBus distintos não compartilham mensagens."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus1 = SiblingBus()
         bus2 = SiblingBus()
         fns1 = bus1.make_repl_functions()
@@ -492,7 +492,7 @@ class TestSiblingBusThreadSafety:
 
     def test_concurrent_publish_subscribe(self):
         """100 threads publicam, 100 threads subscrevem — sem race conditions."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         import queue as stdlib_queue
 
         bus = SiblingBus()
@@ -531,7 +531,7 @@ class TestSiblingBusThreadSafety:
 
     def test_concurrent_peek_does_not_corrupt(self):
         """peek() simultâneo em múltiplas threads não corrompe a fila."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         N = 20
         # Publica N mensagens
@@ -558,7 +558,7 @@ class TestSiblingBusThreadSafety:
 
     def test_publish_from_multiple_threads(self):
         """Publicação de múltiplas threads sem deadlocks."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         N = 30
         barrier = threading.Barrier(N)
@@ -622,7 +622,7 @@ class TestSiblingBusIntegrationParallelFn:
     def test_parallel_branches_share_same_bus_instance(self):
         """Todos os branches de uma chamada paralela compartilham o MESMO bus."""
         from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         from unittest.mock import MagicMock
 
         parent = self._make_parent_mock()
@@ -671,7 +671,7 @@ class TestSiblingBusIntegrationParallelFn:
     def test_different_parallel_calls_get_different_buses(self):
         """Duas chamadas a sub_rlm_parallel() distintas devem ter buses diferentes."""
         from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         from unittest.mock import MagicMock
 
         parent = self._make_parent_mock()
@@ -714,7 +714,7 @@ class TestSiblingBusLocalReplInjection:
         """Quando _sibling_bus é passado via kwargs, LocalREPL deve ter sibling_*."""
         try:
             from rlm.environments.local_repl import LocalREPL
-            from rlm.core.comms.sibling_bus import SiblingBus
+            from rlm.core.orchestration.sibling_bus import SiblingBus
             from unittest.mock import MagicMock, patch
         except ImportError:
             pytest.skip("LocalREPL não disponível")
@@ -767,7 +767,7 @@ class TestSiblingBusSafetyLimits:
     """
 
     def test_sibling_bus_error_is_runtime_error(self):
-        from rlm.core.comms.sibling_bus import SiblingBusError
+        from rlm.core.orchestration.sibling_bus import SiblingBusError
         assert issubclass(SiblingBusError, RuntimeError)
         err = SiblingBusError("test")
         assert str(err) == "test"
@@ -783,7 +783,7 @@ class TestSiblingBusSafetyLimits:
 
     def test_channel_cap_raises_sibling_bus_error(self):
         """Criar mais de _MAX_CHANNELS tópicos distintos deve lançar SiblingBusError."""
-        from rlm.core.comms.sibling_bus import SiblingBus, SiblingBusError, _MAX_CHANNELS
+        from rlm.core.orchestration.sibling_bus import SiblingBus, SiblingBusError, _MAX_CHANNELS
         bus = SiblingBus()
         # Preenche até o limite
         for i in range(_MAX_CHANNELS):
@@ -794,7 +794,7 @@ class TestSiblingBusSafetyLimits:
 
     def test_subscribe_respects_channel_cap_too(self):
         """subscribe() não deve contornar o limite de tópicos criando filas ilimitadas."""
-        from rlm.core.comms.sibling_bus import SiblingBus, SiblingBusError, _MAX_CHANNELS
+        from rlm.core.orchestration.sibling_bus import SiblingBus, SiblingBusError, _MAX_CHANNELS
         bus = SiblingBus()
         for i in range(_MAX_CHANNELS):
             assert bus.subscribe(f"topic_{i}", timeout_s=0.0) is None
@@ -803,7 +803,7 @@ class TestSiblingBusSafetyLimits:
 
     def test_subscribe_created_channel_is_bounded(self):
         """Canal criado por subscribe() deve continuar obedecendo _CHANNEL_MAXSIZE."""
-        from rlm.core.comms.sibling_bus import SiblingBus, SiblingBusError, _CHANNEL_MAXSIZE
+        from rlm.core.orchestration.sibling_bus import SiblingBus, SiblingBusError, _CHANNEL_MAXSIZE
         bus = SiblingBus()
         assert bus.subscribe("bounded", timeout_s=0.0) is None
         for i in range(_CHANNEL_MAXSIZE):
@@ -812,7 +812,7 @@ class TestSiblingBusSafetyLimits:
             bus.publish("bounded", "overflow")
 
     def test_control_publish_also_respects_global_topic_cap(self):
-        from rlm.core.comms.sibling_bus import SiblingBus, SiblingBusError, _MAX_CHANNELS
+        from rlm.core.orchestration.sibling_bus import SiblingBus, SiblingBusError, _MAX_CHANNELS
         bus = SiblingBus()
         for i in range(_MAX_CHANNELS):
             bus.publish_control(f"control_{i}", i)
@@ -827,7 +827,7 @@ class TestSiblingBusSafetyLimits:
 class TestSiblingBusControlChannels:
 
     def test_poll_control_is_per_receiver(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish_control("control/stop", True, sender_id=0)
 
@@ -841,7 +841,7 @@ class TestSiblingBusControlChannels:
         assert recv_a_second is None
 
     def test_new_control_publish_creates_new_generation(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish_control("control/mode", "fast", sender_id=0)
         first = bus.poll_control("control/mode", receiver_id=1)
@@ -854,7 +854,7 @@ class TestSiblingBusControlChannels:
         assert second["data"] == "safe"
 
     def test_wait_control_times_out_cleanly(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         t0 = _time.perf_counter()
         result = bus.wait_control("control/none", receiver_id=1, timeout_s=0.05)
@@ -863,7 +863,7 @@ class TestSiblingBusControlChannels:
         assert elapsed < 0.5
 
     def test_publish_signal_uses_semantic_type_and_mapped_topic(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
 
         bus = SiblingBus()
         bus.publish_signal("solution_found", {"winner": 0}, sender_id=3)
@@ -882,7 +882,7 @@ class TestSiblingBusControlChannels:
 class TestSiblingBusTelemetry:
 
     def test_get_stats_tracks_key_operations(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("data", 1)
         bus.subscribe("data", timeout_s=0.1)
@@ -900,7 +900,7 @@ class TestSiblingBusTelemetry:
         assert stats["operation_counts"]["control_poll_miss"] >= 1
 
     def test_get_topic_stats_reports_queue_and_generation(self):
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("etl/result", "row")
         bus.publish_control("control/schema", {"schema": 2}, sender_id=4)
@@ -915,7 +915,7 @@ class TestSiblingBusTelemetry:
 
     def test_channel_reuse_after_cap_works(self):
         """Publicar em tópico já existente após atingir o cap deve funcionar."""
-        from rlm.core.comms.sibling_bus import SiblingBus, _MAX_CHANNELS
+        from rlm.core.orchestration.sibling_bus import SiblingBus, _MAX_CHANNELS
         bus = SiblingBus()
         for i in range(_MAX_CHANNELS):
             bus.publish(f"topic_{i}", i)
@@ -924,7 +924,7 @@ class TestSiblingBusTelemetry:
 
     def test_queue_full_raises_sibling_bus_error(self):
         """Lotar um canal (_CHANNEL_MAXSIZE mensagens) deve lançar SiblingBusError."""
-        from rlm.core.comms.sibling_bus import SiblingBus, SiblingBusError, _CHANNEL_MAXSIZE
+        from rlm.core.orchestration.sibling_bus import SiblingBus, SiblingBusError, _CHANNEL_MAXSIZE
         bus = SiblingBus()
         topic = "flood_test"
         # Lota o canal até o limite
@@ -936,7 +936,7 @@ class TestSiblingBusTelemetry:
 
     def test_queue_full_recovers_after_consume(self):
         """Após consumir mensagens, publish deve funcionar novamente."""
-        from rlm.core.comms.sibling_bus import SiblingBus, _CHANNEL_MAXSIZE
+        from rlm.core.orchestration.sibling_bus import SiblingBus, _CHANNEL_MAXSIZE
         bus = SiblingBus()
         topic = "recover_test"
         for i in range(_CHANNEL_MAXSIZE):
@@ -950,7 +950,7 @@ class TestSiblingBusTelemetry:
     def test_payload_too_large_raises_sibling_bus_error(self):
         """Payload acima de _MAX_PAYLOAD_BYTES deve lançar SiblingBusError."""
         import sys
-        from rlm.core.comms.sibling_bus import SiblingBus, SiblingBusError, _MAX_PAYLOAD_BYTES
+        from rlm.core.orchestration.sibling_bus import SiblingBus, SiblingBusError, _MAX_PAYLOAD_BYTES
         bus = SiblingBus()
         # Cria um objeto que sys.getsizeof reporta como maior que o limite
         # bytes() garante tamanho exato
@@ -961,7 +961,7 @@ class TestSiblingBusTelemetry:
 
     def test_small_payload_passes(self):
         """Payload pequeno deve ser aceito sem erro."""
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         bus = SiblingBus()
         bus.publish("ok", {"key": "value", "num": 42})
         result = bus.subscribe("ok", timeout_s=0.1)

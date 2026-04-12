@@ -45,6 +45,14 @@ Do NOT use `_` prefix for private methods unless explicitly requested.
 - **Minimize branching** - Prefer single code paths; every `if`/`try` needs justification
 - **Example**: Missing API key → immediate `ValueError`, not graceful fallback
 
+### Feature Delivery Protocol
+- For new functionality, start with architecture and module boundaries before writing code.
+- Prefer small, cohesive files with low coupling; do not solve feature requests with giant single-file implementations.
+- Present a step-by-step implementation plan and confirm the design before starting Step 1 when the task is not trivially small.
+- If integration depends on unknown code, stop and ask for the exact file instead of inventing APIs or contracts.
+- Default to secure input handling, direct execution paths, and local error handling that logs clearly without taking down the whole system.
+- For the detailed workflow and language to use during this process, see `.github/skills/vibe-coding-architecture-guard/SKILL.md`.
+
 ## Core Repository Development
 
 For PRs to `rlm` core:

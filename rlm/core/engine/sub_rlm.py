@@ -45,8 +45,8 @@ import threading
 import time
 from typing import Any, TYPE_CHECKING, cast
 
-from rlm.daemon import DaemonTaskRequest, DaemonTaskResult
-from rlm.daemon.task_agents import _AUTO_DIVERT_TEXT_ROLES
+from rlm.core.daemon_contracts import AUTO_DIVERT_TEXT_ROLES as _AUTO_DIVERT_TEXT_ROLES
+from rlm.core.daemon_contracts import DaemonTaskRequest, DaemonTaskResult
 from rlm.core.security.execution_policy import build_backend_kwargs, resolve_subagent_model
 from rlm.core.types import ClientBackend, EnvironmentType
 
@@ -634,7 +634,7 @@ def make_sub_rlm_async_fn(
     """
     # ── Bus P2P persistente no pai ─────────────────────────────────────────
     if not hasattr(parent, "_async_bus") or parent._async_bus is None:
-        from rlm.core.comms.sibling_bus import SiblingBus as _SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus as _SiblingBus
         parent._async_bus = _SiblingBus()
         parent._async_branch_counter = 0
     _bus = parent._async_bus
@@ -868,7 +868,7 @@ def make_sub_rlm_parallel_fn(
     _serial_fn = make_sub_rlm_fn(parent, _rlm_cls=_rlm_cls)
 
     # ── Lacuna 3: SiblingBus unificado parallel+async ─────────────────────
-    from rlm.core.comms.sibling_bus import SiblingBus as _SiblingBus
+    from rlm.core.orchestration.sibling_bus import SiblingBus as _SiblingBus
     if not hasattr(parent, "_async_bus") or parent._async_bus is None:
         parent._async_bus = _SiblingBus()
         parent._async_branch_counter = 0

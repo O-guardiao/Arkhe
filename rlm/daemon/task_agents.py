@@ -4,6 +4,7 @@ from typing import Any, Protocol, cast
 
 from rlm.core.security.execution_policy import resolve_subagent_model
 from rlm.daemon.contracts import DaemonTaskRequest, DaemonTaskResult, TaskDispatchRoute
+from rlm.core.daemon_contracts import AUTO_DIVERT_TEXT_ROLES
 
 
 _INTERNAL_TEXT_ROLES = {
@@ -16,19 +17,8 @@ _INTERNAL_TEXT_ROLES = {
     "minirepl",
 }
 
-# Roles where a single-shot LLM call is sufficient even without
-# explicit interaction_mode="text".  Used by sub_rlm to auto-divert
-# to the daemon task path when the caller forgot to set text mode
-# but the role clearly doesn't need REPL iteration.
-_AUTO_DIVERT_TEXT_ROLES = frozenset({
-    "fast",
-    "response",
-    "simple",
-    "simple_inspect",
-    "micro",
-    "minirepl",
-    "evaluator",
-})
+# Re-export com nome legado para backward compat.
+_AUTO_DIVERT_TEXT_ROLES = AUTO_DIVERT_TEXT_ROLES
 
 
 class _WarmRuntimeClient(Protocol):

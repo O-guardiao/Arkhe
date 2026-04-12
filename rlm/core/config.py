@@ -119,9 +119,12 @@ def load_config(toml_path: str = "rlm.toml") -> RLMConfig:
 
         # ── Server ────────────────────────────────────────────────────
         srv = raw.get("server", {})
+        # RLM_API_PORT é canônico (usado por api.py, wizard, internal_api).
+        # RLM_PORT mantido como fallback por backward compat.
+        _port_raw = os.getenv("RLM_API_PORT") or os.getenv("RLM_PORT") or str(srv.get("port", 8000))
         server = ServerConfig(
             host=os.getenv("RLM_HOST", srv.get("host", "0.0.0.0")),
-            port=int(os.getenv("RLM_PORT", str(srv.get("port", 8000)))),
+            port=int(_port_raw),
             db_path=os.getenv("RLM_DB_PATH", srv.get("db_path", "rlm_sessions.db")),
             state_root=os.getenv("RLM_STATE_ROOT", srv.get("state_root", "./rlm_states")),
             skills_dir=os.getenv("RLM_SKILLS_DIR", srv.get("skills_dir", "./rlm/skills")),
