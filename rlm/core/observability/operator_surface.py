@@ -762,12 +762,38 @@ def dispatch_operator_prompt(
                     session,
                 )
 
+        # Transiciona para "running" ANTES de iniciar a thread para evitar race
+        # condition: o TUI poll via HTTP pode ver "idle" se a thread ainda nao
+        # alcancou supervisor.execute(), fazendo watch_until_idle() retornar
+        # imediatamente e o usuario achar que a mensagem foi descartada.
+        if hasattr(session_manager, "transition_status"):
+            session_manager.transition_status(
+                session,
+                "running",
+                source=f"{origin}.dispatch_operator_prompt",
+                reason="dispatch thread queued",
+            )
+        else:
+            session.status = "running"
+
         thread = threading.Thread(target=_worker, daemon=True, name=f"{origin}-dispatch-{session.session_id[:8]}")
         thread.start()
         return session.session_id
 
     if callable(record_message):
         record_message("user", prompt, metadata={"source": origin})
+
+    # Mesmo fix do path com dispatch_fn: setar "running" antes de iniciar a
+    # thread para evitar race com watch_until_idle() no TUI.
+    if hasattr(session_manager, "transition_status"):
+        session_manager.transition_status(
+            session,
+            "running",
+            source=f"{origin}.dispatch_operator_prompt",
+            reason="execute_async queued",
+        )
+    else:
+        session.status = "running"
 
     supervisor.execute_async(session, prompt, on_complete=lambda result: _on_complete(result, session))
     return session.session_id
