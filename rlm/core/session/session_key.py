@@ -12,6 +12,7 @@ Fornece:
 - ``encode_session_key(k)``— "channel_type:channel_id:user_id" (sem session_id)
 - ``decode_session_key(s)``— inverte encode; session_id gerado fresco; None se inválido
 - ``session_key_hash(k)``  — SHA-256 hex determinístico sobre os 3 campos de canal
+- ``SessionIdentity``     — dataclass formal de identidade de sessão cross-layer
 """
 from __future__ import annotations
 
@@ -67,6 +68,34 @@ class SessionKey:
     channel_type: str
     channel_id: str
     user_id: str
+
+
+# ---------------------------------------------------------------------------
+# SessionIdentity — identidade formal cross-layer
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SessionIdentity:
+    """
+    Identidade tipada de sessão para uso cross-layer.
+
+    Substitui a passagem ad-hoc de ``session_id`` + ``client_id`` como
+    strings soltas. Todo ponto de ingresso (API, WebSocket, Telegram,
+    webhook, CLI) deve construir um ``SessionIdentity`` e propagá-lo
+    pelo pipeline de dispatch.
+
+    Campos:
+        session_id  — SessionId canônico (32 hex).
+        client_id   — Identificador do client (conexão/dispositivo).
+        user_id     — Usuário autenticado (None se anônimo).
+        channel     — Canal de origem (telegram, discord, api, etc.).
+        device_id   — Dispositivo específico (None se não aplicável).
+    """
+    session_id: str
+    client_id: str
+    user_id: str | None = None
+    channel: str | None = None
+    device_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

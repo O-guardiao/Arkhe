@@ -486,7 +486,7 @@ class TestSiblingBusInjectionInSubRLM:
     def test_sibling_bus_injected_in_env_kwargs(self):
         """Quando _sibling_bus é passado, deve aparecer nos env_kwargs do filho."""
         from rlm.core.engine.sub_rlm import make_sub_rlm_fn
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
 
         parent = _make_parent_mock(depth=0, max_depth=2)
         parent.environment_kwargs = {"timeout": 30}

@@ -91,7 +91,7 @@ _CHANNEL_DESCRIPTORS: tuple[ChannelDescriptor, ...] = (
     ChannelDescriptor(
         channel_id="tui",
         env_keys=(),
-        adapter_factory="rlm.gateway.operator_bridge:TuiAdapter",
+        adapter_factory="rlm.server.operator_bridge:TuiAdapter",
         always_registered=True,
     ),
 )

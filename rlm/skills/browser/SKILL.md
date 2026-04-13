@@ -28,6 +28,12 @@ last_30d_utility = 0.5
 embedding_text = "browser web url html scraping page requests content static site"
 example_queries = ["leia esta página web", "extraia o conteúdo desta URL"]
 
+# ── Ownership Boundary (ADR-004) ──────────────────────────────────────
+# Este arquivo é METADATA do skill loader. A implementação canônica vive em:
+#   rlm/plugins/browser.py — adaptador de integração HTTP/HTML
+# Este SKILL.md declara a interface SIF exposta ao pipeline. Não contém código.
+# Dono canônico do conceito "browser": rlm/plugins/browser.py (L0 plugin tooling).
+
 [requires]
 # Sem MCP — executa via imports Python no REPL
 bins = []

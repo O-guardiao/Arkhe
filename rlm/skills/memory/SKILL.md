@@ -29,6 +29,13 @@ success_count = 0
 failure_count = 0
 last_30d_utility = 0.5
 
+# ── Ownership Boundary (ADR-004) ──────────────────────────────────────
+# Este arquivo é METADATA do skill loader. A implementação canônica vive em:
+#   rlm/tools/memory.py         — function-calling tools para LLM
+#   rlm/tools/memory_tools.py   — helpers de session memory
+# Este SKILL.md declara a interface SIF exposta ao pipeline. Não contém código.
+# Dono canônico do conceito "memory": rlm/tools/memory*.py (L0 core tooling).
+
 [retrieval]
 embedding_text = "session memory recall history prior decisions preferences persistent context conversational"
 example_queries = ["o que decidimos antes sobre isso", "quais são minhas preferências salvas"]

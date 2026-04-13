@@ -55,13 +55,6 @@ except ImportError:
     _webchat_router = None
     _has_webchat = False
 
-try:
-    from rlm.gateway.operator_bridge import router as _operator_router
-    _has_operator_bridge = True
-except ImportError:
-    _operator_router = None
-    _has_operator_bridge = False
-
 
 # ---------------------------------------------------------------------------
 # API pública
@@ -99,11 +92,5 @@ def mount_channel_routers(app: "FastAPI") -> bool:
         assert _webchat_router is not None
         app.include_router(_webchat_router)
         _log.info("✓ Webchat gateway montado")
-
-    # Operator Bridge
-    if _has_operator_bridge:
-        assert _operator_router is not None
-        app.include_router(_operator_router)
-        _log.info("✓ OperatorBridge montado")
 
     return True

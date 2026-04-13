@@ -121,7 +121,7 @@ def load_config(toml_path: str = "rlm.toml") -> RLMConfig:
         srv = raw.get("server", {})
         # RLM_API_PORT é canônico (usado por api.py, wizard, internal_api).
         # RLM_PORT mantido como fallback por backward compat.
-        _port_raw = os.getenv("RLM_API_PORT") or os.getenv("RLM_PORT") or str(srv.get("port", 8000))
+        _port_raw = os.getenv("RLM_API_PORT") or os.getenv("RLM_PORT") or str(srv.get("port", 5000))
         server = ServerConfig(
             host=os.getenv("RLM_HOST", srv.get("host", "0.0.0.0")),
             port=int(_port_raw),

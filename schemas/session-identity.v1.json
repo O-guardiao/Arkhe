@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkhe.dev/schemas/session-identity.v1.json",
+  "title": "SessionIdentity",
+  "description": "Identidade tipada de sessão cross-layer. Substitui a passagem ad-hoc de session_id + client_id como strings soltas.",
+  "type": "object",
+  "required": [
+    "session_id",
+    "client_id"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "SessionId canônico (32 hex lowercase)",
+      "pattern": "^[0-9a-f]{32}$",
+      "examples": ["a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"]
+    },
+    "client_id": {
+      "type": "string",
+      "description": "Identificador do client (conexão ou dispositivo)",
+      "minLength": 1,
+      "examples": ["web-abc123", "tg-456789"]
+    },
+    "user_id": {
+      "type": ["string", "null"],
+      "description": "Usuário autenticado. Null se anônimo.",
+      "default": null,
+      "examples": ["user-42", null]
+    },
+    "channel": {
+      "type": ["string", "null"],
+      "description": "Canal de origem",
+      "enum": ["telegram", "discord", "slack", "whatsapp", "webchat", "api", "cli", "tui", "websocket", null],
+      "default": null
+    },
+    "device_id": {
+      "type": ["string", "null"],
+      "description": "Dispositivo específico. Null se não aplicável.",
+      "default": null,
+      "examples": ["esp32-001", "drone-alpha", null]
+    }
+  },
+  "additionalProperties": false
+}

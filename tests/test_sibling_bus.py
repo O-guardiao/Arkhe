@@ -773,7 +773,7 @@ class TestSiblingBusSafetyLimits:
         assert str(err) == "test"
 
     def test_sibling_bus_constants_exported(self):
-        from rlm.core.comms import sibling_bus
+        from rlm.core.orchestration import sibling_bus
         assert hasattr(sibling_bus, "_MAX_CHANNELS")
         assert hasattr(sibling_bus, "_CHANNEL_MAXSIZE")
         assert hasattr(sibling_bus, "_MAX_PAYLOAD_BYTES")

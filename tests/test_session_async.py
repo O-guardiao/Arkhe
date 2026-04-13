@@ -312,7 +312,7 @@ class TestMakeSubRLMAsyncFn:
     def test_creates_async_bus_on_parent(self):
         """make_sub_rlm_async_fn deve criar _async_bus no pai."""
         from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         # SimpleNamespace — hasattr() retorna False real (sem auto-create como MagicMock)
         parent = _make_parent_simple()
         assert not hasattr(parent, "_async_bus")
@@ -408,7 +408,7 @@ class TestMakeSubRLMAsyncFn:
     def test_bus_communication_between_two_children(self):
         """Dois filhos com mock manual conseguem se comunicar via bus."""
         from rlm.core.engine.sub_rlm import make_sub_rlm_async_fn
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
         # SimpleNamespace garante que parent._async_bus será um SiblingBus real
         parent = _make_parent_simple(depth=0, max_depth=3)
         make_sub_rlm_async_fn(parent)  # inicializa o bus no pai

@@ -19,5 +19,6 @@ Este diretório contém uma migração TypeScript parcial que **perdeu centralid
 1. **Nenhum módulo em `rlm/` pode importar de `packages/`.**
 2. **Nenhum novo arquivo deve ser criado aqui.**
 3. **Este diretório será aposentado progressivamente.**
+4. **Data de sunset: 2025-Q3.** Após essa data o diretório será removido de `main` (ou movido para branch `legacy/`).
 
-Referência: [ADR-001](../docs/architecture/ADR-001-canonical-ownership.md)
+Referência: [ADR-001](../docs/architecture/ADR-001-canonical-ownership.md), [ADR-004](../docs/architecture/ADR-004-python-canonical.md)

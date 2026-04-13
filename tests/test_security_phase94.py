@@ -358,7 +358,7 @@ class TestRateLimiterDualKey:
     """Test IP + client_id rate limiting."""
 
     def test_ip_rate_limit(self):
-        from rlm.gateway.webhook_dispatch import _RateLimiter
+        from rlm.server.webhook_dispatch import _RateLimiter
 
         limiter = _RateLimiter(rpm=3)
         for _ in range(3):
@@ -370,7 +370,7 @@ class TestRateLimiterDualKey:
         assert retry > 0
 
     def test_client_id_rate_limit(self):
-        from rlm.gateway.webhook_dispatch import _RateLimiter
+        from rlm.server.webhook_dispatch import _RateLimiter
 
         limiter = _RateLimiter(rpm=2)
         limiter.is_allowed("cid:device_a")
@@ -384,7 +384,7 @@ class TestRateLimiterDualKey:
         assert allowed is True
 
     def test_check_dual(self):
-        from rlm.gateway.webhook_dispatch import _RateLimiter
+        from rlm.server.webhook_dispatch import _RateLimiter
 
         limiter = _RateLimiter(rpm=2)
         assert limiter.check_dual("1.1.1.1", "dev1") == (True, 0)
@@ -395,7 +395,7 @@ class TestRateLimiterDualKey:
         assert allowed is False
 
     def test_check_dual_ip_exhausted_before_cid(self):
-        from rlm.gateway.webhook_dispatch import _RateLimiter
+        from rlm.server.webhook_dispatch import _RateLimiter
 
         limiter = _RateLimiter(rpm=2)
         # Exhaust IP with different client_ids
@@ -407,7 +407,7 @@ class TestRateLimiterDualKey:
         assert allowed is False
 
     def test_check_dual_no_client_id(self):
-        from rlm.gateway.webhook_dispatch import _RateLimiter
+        from rlm.server.webhook_dispatch import _RateLimiter
 
         limiter = _RateLimiter(rpm=5)
         allowed, _ = limiter.check_dual("2.2.2.2")

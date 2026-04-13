@@ -271,7 +271,7 @@ class TestGap3UnifiedSiblingBus:
     def test_parallel_creates_bus_on_parent(self):
         """make_sub_rlm_parallel_fn deve criar _async_bus no pai se ausente."""
         from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
 
         parent = _make_mock_parent()
         parent._async_bus = None
@@ -284,7 +284,7 @@ class TestGap3UnifiedSiblingBus:
     def test_async_reuses_existing_bus(self):
         """make_sub_rlm_async_fn deve reutilizar _async_bus se já existir."""
         from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, make_sub_rlm_async_fn
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
 
         parent = _make_mock_parent()
         parent._async_bus = None
@@ -302,7 +302,7 @@ class TestGap3UnifiedSiblingBus:
     def test_parallel_reuses_async_bus(self):
         """make_sub_rlm_parallel_fn deve reutilizar _async_bus criado por async."""
         from rlm.core.engine.sub_rlm import make_sub_rlm_parallel_fn, make_sub_rlm_async_fn
-        from rlm.core.comms.sibling_bus import SiblingBus
+        from rlm.core.orchestration.sibling_bus import SiblingBus
 
         parent = _make_mock_parent()
         parent._async_bus = None

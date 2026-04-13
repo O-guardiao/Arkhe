@@ -45,7 +45,7 @@ class TestLoadConfig:
         from rlm.core.config import load_config
         cfg = load_config(toml_path=str(tmp_path / "nao_existe.toml"))
         assert cfg.server.host == "0.0.0.0"
-        assert cfg.server.port == 8000
+        assert cfg.server.port == 5000
         assert cfg.agent.model == "gpt-4o-mini"
         assert cfg.message_bus.enabled is False
         assert "default" in cfg.profiles

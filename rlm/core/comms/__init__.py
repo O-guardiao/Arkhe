@@ -25,7 +25,6 @@ rlm.core.comms — Multichannel delivery pipeline + CrossChannel identity.
                          Singleton: init_crosschannel_identity(), get_crosschannel_identity()
 
 ─── Shims (compatibilidade — use os caminhos canônicos) ──────────────────
-  sibling_bus    →  rlm.core.orchestration.sibling_bus
   mcp_client     →  rlm.core.integrations.mcp_client
   comms_utils    →  rlm.core.engine.comms_utils
 """

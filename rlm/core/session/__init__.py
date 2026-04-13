@@ -8,6 +8,7 @@ from rlm.core.session._impl import *  # noqa: F401,F403
 from rlm.core.session.session_key import (  # noqa: F401
     SessionId,
     SessionKey,
+    SessionIdentity,
     create_session_id,
     is_session_id,
     make_session_id,

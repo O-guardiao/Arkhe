@@ -112,6 +112,13 @@ def check(root: Path) -> list[str]:
 
         forbidden = FORBIDDEN[layer]
         for lineno, module in _extract_imports(py_file):
+            # I10: código canônico rlm/ não pode importar de packages/
+            if module == "packages" or module.startswith("packages."):
+                rel = py_file.relative_to(root)
+                violations.append(
+                    f"  {rel}:{lineno}  {layer} → {module}  (forbidden: packages/ is legacy)"
+                )
+                continue
             for banned in forbidden:
                 if module == banned or module.startswith(banned + "."):
                     rel = py_file.relative_to(root)

@@ -176,7 +176,7 @@ def _make_local_session():
 
 class TestTuiAdapter:
     def test_send_message_logs_event(self):
-        from rlm.gateway.operator_bridge import TuiAdapter
+        from rlm.server.operator_bridge import TuiAdapter
 
         session = _make_local_session()
         sm = _FakeSessionManager(session)
@@ -192,7 +192,7 @@ class TestTuiAdapter:
         assert ev["payload"]["target_channel"] == "tui"
 
     def test_send_message_truncates_at_500(self):
-        from rlm.gateway.operator_bridge import TuiAdapter
+        from rlm.server.operator_bridge import TuiAdapter
 
         session = _make_local_session()
         sm = _FakeSessionManager(session)
@@ -203,7 +203,7 @@ class TestTuiAdapter:
         assert len(sm.events[0]["payload"]["response_preview"]) == 500
 
     def test_send_media_converts_to_text(self):
-        from rlm.gateway.operator_bridge import TuiAdapter
+        from rlm.server.operator_bridge import TuiAdapter
 
         session = _make_local_session()
         sm = _FakeSessionManager(session)
@@ -216,7 +216,7 @@ class TestTuiAdapter:
         assert "screenshot" in preview
 
     def test_send_message_returns_false_on_error(self):
-        from rlm.gateway.operator_bridge import TuiAdapter
+        from rlm.server.operator_bridge import TuiAdapter
 
         sm = MagicMock()
         sm.get_or_create.side_effect = RuntimeError("db down")

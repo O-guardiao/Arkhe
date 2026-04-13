@@ -41,7 +41,7 @@ from rlm.core.orchestration.role_orchestrator import PENDING_HANDOFFS_KEY, orche
 from rlm.core.orchestration.scheduler import RLMScheduler, CronJob
 from rlm.core.skillkit.skill_loader import SkillLoader
 from rlm.core.security.exec_approval import ExecApprovalGate
-from rlm.gateway.webhook_dispatch import create_webhook_router
+from rlm.server.webhook_dispatch import create_webhook_router
 from rlm.server.openai_compat import create_openai_compat_router
 from rlm.server.runtime_pipeline import RuntimeDispatchRejected, RuntimeDispatchServices, dispatch_runtime_prompt_sync
 from rlm.gateway.auth_helpers import configured_tokens, require_token
@@ -484,6 +484,15 @@ app.include_router(create_openai_compat_router(_api_token))
 # O pacote canônico dos transports Python agora é rlm.gateway.
 from rlm.gateway.transport_router import mount_channel_routers
 mount_channel_routers(app)
+
+# Operator Bridge — montado aqui (server/) porque operator_bridge vive em rlm.server,
+# e gateway/ não pode importar de server/ (violação de camada L1→L2).
+try:
+    from rlm.server.operator_bridge import router as _operator_router
+    app.include_router(_operator_router)
+    gateway_log.info("✓ OperatorBridge montado")
+except ImportError:
+    pass
 
 # Brain router — endpoints /brain/* (ToolDispatcher, PermissionPolicy, SessionJournal)
 from rlm.server.brain_router import router as _brain_router
@@ -1091,7 +1100,7 @@ async def channels_send(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Operator endpoints — servidos por rlm.gateway.operator_bridge (montado via
+# Operator endpoints — servidos por rlm.server.operator_bridge (montado via
 # transport_router.mount_channel_routers na linha ~480).  Não duplique aqui.
 # ---------------------------------------------------------------------------
 
