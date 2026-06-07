@@ -7,12 +7,28 @@ pré-LLM** pronto para colar antes do prompt.
 Não é conversacional. Ele é o **backend de um hook/plugin do Obsidian**: você
 chama, recebe contexto, e *quem chama* faz a chamada ao LLM.
 
+Pacote **standalone e sem dependências obrigatórias** (stdlib pura). Não precisa
+clonar nem instalar o repositório Arkhe inteiro.
+
+## Instalação
+
+```bash
+pip install arkhe-obsidian-rag                 # modo lexical + hipergrafo (stdlib)
+pip install "arkhe-obsidian-rag[openai]"       # + retrieval semântico via OpenAI
+
+# a partir do código-fonte (este diretório):
+pip install ./obsidian-rag
+```
+
+Expõe o console script `arkhe-obsidian-rag` e o módulo `python -m arkhe_obsidian_rag`
+(equivalentes).
+
 ## Por que existe
 
-O `vault_tools`/`ObsidianBridge` antigos liam o vault **sequencialmente**
-(`for f in os.listdir(): open(f)`), o que é lento em vaults grandes. Este
-módulo lê e parseia em **processos separados** (`ProcessPoolExecutor`), sem
-disputa de GIL — o parsing escala com os núcleos da máquina.
+Ler+parsear muitos `.md` sequencialmente (`for f in os.listdir(): open(f)`) é
+lento em vaults grandes. Este pacote lê e parseia em **processos separados**
+(`ProcessPoolExecutor`), sem disputa de GIL — o parsing escala com os núcleos da
+máquina.
 
 ## Arquitetura
 
@@ -41,16 +57,16 @@ vault/*.md ──► reader.py ──► parser.py ──► [Note, Note, ...]
 
 ```bash
 # context pack completo (JSON)
-python -m rlm.obsidian_rag retrieve --vault ~/Vault --query "o que é arkhe?"
+python -m arkhe_obsidian_rag retrieve --vault ~/Vault --query "o que é arkhe?"
 
 # só o markdown pronto p/ colar no prompt
-python -m rlm.obsidian_rag retrieve --vault ~/Vault --query "..." --markdown
+python -m arkhe_obsidian_rag retrieve --vault ~/Vault --query "..." --markdown
 
 # JSON em uma linha (mais fácil de parsear no plugin)
-python -m rlm.obsidian_rag retrieve --vault ~/Vault --query "..." --compact
+python -m arkhe_obsidian_rag retrieve --vault ~/Vault --query "..." --compact
 
 # (re)constrói o cache e mostra estatísticas
-python -m rlm.obsidian_rag index --vault ~/Vault --workers 8
+python -m arkhe_obsidian_rag index --vault ~/Vault --workers 8
 ```
 
 Flags úteis: `--top-notes`, `--chunks-per-note`, `--hops` (saltos no
@@ -63,7 +79,7 @@ Em erro, o stdout recebe `{"error": "...", "type": "..."}` e o exit code é `1`.
 ## Uso como biblioteca
 
 ```python
-from rlm.obsidian_rag import VaultIndex, retrieve
+from arkhe_obsidian_rag import VaultIndex, retrieve
 
 index = VaultIndex.from_vault("/caminho/vault")   # paralelo + cache
 pack = retrieve(index, "como funciona X?", top_notes=8, hops=1)
@@ -83,7 +99,7 @@ const pexec = promisify(execFile);
 
 async function preLlmContext(vault: string, query: string): Promise<string> {
   const { stdout } = await pexec("python", [
-    "-m", "rlm.obsidian_rag", "retrieve",
+    "-m", "arkhe_obsidian_rag", "retrieve",
     "--vault", vault,
     "--query", query,
     "--compact",
@@ -108,9 +124,9 @@ Para evitar o custo de carregar/parsear a cada chamada (mesmo com cache), suba
 um servidor que mantém o `VaultIndex` **em memória**:
 
 ```bash
-python -m rlm.obsidian_rag serve --vault ~/Vault --port 8787
+python -m arkhe_obsidian_rag serve --vault ~/Vault --port 8787
 # com semântica ligada:
-python -m rlm.obsidian_rag serve --vault ~/Vault --embedder hashing
+python -m arkhe_obsidian_rag serve --vault ~/Vault --embedder hashing
 ```
 
 Endpoints (localhost, sem auth — não exponha em rede pública):
@@ -142,10 +158,10 @@ do mesmo assunto com outras palavras), ligue um embedder:
 
 ```bash
 # offline/determinístico (fallback lexical-vetorial, bom p/ testes)
-python -m rlm.obsidian_rag retrieve --vault ~/Vault --query "..." --embedder hashing
+python -m arkhe_obsidian_rag retrieve --vault ~/Vault --query "..." --embedder hashing
 
 # semântico de verdade (usa a dep `openai` + OPENAI_API_KEY)
-python -m rlm.obsidian_rag retrieve --vault ~/Vault --query "..." \
+python -m arkhe_obsidian_rag retrieve --vault ~/Vault --query "..." \
     --embedder openai --semantic-weight 0.6
 ```
 

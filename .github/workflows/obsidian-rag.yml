@@ -1,0 +1,35 @@
+name: obsidian-rag
+
+# CI dedicada ao pacote standalone arkhe-obsidian-rag. Prova que ele instala e
+# roda SEM as dependências do repositório Arkhe (stdlib pura).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "obsidian-rag/**"
+      - ".github/workflows/obsidian-rag.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install standalone package (sem deps do Arkhe)
+        run: pip install ./obsidian-rag pytest ruff
+
+      - name: Lint
+        run: ruff check obsidian-rag/
+
+      - name: Run tests
+        run: pytest obsidian-rag/tests/ -q

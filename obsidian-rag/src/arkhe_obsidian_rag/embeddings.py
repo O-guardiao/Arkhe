@@ -10,8 +10,9 @@ Providers:
                       bag-of-tokens com projeção por hash. NÃO é embedding
                       "profundo": serve de fallback e para testes. Útil quando
                       você não tem/quer chamadas externas.
-    OpenAIEmbedding   semântico de verdade (usa a dep `openai` já presente e
-                      OPENAI_API_KEY). Batches automáticos.
+    OpenAIEmbedding   semântico de verdade (extra opcional: `pip install
+                      arkhe-obsidian-rag[openai]` + OPENAI_API_KEY). Batches
+                      automáticos.
 
 Use `get_embedder("hashing" | "openai" | "openai:modelo" | "none")`.
 """
@@ -38,6 +39,19 @@ def _l2(vec: list[float]) -> list[float]:
     return [x / norm for x in vec] if norm else vec
 
 
+def cosine(a: list[float], b: list[float]) -> float:
+    """Similaridade cosseno entre vetores densos (0 se algum tiver norma 0)."""
+    if len(a) != len(b):
+        return 0.0
+    dot = na = nb = 0.0
+    for ai, bi in zip(a, b, strict=False):
+        dot += ai * bi
+        na += ai * ai
+        nb += bi * bi
+    denom = math.sqrt(na) * math.sqrt(nb)
+    return dot / denom if denom else 0.0
+
+
 class HashingEmbedding:
     """
     Vetor lexical determinístico por hashing de tokens (offline).
@@ -58,7 +72,7 @@ class HashingEmbedding:
         return idx, sign
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        from rlm.obsidian_rag.parser import tokenize
+        from arkhe_obsidian_rag.parser import tokenize
 
         out: list[list[float]] = []
         for text in texts:
@@ -81,7 +95,12 @@ class OpenAIEmbedding:
 
     def _get_client(self):
         if self._client is None:
-            from openai import OpenAI  # dep já presente no projeto
+            try:
+                from openai import OpenAI
+            except ImportError as exc:  # extra opcional
+                raise ImportError(
+                    "OpenAIEmbedding requer o extra openai: pip install arkhe-obsidian-rag[openai]"
+                ) from exc
 
             self._client = OpenAI()
         return self._client

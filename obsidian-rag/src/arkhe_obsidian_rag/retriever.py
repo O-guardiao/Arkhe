@@ -18,27 +18,27 @@ from __future__ import annotations
 
 import time
 
-from rlm.obsidian_rag.embeddings import EmbeddingProvider
-from rlm.obsidian_rag.index import VaultIndex
-from rlm.obsidian_rag.models import (
+from arkhe_obsidian_rag.embeddings import EmbeddingProvider
+from arkhe_obsidian_rag.index import VaultIndex
+from arkhe_obsidian_rag.models import (
     ContextPack,
     RetrievedChunk,
     RetrievedNote,
 )
-from rlm.obsidian_rag.parser import tokenize
+from arkhe_obsidian_rag.parser import tokenize
 
 
 def _semantic_chunk_scores(
     index: VaultIndex, embedder: EmbeddingProvider, query: str, top_k: int
 ) -> list[tuple[str, float]]:
     """Cosseno query↔chunks sobre os vetores cacheados. Retorna [(chunk_id, sim)]."""
-    from rlm.core.memory.vector_utils import cosine_similarity_dense
+    from arkhe_obsidian_rag.embeddings import cosine
 
     index.ensure_vectors(embedder)
     if not index.vectors:
         return []
     q_vec = embedder.embed([query])[0]
-    sims = [(cid, cosine_similarity_dense(q_vec, vec)) for cid, vec in index.vectors.items()]
+    sims = [(cid, cosine(q_vec, vec)) for cid, vec in index.vectors.items()]
     sims.sort(key=lambda t: t[1], reverse=True)
     return [(cid, s) for cid, s in sims[:top_k] if s > 0.0]
 

@@ -12,7 +12,7 @@ import math
 from collections import Counter
 from typing import Any
 
-from rlm.obsidian_rag.parser import tokenize
+from arkhe_obsidian_rag.parser import tokenize
 
 
 class BM25Index:

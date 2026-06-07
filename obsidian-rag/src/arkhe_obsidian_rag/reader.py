@@ -15,8 +15,8 @@ import os
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor
 
-from rlm.obsidian_rag.models import Note
-from rlm.obsidian_rag.parser import parse_note
+from arkhe_obsidian_rag.models import Note
+from arkhe_obsidian_rag.parser import parse_note
 
 # Pastas ignoradas por padrão (config do Obsidian, caches, VCS, saída do RAG).
 DEFAULT_EXCLUDES = (

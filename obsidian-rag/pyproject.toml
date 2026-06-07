@@ -1,0 +1,43 @@
+# pyproject.toml — pacote standalone arkhe-obsidian-rag
+#
+# Motor RAG-hipergrafo para Obsidian: leitura paralela real de muitos .md,
+# índice BM25 + hipergrafo, entrega de context pack pré-LLM. Sem dependências
+# obrigatórias (stdlib pura). Embeddings semânticos são opcionais (extra openai).
+[project]
+name = "arkhe-obsidian-rag"
+version = "0.1.0"
+description = "RAG-hipergrafo paralelo para Obsidian: contexto pré-LLM via CLI/HTTP, sem deps obrigatórias."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+keywords = ["obsidian", "rag", "hypergraph", "bm25", "retrieval", "llm", "context"]
+dependencies = []
+
+[project.optional-dependencies]
+# retrieval semântico de verdade (o modo lexical+hipergrafo não precisa disto)
+openai = ["openai>=2.0.0"]
+dev = ["pytest>=8.0.0", "ruff>=0.6.0"]
+
+[project.scripts]
+arkhe-obsidian-rag = "arkhe_obsidian_rag.__main__:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
