@@ -14,10 +14,12 @@ reconstruir BM25/hipergrafo a partir das notas em memória é barato.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rlm.obsidian_rag.bm25 import BM25Index
 from rlm.obsidian_rag.hypergraph import HyperGraph, build_hypergraph
@@ -28,9 +30,20 @@ from rlm.obsidian_rag.reader import (
     read_paths_parallel,
 )
 
+if TYPE_CHECKING:
+    from rlm.obsidian_rag.embeddings import EmbeddingProvider
+
 CACHE_DIRNAME = ".arkhe_rag"
 CACHE_FILENAME = "index.json"
 CACHE_VERSION = 1
+
+
+def _text_hash(text: str) -> str:
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=12).hexdigest()
+
+
+def _safe_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", name)
 
 
 class VaultIndex:
@@ -52,6 +65,9 @@ class VaultIndex:
         self.bm25 = bm25
         self.hypergraph = hypergraph
         self.build_ms = build_ms
+        # vetores semânticos opcionais: chunk_id -> vetor (preenchido sob demanda)
+        self.vectors: dict[str, list[float]] = {}
+        self.embedder_name: str | None = None
 
     # ------------------------------------------------------------------
     # Construção
@@ -139,17 +155,67 @@ class VaultIndex:
         return path
 
     # ------------------------------------------------------------------
+    # Vetores semânticos (opcional)
+    # ------------------------------------------------------------------
+
+    def _vectors_cache_path(self, embedder_name: str) -> str:
+        fname = f"vectors__{_safe_name(embedder_name)}.json"
+        return os.path.join(self.vault_path, CACHE_DIRNAME, fname)
+
+    def ensure_vectors(self, embedder: EmbeddingProvider) -> None:
+        """
+        Garante vetores para todos os chunks atuais usando `embedder`.
+
+        Cacheia por HASH do texto do chunk (em .arkhe_rag/vectors__<emb>.json):
+        chunks idênticos/renomeados reusam o vetor; só o que mudou é re-embeddado.
+        """
+        chunk_text = {cid: c.text for cid, c in self.chunks_by_id.items()}
+        chunk_to_hash = {cid: _text_hash(t) for cid, t in chunk_text.items()}
+
+        cache_path = self._vectors_cache_path(embedder.name)
+        by_hash: dict[str, list[float]] = {}
+        if os.path.isfile(cache_path):
+            try:
+                with open(cache_path, encoding="utf-8") as f:
+                    payload = json.load(f)
+                if payload.get("embedder") == embedder.name:
+                    by_hash = payload.get("vectors", {})
+            except (OSError, json.JSONDecodeError):
+                by_hash = {}
+
+        # embute apenas hashes ausentes
+        missing = {h: chunk_text[cid] for cid, h in chunk_to_hash.items() if h not in by_hash}
+        if missing:
+            hashes = list(missing)
+            embedded = embedder.embed([missing[h] for h in hashes])
+            for h, vec in zip(hashes, embedded, strict=False):
+                by_hash[h] = vec
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            tmp = cache_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"embedder": embedder.name, "vectors": by_hash}, f)
+            os.replace(tmp, cache_path)
+
+        # mantém só os hashes vivos em memória, mapeados por chunk_id
+        self.vectors = {cid: by_hash[h] for cid, h in chunk_to_hash.items() if h in by_hash}
+        self.embedder_name = embedder.name
+
+    # ------------------------------------------------------------------
     # Estatísticas
     # ------------------------------------------------------------------
 
     def stats(self) -> dict[str, Any]:
-        return {
+        s = {
             "notes": len(self.notes),
             "chunks": len(self.chunks_by_id),
             "workers": os.cpu_count(),
             "build_ms": round(self.build_ms, 1),
             **self.hypergraph.stats(),
         }
+        if self.embedder_name:
+            s["embedder"] = self.embedder_name
+            s["vectors"] = len(self.vectors)
+        return s
 
 
 def _load_cached_notes(vault_path: str) -> dict[str, Note]:

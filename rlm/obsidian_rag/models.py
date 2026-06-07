@@ -159,6 +159,7 @@ class RetrievedNote:
     score: float
     lexical: float
     graph: float
+    semantic: float
     tags: list[str]
     wikilinks: list[str]
     reasons: list[str]
@@ -171,6 +172,7 @@ class RetrievedNote:
             "score": round(self.score, 6),
             "lexical": round(self.lexical, 6),
             "graph": round(self.graph, 6),
+            "semantic": round(self.semantic, 6),
             "tags": self.tags,
             "wikilinks": self.wikilinks,
             "reasons": self.reasons,

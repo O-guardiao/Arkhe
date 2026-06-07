@@ -22,6 +22,7 @@ import json
 import sys
 import time
 
+from rlm.obsidian_rag.embeddings import get_embedder
 from rlm.obsidian_rag.index import VaultIndex
 from rlm.obsidian_rag.retriever import retrieve
 
@@ -40,6 +41,17 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--verbose", action="store_true", help="Logs de progresso no stderr.")
 
 
+def _add_semantic(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--embedder",
+        default="none",
+        help="Backend semântico: none|hashing|hashing:N|openai|openai:modelo (default none).",
+    )
+    p.add_argument(
+        "--semantic-weight", type=float, default=0.5, help="Peso do sinal semântico na mistura."
+    )
+
+
 def _load_index(args) -> VaultIndex:
     t0 = time.perf_counter()
     index = VaultIndex.from_vault(
@@ -56,6 +68,7 @@ def _load_index(args) -> VaultIndex:
 
 def cmd_retrieve(args) -> int:
     index = _load_index(args)
+    embedder = get_embedder(args.embedder)
     pack = retrieve(
         index,
         args.query,
@@ -64,6 +77,8 @@ def cmd_retrieve(args) -> int:
         max_chars=args.max_chars,
         chunks_per_note=args.chunks_per_note,
         graph_weight=args.graph_weight,
+        semantic_weight=args.semantic_weight if embedder else 0.0,
+        embedder=embedder,
     )
     if args.markdown:
         print(pack.context_markdown)
@@ -84,6 +99,23 @@ def cmd_index(args) -> int:
 
 def cmd_stats(args) -> int:
     return cmd_index(args)
+
+
+def cmd_serve(args) -> int:
+    from rlm.obsidian_rag.server import serve
+
+    embedder = get_embedder(args.embedder)
+    serve(
+        args.vault,
+        host=args.host,
+        port=args.port,
+        workers=args.workers,
+        max_chunk_chars=args.max_chunk_chars,
+        embedder=embedder,
+        semantic_weight=args.semantic_weight,
+        log=_eprint,
+    )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,6 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--markdown", action="store_true", help="Imprime só o markdown pronto p/ colar."
     )
     p_ret.add_argument("--compact", action="store_true", help="JSON sem indentação (uma linha).")
+    _add_semantic(p_ret)
     p_ret.set_defaults(func=cmd_retrieve)
 
     p_idx = sub.add_parser("index", help="(Re)constrói o cache do índice e imprime stats.")
@@ -116,6 +149,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_st = sub.add_parser("stats", help="Estatísticas do índice do vault.")
     _add_common(p_st)
     p_st.set_defaults(func=cmd_stats)
+
+    p_srv = sub.add_parser("serve", help="Sobe servidor HTTP local com índice quente.")
+    _add_common(p_srv)
+    _add_semantic(p_srv)
+    p_srv.add_argument("--host", default="127.0.0.1")
+    p_srv.add_argument("--port", type=int, default=8787)
+    p_srv.set_defaults(func=cmd_serve)
 
     return parser
 

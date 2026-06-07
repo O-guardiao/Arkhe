@@ -259,3 +259,90 @@ def test_cli_index_stats(vault):
     stats = json.loads(proc.stdout)
     assert stats["notes"] >= 4
     assert stats["hyperedges"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Embeddings + retrieval semântico (offline via HashingEmbedding)
+# ---------------------------------------------------------------------------
+
+
+def test_hashing_embedding_deterministic_and_similar():
+    from rlm.core.memory.vector_utils import cosine_similarity_dense
+    from rlm.obsidian_rag.embeddings import HashingEmbedding, get_embedder
+
+    emb = HashingEmbedding(dim=128)
+    a1, a2, b = emb.embed(["arkhe princípio água", "arkhe princípio água", "bolo de farinha"])
+    assert a1 == a2  # determinístico
+    # textos que compartilham vocabulário > textos sem overlap
+    assert cosine_similarity_dense(a1, a2) > cosine_similarity_dense(a1, b)
+    assert get_embedder("none") is None
+    assert get_embedder("hashing:64").dim == 64
+
+
+def test_ensure_vectors_caches(vault):
+    from rlm.obsidian_rag.embeddings import HashingEmbedding
+
+    emb = HashingEmbedding(dim=64)
+    index = VaultIndex.from_vault(str(vault), workers=2, use_cache=True)
+    index.ensure_vectors(emb)
+    assert len(index.vectors) == len(index.chunks_by_id)
+    assert (vault / ".arkhe_rag" / f"vectors__{emb.name}.json").is_file()
+    # segunda chamada reusa o cache (não quebra)
+    index2 = VaultIndex.from_vault(str(vault), workers=2, use_cache=True)
+    index2.ensure_vectors(emb)
+    assert len(index2.vectors) == len(index2.chunks_by_id)
+
+
+def test_retrieve_semantic_blend(vault):
+    from rlm.obsidian_rag.embeddings import HashingEmbedding
+
+    index = VaultIndex.from_vault(str(vault), workers=2, use_cache=False)
+    pack = retrieve(
+        index, "princípio da água", embedder=HashingEmbedding(dim=128), semantic_weight=0.7
+    )
+    assert pack.stats["semantic"] is True
+    assert pack.notes
+    assert any(n.semantic > 0 for n in pack.notes)
+    assert any("semantic" in n.reasons for n in pack.notes)
+
+
+# ---------------------------------------------------------------------------
+# Servidor HTTP (índice quente)
+# ---------------------------------------------------------------------------
+
+
+def test_http_server_retrieve(vault):
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from rlm.obsidian_rag.server import RagService, _make_handler
+
+    service = RagService(str(vault), workers=2)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(service))
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        # health
+        with urllib.request.urlopen(f"{base}/health", timeout=10) as r:
+            assert json.load(r)["ok"] is True
+        # retrieve
+        body = json.dumps({"query": "arkhe princípio", "top_notes": 3}).encode()
+        req = urllib.request.Request(
+            f"{base}/retrieve", data=body, headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            pack = json.load(r)
+        assert pack["query"] == "arkhe princípio"
+        assert pack["notes"]
+        # reindex
+        req2 = urllib.request.Request(f"{base}/reindex", data=b"", method="POST")
+        with urllib.request.urlopen(req2, timeout=30) as r:
+            stats = json.load(r)
+        assert stats["notes"] >= 4
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        t.join(timeout=5)

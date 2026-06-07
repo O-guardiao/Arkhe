@@ -101,3 +101,56 @@ Padrões de hook recomendados:
 - **Mantenha o cache quente**: rode `index` uma vez no boot do plugin; depois
   cada `retrieve` reusa o cache e só re-parseia o que mudou.
 ```
+
+## Servidor HTTP local (índice quente)
+
+Para evitar o custo de carregar/parsear a cada chamada (mesmo com cache), suba
+um servidor que mantém o `VaultIndex` **em memória**:
+
+```bash
+python -m rlm.obsidian_rag serve --vault ~/Vault --port 8787
+# com semântica ligada:
+python -m rlm.obsidian_rag serve --vault ~/Vault --embedder hashing
+```
+
+Endpoints (localhost, sem auth — não exponha em rede pública):
+
+| Método | Rota        | Corpo / Resposta                                   |
+|--------|-------------|----------------------------------------------------|
+| GET    | `/health`   | `{"ok": true}`                                     |
+| GET    | `/stats`    | estatísticas do índice                             |
+| POST   | `/reindex`  | refresh incremental → stats                        |
+| POST   | `/retrieve` | `{"query": "...", "top_notes": 8, "semantic": true}` → ContextPack |
+
+```ts
+async function preLlmContext(query: string): Promise<string> {
+  const r = await fetch("http://127.0.0.1:8787/retrieve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, top_notes: 8 }),
+  });
+  const pack = await r.json();
+  return pack.context_markdown;
+}
+```
+
+## Embeddings opcionais (retrieval semântico)
+
+Por padrão o retrieval é **lexical (BM25) + estrutural (hipergrafo)** — zero
+dependências externas, zero rede. Para recall semântico (achar notas que falam
+do mesmo assunto com outras palavras), ligue um embedder:
+
+```bash
+# offline/determinístico (fallback lexical-vetorial, bom p/ testes)
+python -m rlm.obsidian_rag retrieve --vault ~/Vault --query "..." --embedder hashing
+
+# semântico de verdade (usa a dep `openai` + OPENAI_API_KEY)
+python -m rlm.obsidian_rag retrieve --vault ~/Vault --query "..." \
+    --embedder openai --semantic-weight 0.6
+```
+
+Os vetores são cacheados em `.arkhe_rag/vectors__<embedder>.json`, indexados por
+**hash do conteúdo** do chunk — só o que muda é re-embeddado. O score final
+combina `lexical_weight·BM25 + semantic_weight·cosseno + graph_weight·grafo`,
+e cada nota traz a proveniência em `reasons` (`bm25`, `semantic`, `tag:x`,
+`link:y`, `graph`).
