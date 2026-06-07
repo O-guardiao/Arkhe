@@ -21,17 +21,17 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from rlm.obsidian_rag.bm25 import BM25Index
-from rlm.obsidian_rag.hypergraph import HyperGraph, build_hypergraph
-from rlm.obsidian_rag.models import Note
-from rlm.obsidian_rag.reader import (
+from arkhe_obsidian_rag.bm25 import BM25Index
+from arkhe_obsidian_rag.hypergraph import HyperGraph, build_hypergraph
+from arkhe_obsidian_rag.models import Note
+from arkhe_obsidian_rag.reader import (
     DEFAULT_EXCLUDES,
     iter_markdown_files,
     read_paths_parallel,
 )
 
 if TYPE_CHECKING:
-    from rlm.obsidian_rag.embeddings import EmbeddingProvider
+    from arkhe_obsidian_rag.embeddings import EmbeddingProvider
 
 CACHE_DIRNAME = ".arkhe_rag"
 CACHE_FILENAME = "index.json"

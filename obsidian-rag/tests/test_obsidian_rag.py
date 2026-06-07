@@ -14,11 +14,11 @@ import sys
 
 import pytest
 
-from rlm.obsidian_rag import VaultIndex, retrieve
-from rlm.obsidian_rag.bm25 import BM25Index
-from rlm.obsidian_rag.hypergraph import build_hypergraph
-from rlm.obsidian_rag.parser import parse_note, tokenize
-from rlm.obsidian_rag.reader import iter_markdown_files, read_vault_parallel
+from arkhe_obsidian_rag import VaultIndex, retrieve
+from arkhe_obsidian_rag.bm25 import BM25Index
+from arkhe_obsidian_rag.hypergraph import build_hypergraph
+from arkhe_obsidian_rag.parser import parse_note, tokenize
+from arkhe_obsidian_rag.reader import iter_markdown_files, read_vault_parallel
 
 # ---------------------------------------------------------------------------
 # Vault de exemplo
@@ -229,7 +229,7 @@ def test_cli_retrieve_json_stdout(vault):
         [
             sys.executable,
             "-m",
-            "rlm.obsidian_rag",
+            "arkhe_obsidian_rag",
             "retrieve",
             "--vault",
             str(vault),
@@ -250,7 +250,7 @@ def test_cli_retrieve_json_stdout(vault):
 
 def test_cli_index_stats(vault):
     proc = subprocess.run(
-        [sys.executable, "-m", "rlm.obsidian_rag", "index", "--vault", str(vault)],
+        [sys.executable, "-m", "arkhe_obsidian_rag", "index", "--vault", str(vault)],
         capture_output=True,
         text=True,
         timeout=120,
@@ -267,20 +267,19 @@ def test_cli_index_stats(vault):
 
 
 def test_hashing_embedding_deterministic_and_similar():
-    from rlm.core.memory.vector_utils import cosine_similarity_dense
-    from rlm.obsidian_rag.embeddings import HashingEmbedding, get_embedder
+    from arkhe_obsidian_rag.embeddings import HashingEmbedding, cosine, get_embedder
 
     emb = HashingEmbedding(dim=128)
     a1, a2, b = emb.embed(["arkhe princípio água", "arkhe princípio água", "bolo de farinha"])
     assert a1 == a2  # determinístico
     # textos que compartilham vocabulário > textos sem overlap
-    assert cosine_similarity_dense(a1, a2) > cosine_similarity_dense(a1, b)
+    assert cosine(a1, a2) > cosine(a1, b)
     assert get_embedder("none") is None
     assert get_embedder("hashing:64").dim == 64
 
 
 def test_ensure_vectors_caches(vault):
-    from rlm.obsidian_rag.embeddings import HashingEmbedding
+    from arkhe_obsidian_rag.embeddings import HashingEmbedding
 
     emb = HashingEmbedding(dim=64)
     index = VaultIndex.from_vault(str(vault), workers=2, use_cache=True)
@@ -294,7 +293,7 @@ def test_ensure_vectors_caches(vault):
 
 
 def test_retrieve_semantic_blend(vault):
-    from rlm.obsidian_rag.embeddings import HashingEmbedding
+    from arkhe_obsidian_rag.embeddings import HashingEmbedding
 
     index = VaultIndex.from_vault(str(vault), workers=2, use_cache=False)
     pack = retrieve(
@@ -316,7 +315,7 @@ def test_http_server_retrieve(vault):
     import urllib.request
     from http.server import ThreadingHTTPServer
 
-    from rlm.obsidian_rag.server import RagService, _make_handler
+    from arkhe_obsidian_rag.server import RagService, _make_handler
 
     service = RagService(str(vault), workers=2)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(service))

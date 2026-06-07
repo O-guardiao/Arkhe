@@ -10,9 +10,9 @@ Comandos:
     stats     --vault PATH                 → estatísticas do índice
 
 Exemplos:
-    python -m rlm.obsidian_rag retrieve --vault ~/Vault --query "o que é arkhe?"
-    python -m rlm.obsidian_rag retrieve --vault ~/Vault --query "..." --markdown
-    python -m rlm.obsidian_rag index --vault ~/Vault --workers 8
+    python -m arkhe_obsidian_rag retrieve --vault ~/Vault --query "o que é arkhe?"
+    python -m arkhe_obsidian_rag retrieve --vault ~/Vault --query "..." --markdown
+    python -m arkhe_obsidian_rag index --vault ~/Vault --workers 8
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ import json
 import sys
 import time
 
-from rlm.obsidian_rag.embeddings import get_embedder
-from rlm.obsidian_rag.index import VaultIndex
-from rlm.obsidian_rag.retriever import retrieve
+from arkhe_obsidian_rag.embeddings import get_embedder
+from arkhe_obsidian_rag.index import VaultIndex
+from arkhe_obsidian_rag.retriever import retrieve
 
 
 def _eprint(*args) -> None:
@@ -102,7 +102,7 @@ def cmd_stats(args) -> int:
 
 
 def cmd_serve(args) -> int:
-    from rlm.obsidian_rag.server import serve
+    from arkhe_obsidian_rag.server import serve
 
     embedder = get_embedder(args.embedder)
     serve(
@@ -120,7 +120,7 @@ def cmd_serve(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m rlm.obsidian_rag",
+        prog="python -m arkhe_obsidian_rag",
         description="Motor RAG-hipergrafo para Obsidian (leitura paralela real, contexto pré-LLM).",
     )
     sub = parser.add_subparsers(dest="command", required=True)

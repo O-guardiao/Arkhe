@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from rlm.obsidian_rag.models import HyperEdge, Note
+from arkhe_obsidian_rag.models import HyperEdge, Note
 
 # Pesos por tipo de hiperaresta (links explícitos > tags > pasta).
 _TYPE_WEIGHT = {

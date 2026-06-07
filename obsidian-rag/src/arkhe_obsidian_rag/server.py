@@ -24,9 +24,9 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from rlm.obsidian_rag.embeddings import EmbeddingProvider, get_embedder
-from rlm.obsidian_rag.index import VaultIndex
-from rlm.obsidian_rag.retriever import retrieve
+from arkhe_obsidian_rag.embeddings import EmbeddingProvider, get_embedder
+from arkhe_obsidian_rag.index import VaultIndex
+from arkhe_obsidian_rag.retriever import retrieve
 
 
 class RagService:

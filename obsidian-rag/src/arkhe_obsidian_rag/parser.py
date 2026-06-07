@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 
-from rlm.obsidian_rag.models import Chunk, Note, _approx_tokens
+from arkhe_obsidian_rag.models import Chunk, Note, _approx_tokens
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?(.*)\Z", re.DOTALL)
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
